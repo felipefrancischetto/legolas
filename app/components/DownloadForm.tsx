@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Image from 'next/image';
+import { useDownload } from '../contexts/DownloadContext';
 
 interface VideoInfo {
   title: string;
@@ -28,6 +29,15 @@ export default function DownloadForm() {
   const [notified, setNotified] = useState<string[]>([]);
   const [toasts, setToasts] = useState<{ title: string }[]>([]);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const { 
+    addToQueue, 
+    updateQueueItem, 
+    activeDownloads, 
+    maxConcurrentDownloads,
+    startDownload,
+    finishDownload
+  } = useDownload();
+  const [currentDownloadId, setCurrentDownloadId] = useState<string | null>(null);
 
   useEffect(() => {
     const getVideoId = (url: string) => {
@@ -115,54 +125,136 @@ export default function DownloadForm() {
     setStatus('Iniciando download...');
 
     try {
-      const endpoint = url.includes('list=') ? 'playlist' : 'download';
-      const response = await fetch(`/api/${endpoint}?url=${encodeURIComponent(url)}`);
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Erro ao processar');
-      }
-
-      if (endpoint === 'playlist' && data.results) {
-        const total = data.results.length;
-        const completed = data.results.filter((r: any) => r.status === 'success' || r.status === 'existing').length;
-        const errors = data.results.filter((r: any) => r.status === 'error').length;
-        setProgress(100);
-        setStatus(`Download concluído! ${completed}/${total} músicas baixadas, ${errors} erros`);
-        setSuccess(true);
-      } else {
-        for (let i = 0; i <= 100; i += 5) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          setProgress(i);
-          setStatus(`Processando... ${i}%`);
-        }
-        setProgress(100);
-        setStatus('Download concluído!');
-        setSuccess(true);
-      }
-      const event = new CustomEvent('refresh-files');
-      window.dispatchEvent(event);
+      // Adicionar à fila
+      const queueItem = {
+        url,
+        title: videoInfo?.title || 'Download em andamento',
+        isPlaylist: videoInfo?.isPlaylist || false,
+        playlistItems: videoInfo?.videos?.map(v => ({
+          title: v.title,
+          status: 'pending' as const,
+          progress: 0,
+        })),
+      };
+      const newItem = addToQueue(queueItem);
+      setCurrentDownloadId(newItem.id);
+      // Limpar imediatamente
       setUrl('');
       setVideoInfo(null);
+
+      // Verificar se podemos iniciar o download imediatamente
+      if (activeDownloads < maxConcurrentDownloads) {
+        startDownload();
+        const endpoint = url.includes('list=') ? 'playlist' : 'download';
+        const response = await fetch(`/api/${endpoint}?url=${encodeURIComponent(url)}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Erro ao processar');
+        }
+
+        if (endpoint === 'playlist' && data.results) {
+          const total = data.results.length;
+          const completed = data.results.filter((r: any) => r.status === 'success' || r.status === 'existing').length;
+          const errors = data.results.filter((r: any) => r.status === 'error').length;
+          setProgress(100);
+          setStatus(`Download concluído! ${completed}/${total} músicas baixadas, ${errors} erros`);
+          setSuccess(true);
+          if (currentDownloadId) {
+            // Buscar metadados no MusicBrainz
+            let metadata = undefined;
+            if (videoInfo?.title) {
+              try {
+                const mbRes = await fetch('/api/musicbrainz-metadata', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ title: videoInfo.title, artist: '' })
+                });
+                const mbMeta = await mbRes.json();
+                if (mbMeta && Object.keys(mbMeta).length > 0) {
+                  metadata = mbMeta;
+                }
+              } catch {}
+            }
+            // Se encontrou metadados, salva; senão, segue fluxo normal
+            if (metadata) {
+              updateQueueItem(currentDownloadId, { status: 'completed', progress: 100, metadata });
+            } else {
+              updateQueueItem(currentDownloadId, { status: 'completed', progress: 100 });
+            }
+          }
+        } else {
+          for (let i = 0; i <= 100; i += 5) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            setProgress(i);
+            setStatus(`Processando... ${i}%`);
+            if (currentDownloadId) {
+              updateQueueItem(currentDownloadId, { status: 'downloading', progress: i });
+            }
+          }
+          setProgress(100);
+          setStatus('Download concluído!');
+          setSuccess(true);
+          if (currentDownloadId) {
+            // Buscar metadados no MusicBrainz
+            let metadata = undefined;
+            if (videoInfo?.title) {
+              try {
+                const mbRes = await fetch('/api/musicbrainz-metadata', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ title: videoInfo.title, artist: '' })
+                });
+                const mbMeta = await mbRes.json();
+                if (mbMeta && Object.keys(mbMeta).length > 0) {
+                  metadata = mbMeta;
+                }
+              } catch {}
+            }
+            // Se encontrou metadados, salva; senão, segue fluxo normal
+            if (metadata) {
+              updateQueueItem(currentDownloadId, { status: 'completed', progress: 100, metadata });
+            } else {
+              updateQueueItem(currentDownloadId, { status: 'completed', progress: 100 });
+            }
+          }
+        }
+        finishDownload();
+        const event = new CustomEvent('refresh-files');
+        window.dispatchEvent(event);
+      } else {
+        setStatus('Download em fila...');
+        if (currentDownloadId) {
+          updateQueueItem(currentDownloadId, { status: 'queued' });
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao processar');
       setProgress(0);
       setStatus('Erro no download');
+      if (currentDownloadId) {
+        updateQueueItem(currentDownloadId, { 
+          status: 'error', 
+          error: err instanceof Error ? err.message : 'Erro ao processar',
+          progress: 0 
+        });
+      }
+      finishDownload();
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3">
-      <div className="flex gap-3">
+    <form onSubmit={handleSubmit} className="space-y-4 animate-slide-up">
+      <div className="flex flex-col sm:flex-row gap-3">
         <div className="flex-1 relative">
           <input
             type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="Cole a URL do YouTube aqui"
-            className="w-full rounded-md bg-zinc-800 border-zinc-700 text-white placeholder-gray-400 focus:border-zinc-600 focus:ring-zinc-600 px-3 py-2 text-sm"
+            className="w-full rounded-md bg-zinc-800 border-zinc-700 text-white placeholder-gray-400 focus:border-zinc-600 focus:ring-zinc-600 px-3 py-2 text-sm transition-all duration-200 hover:border-zinc-600"
             required
           />
           {fetchingInfo && (
@@ -175,7 +267,7 @@ export default function DownloadForm() {
           <button
             type="submit"
             disabled={loading}
-            className="px-4 py-2 bg-white text-black rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200 text-sm font-medium"
+            className="px-4 py-2 bg-white text-black rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-white disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 text-sm font-medium transform hover:scale-105 active:scale-95"
           >
             {loading ? (
               <div className="flex items-center space-x-2">
@@ -190,9 +282,9 @@ export default function DownloadForm() {
       </div>
 
       {videoInfo && (
-        <div className="border border-zinc-800 rounded-lg p-3 bg-zinc-800">
-          <div className="flex gap-3">
-            <div className="relative w-24 h-24 flex-shrink-0">
+        <div className="border border-zinc-800 rounded-lg p-3 bg-zinc-800 animate-fade-in">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="relative w-full sm:w-24 h-24 flex-shrink-0">
               <Image
                 src={videoInfo.thumbnail}
                 alt={videoInfo.title}
@@ -217,25 +309,31 @@ export default function DownloadForm() {
       )}
 
       {loading && (
-        <div className="space-y-2">
-          <div className="w-full bg-zinc-800 rounded-full h-1.5">
+        <div className="space-y-2 animate-fade-in">
+          <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
             <div
-              className="bg-white h-1.5 rounded-full transition-all duration-300"
+              className="bg-white h-full rounded-full transition-all duration-300 ease-out"
               style={{ width: `${progress}%` }}
             ></div>
           </div>
-          <p className="text-xs text-gray-400 text-center">{status}</p>
+          <p className="text-xs text-gray-400 text-center animate-pulse-slow">{status}</p>
         </div>
       )}
 
       {error && (
-        <div className="text-red-400 text-xs">
+        <div className="text-red-400 text-xs animate-fade-in flex items-center gap-2">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
           {error}
         </div>
       )}
 
       {success && (
-        <div className="text-green-400 text-xs text-center">
+        <div className="text-green-400 text-xs text-center animate-fade-in flex items-center justify-center gap-2">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
           Download concluído com sucesso!
         </div>
       )}
@@ -244,7 +342,9 @@ export default function DownloadForm() {
         <div className="fixed top-4 right-4 z-50 space-y-2">
           {toasts.map((toast, idx) => (
             <div key={idx} className="flex items-center bg-zinc-900 text-white px-4 py-2 rounded shadow-lg gap-2 animate-fade-in">
-              <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+              <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+              </svg>
               <span className="font-medium">{toast.title}</span>
             </div>
           ))}

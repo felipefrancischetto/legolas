@@ -16,6 +16,12 @@ interface FileInfo {
   bpm?: number;
   key?: string;
   downloadedAt?: string;
+  metadata?: {
+    album?: string;
+    ano?: string;
+    genero?: string;
+    descricao?: string;
+  };
 }
 
 const MusicIcon = () => (
@@ -54,6 +60,7 @@ export default function FileList() {
   const [loading, setLoading] = useState(true);
   const [currentFile, setCurrentFile] = useState<FileInfo | null>(null);
   const [customDownloadsPath, setCustomDownloadsPath] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
   const selectDownloadsFolder = async () => {
     try {
@@ -106,8 +113,8 @@ export default function FileList() {
     
     fetchFiles();
 
-    // Atualizar a cada 5 segundos
-    const interval = setInterval(fetchFiles, 5000);
+    // Atualizar a cada 15 segundos
+    const interval = setInterval(fetchFiles, 15000);
 
     // Atualizar quando um novo download for concluído
     const handleRefresh = () => fetchFiles();
@@ -119,9 +126,31 @@ export default function FileList() {
     };
   }, []);
 
+  // Filtrar arquivos conforme a busca
+  const filteredFiles = files.filter(file => {
+    const query = search.toLowerCase();
+    return (
+      file.displayName.toLowerCase().includes(query) ||
+      (file.title && file.title.toLowerCase().includes(query)) ||
+      (file.artist && file.artist.toLowerCase().includes(query))
+    );
+  });
+
+  const openDownloadsFolder = () => {
+    // Caminho padrão do Windows (ajuste conforme necessário)
+    const path = customDownloadsPath 
+      ? `${customDownloadsPath}`
+      : `${process.env.USERPROFILE || ''}/Downloads`;
+    const fileUrl = `file:///${path.replace(/\\/g, '/').replace(/\s/g, '%20')}`;
+    const win = window.open(fileUrl);
+    if (!win) {
+      alert('Não foi possível abrir a pasta automaticamente. Por favor, acesse sua pasta de downloads manualmente.');
+    }
+  };
+
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-32">
+      <div className="flex justify-center items-center h-32 animate-fade-in">
         <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
       </div>
     );
@@ -129,7 +158,7 @@ export default function FileList() {
 
   if (files.length === 0) {
     return (
-      <div className="text-center text-gray-400 py-8">
+      <div className="text-center text-gray-400 py-8 animate-fade-in">
         <MusicIcon />
         <p className="mt-2">Nenhum arquivo baixado ainda.</p>
       </div>
@@ -138,42 +167,29 @@ export default function FileList() {
 
   return (
     <>
-      <div className="space-y-1">
+      <div className="space-y-1 animate-slide-up">
         <h2 className="text-xl font-semibold text-white mb-4">Arquivos Baixados</h2>
-        <div className="flex justify-between items-center mb-4">
-          <div className="flex gap-2">
-            <button
-              onClick={() => {
-                const downloadsPath = customDownloadsPath 
-                  ? `${process.cwd()}/${customDownloadsPath}`
-                  : `${process.cwd()}/downloads`;
-                window.open(`file:///${downloadsPath.replace(/\\/g, '/')}`);
-              }}
-              className="px-4 py-2 bg-zinc-800 text-white rounded-md hover:bg-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-600 transition-colors duration-200 text-sm font-medium flex items-center gap-2"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-              </svg>
-              Abrir Pasta de Downloads
-            </button>
-            <button
-              onClick={selectDownloadsFolder}
-              className="px-4 py-2 bg-zinc-800 text-white rounded-md hover:bg-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-600 transition-colors duration-200 text-sm font-medium flex items-center gap-2"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Escolher Nova Pasta
-            </button>
-          </div>
+        <div className="flex justify-between items-center mb-2 w-full max-w-[1280px] mx-auto">
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Buscar por título ou artista..."
+            className="w-full max-w-md px-4 py-2 rounded-md bg-zinc-800 border border-zinc-700 text-white placeholder-gray-400 focus:border-zinc-600 focus:ring-zinc-600 transition-all duration-200 shadow"
+          />
+        </div>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
           {customDownloadsPath && (
-            <div className="text-sm text-gray-400">
+            <div className="text-sm text-gray-400 animate-fade-in">
               Pasta atual: {customDownloadsPath}
             </div>
           )}
         </div>
-        <div className="bg-zinc-800 rounded-lg border border-zinc-700 overflow-hidden max-h-[800px] overflow-y-auto w-full max-w-[1280px] mx-auto">
-          <div className="grid grid-cols-[40px_60px_1.5fr_80px_1fr_80px] gap-2 px-4 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-800 w-full">
+        <div
+          className="bg-zinc-800 rounded-lg border border-zinc-700 overflow-hidden overflow-y-auto w-full"
+          style={{ maxHeight: 'calc(100vh - 480px)' }}
+        >
+          <div className="grid grid-cols-[32px_48px_minmax(120px,2fr)_80px_1fr_80px] gap-2 px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10 w-full">
             <div className="text-center">#</div>
             <div></div>
             <div>Título</div>
@@ -181,19 +197,27 @@ export default function FileList() {
             <div>Artista</div>
             <div className="text-center">Ações</div>
           </div>
-          {files.map((file, index) => (
+          {filteredFiles.map((file, index) => (
             <div
               key={file.path}
-              className="grid grid-cols-[40px_60px_1.5fr_80px_1fr_80px] gap-2 px-4 items-center hover:bg-zinc-700 transition-colors duration-200 group w-full h-[50px]"
+              className="grid grid-cols-[32px_48px_minmax(120px,2fr)_80px_1fr_80px] gap-2 px-2 items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in"
               style={{ minHeight: 50 }}
             >
               <div className="text-center text-gray-400">{index + 1}</div>
               <div className="flex items-center justify-center">
                 <button
                   onClick={() => setCurrentFile(file)}
-                  className="w-10 h-10 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-colors relative"
+                  className="w-10 h-10 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110"
                 >
-                  <ThumbnailImage file={file} />
+                  <Image
+                    src={`/api/thumbnail/${encodeURIComponent(file.name)}`}
+                    alt={file.title || file.displayName}
+                    width={32}
+                    height={32}
+                    className="object-cover w-full h-full"
+                    loading="lazy"
+                    priority={false}
+                  />
                   <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
                     <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M8 5v14l11-7z" />
@@ -208,7 +232,7 @@ export default function FileList() {
                 <a
                   href={`/api/downloads/${encodeURIComponent(file.name)}`}
                   download
-                  className="text-white hover:text-gray-200 transition-colors duration-200 px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600"
+                  className="text-white hover:text-gray-200 transition-all duration-200 px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 transform hover:scale-105 active:scale-95"
                 >
                   Baixar
                 </a>
@@ -219,10 +243,52 @@ export default function FileList() {
       </div>
 
       {currentFile && (
-        <AudioPlayer
-          file={currentFile}
-          onClose={() => setCurrentFile(null)}
-        />
+        <>
+          <AudioPlayer
+            file={currentFile}
+            onClose={() => setCurrentFile(null)}
+          />
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+            <div className="bg-zinc-900 rounded-lg p-6 w-full max-w-md shadow-lg relative animate-fade-in">
+              <button
+                onClick={() => setCurrentFile(null)}
+                className="absolute top-2 right-2 text-gray-400 hover:text-white"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <h3 className="text-lg font-semibold text-white mb-2">Detalhes da Música</h3>
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-16 h-16 bg-zinc-800 rounded overflow-hidden flex items-center justify-center">
+                  <Image
+                    src={`/api/thumbnail/${encodeURIComponent(currentFile.name)}`}
+                    alt={currentFile.title || currentFile.displayName}
+                    width={64}
+                    height={64}
+                    className="object-cover w-full h-full"
+                    loading="lazy"
+                    priority={false}
+                  />
+                </div>
+                <div>
+                  <div className="text-white font-medium text-base">{currentFile.title || currentFile.displayName}</div>
+                  <div className="text-gray-400 text-sm">{currentFile.artist || '-'}</div>
+                </div>
+              </div>
+              {currentFile.metadata ? (
+                <div className="space-y-1 text-sm text-gray-300">
+                  {currentFile.metadata.album && <div><span className="font-semibold">Álbum:</span> {currentFile.metadata.album}</div>}
+                  {currentFile.metadata.ano && <div><span className="font-semibold">Ano:</span> {currentFile.metadata.ano}</div>}
+                  {currentFile.metadata.genero && <div><span className="font-semibold">Gênero:</span> {currentFile.metadata.genero}</div>}
+                  {currentFile.metadata.descricao && <div><span className="font-semibold">Descrição:</span> {currentFile.metadata.descricao}</div>}
+                </div>
+              ) : (
+                <div className="text-gray-400 text-sm">Sem metadados adicionais.</div>
+              )}
+            </div>
+          </div>
+        </>
       )}
     </>
   );

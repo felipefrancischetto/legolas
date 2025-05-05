@@ -16,6 +16,11 @@ const nextConfig = {
         readline: false,
       };
     }
+    // Configurar o alias @
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      '@': __dirname,
+    };
     return config;
   },
   // Desabilitar o cache para evitar problemas com o ytdl-core

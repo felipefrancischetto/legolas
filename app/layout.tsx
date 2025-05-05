@@ -1,16 +1,15 @@
-import type { Metadata } from "next";
+'use client';
+
 import { Inter } from "next/font/google";
 import "./globals.css";
+import { DownloadProvider } from './contexts/DownloadContext';
+import DownloadQueue from './components/DownloadQueue';
+import DownloadHistory from './components/DownloadHistory';
 
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
 });
-
-export const metadata: Metadata = {
-  title: "YouTube Downloader",
-  description: "Baixe e converta vídeos do YouTube para MP3, WAV ou FLAC",
-};
 
 export default function RootLayout({
   children,
@@ -20,7 +19,11 @@ export default function RootLayout({
   return (
     <html lang="pt-BR">
       <body className={`${inter.variable} font-sans antialiased`}>
-        {children}
+        <DownloadProvider>
+          {children}
+          <DownloadQueue />
+          <DownloadHistory />
+        </DownloadProvider>
       </body>
     </html>
   );
