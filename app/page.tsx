@@ -13,8 +13,8 @@ export default function Home() {
   const [beatportDownloaderModalOpen, setBeatportDownloaderModalOpen] = useState(false);
   
   return (
-    <main className="min-h-screen bg-black text-white p-4 sm:p-8">
-      <div className="max-w-6xl mx-auto">
+    <main className="flex flex-col min-h-screen bg-black text-white p-4 sm:p-8">
+      <div className="max-w-6xl mx-auto flex-1 flex flex-col min-h-0">
         <div className="text-center mb-8 animate-slide-up">
           <div className="flex items-center justify-center gap-4 mb-4">
             <img src="/legolas_thumb.png" alt="Legolas" className="w-[75px] h-[75px] object-contain transform hover:scale-110 transition-transform duration-200" />
@@ -62,18 +62,18 @@ export default function Home() {
             Atualizar metadados de todas
           </button>
         </div>
-        <div className="space-y-6">
+        <div className="space-y-6 flex flex-col flex-1 min-h-0 h-[70vh]">
           <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200">
             <DownloadForm />
           </div>
-          <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200">
+          <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200 flex-1 min-h-0 flex flex-col">
             <FileList />
           </div>
         </div>
       </div>
-      <PlaylistTracklistModal open={modalOpen} onClose={() => setModalOpen(false)} />
-      <BeatportModal open={beatportModalOpen} onClose={() => setBeatportModalOpen(false)} />
-      <BeatportDownloaderModal open={beatportDownloaderModalOpen} onClose={() => setBeatportDownloaderModalOpen(false)} />
+      <PlaylistTracklistModal isOpen={modalOpen} onClose={() => setModalOpen(false)} playlistUrl="" />
+      <BeatportModal isOpen={beatportModalOpen} onClose={() => setBeatportModalOpen(false)} />
+      <BeatportDownloaderModal isOpen={beatportDownloaderModalOpen} onClose={() => setBeatportDownloaderModalOpen(false)} />
     </main>
   );
 }

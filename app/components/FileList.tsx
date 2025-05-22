@@ -389,7 +389,7 @@ export default function FileList() {
             </div>
           )}
         </div>
-        <div className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden w-full flex flex-col" style={{height: '100%'}}>
+        <div className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden w-full flex flex-col flex-1 min-h-0">
           <div className="grid grid-cols-[32px_48px_minmax(120px,2fr)_80px_1fr_60px_60px_100px_100px_80px] gap-2 px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10 w-full">
             <div className="text-center cursor-pointer select-none" onClick={() => handleSort('#')}>
               # {sortBy === '#' && (sortOrder === 'asc' ? '↑' : '↓')}
@@ -418,9 +418,7 @@ export default function FileList() {
             </div>
             <div className="text-center">Ações</div>
           </div>
-          <div
-            className="flex-1 overflow-y-auto custom-scroll"
-          >
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scroll">
             {Object.entries(groupedFiles).map(([album, files]) => (
               <div key={album} className="animate-fade-in">
                 {groupByAlbum && album !== '' && (
