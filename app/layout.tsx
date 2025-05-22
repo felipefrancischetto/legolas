@@ -1,28 +1,25 @@
-'use client';
-
+import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { DownloadProvider } from './contexts/DownloadContext';
-import DownloadQueue from './components/DownloadQueue';
-import DownloadHistory from './components/DownloadHistory';
 
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-});
+const inter = Inter({ subsets: ["latin"] });
+
+export const metadata: Metadata = {
+  title: "Legolas Downloader",
+  description: "Baixe suas músicas favoritas do YouTube em formato MP3.",
+};
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="pt-BR">
-      <body className={`${inter.variable} font-sans antialiased`}>
+      <body className={inter.className}>
         <DownloadProvider>
           {children}
-          <DownloadQueue />
-          <DownloadHistory />
         </DownloadProvider>
       </body>
     </html>
