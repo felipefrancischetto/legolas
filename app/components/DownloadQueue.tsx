@@ -4,7 +4,7 @@ import { useDownload } from '../contexts/DownloadContext';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
-export default function DownloadQueue() {
+export default function DownloadQueue({ onClose }: { onClose: () => void }) {
   const { queue, removeFromQueue } = useDownload();
 
   if (queue.length === 0) {
@@ -13,7 +13,14 @@ export default function DownloadQueue() {
 
   return (
     <div className="fixed bottom-4 right-4 w-80 bg-zinc-900 rounded-lg border border-zinc-800 p-4 animate-slide-up">
-      <h3 className="text-sm font-medium text-white mb-3">Fila de Downloads</h3>
+      <div className="flex justify-between items-center mb-3">
+        <h3 className="text-sm font-medium text-white">Fila de Downloads</h3>
+        <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
       <div className="space-y-2 max-h-60 overflow-y-auto">
         {queue.map((item) => (
           <div
@@ -59,7 +66,7 @@ export default function DownloadQueue() {
 
             {item.isPlaylist && item.playlistItems && (
               <div className="mt-2 space-y-1">
-                {item.playlistItems.map((playlistItem, index) => (
+                {item.playlistItems.map((playlistItem: any, index: number) => (
                   <div key={index} className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-zinc-700">
                       {playlistItem.status === 'completed' && (

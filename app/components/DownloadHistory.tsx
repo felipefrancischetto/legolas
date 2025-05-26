@@ -40,7 +40,7 @@ export default function DownloadHistory() {
 
             {item.isPlaylist && item.playlistItems && (
               <div className="mt-2 space-y-1">
-                {item.playlistItems.map((playlistItem, index) => (
+                {item.playlistItems.map((playlistItem: any, index: number) => (
                   <div key={index} className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-green-400" />
                     <p className="text-xs text-gray-400 truncate">

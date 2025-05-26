@@ -22,12 +22,10 @@ async function fileExists(path: string): Promise<boolean> {
 
 export async function GET(
   request: NextRequest,
-  context: { params: { filename: string } }
+  params: any
 ) {
   try {
-    // Aguardar os parâmetros da rota
-    const params = await context.params;
-    const filename = params.filename;
+    const filename = params?.params?.filename;
     
     if (!filename) {
       return new NextResponse('Nome do arquivo é obrigatório', { status: 400 });

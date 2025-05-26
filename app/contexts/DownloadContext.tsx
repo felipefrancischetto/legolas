@@ -5,18 +5,23 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 interface DownloadItem {
   id: string;
   url: string;
-  status: 'pending' | 'downloading' | 'completed' | 'error';
+  status: 'pending' | 'queued' | 'downloading' | 'completed' | 'error';
   progress?: number;
   error?: string;
+  [key: string]: any;
 }
 
 interface DownloadContextType {
   queue: DownloadItem[];
   history: DownloadItem[];
-  addToQueue: (url: string) => void;
+  addToQueue: (item: string | Omit<DownloadItem, 'id'>) => DownloadItem;
   removeFromQueue: (id: string) => void;
   updateQueueItem: (id: string, updates: Partial<DownloadItem>) => void;
   clearHistory: () => void;
+  activeDownloads: number;
+  maxConcurrentDownloads: number;
+  startDownload: () => void;
+  finishDownload: () => void;
 }
 
 const DownloadContext = createContext<DownloadContextType | undefined>(undefined);
@@ -24,6 +29,8 @@ const DownloadContext = createContext<DownloadContextType | undefined>(undefined
 export function DownloadProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<DownloadItem[]>([]);
   const [history, setHistory] = useState<DownloadItem[]>([]);
+  const maxConcurrentDownloads = 3;
+  const activeDownloads = queue.filter(item => item.status === 'downloading').length;
 
   // Carregar histórico do localStorage
   useEffect(() => {
@@ -38,9 +45,21 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('downloadHistory', JSON.stringify(history));
   }, [history]);
 
-  const addToQueue = (url: string) => {
+  const addToQueue = (item: string | Omit<DownloadItem, 'id'>): DownloadItem => {
     const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    setQueue(prev => [...prev, { id, url, status: 'pending' }]);
+    let queueItem: DownloadItem;
+    if (typeof item === 'string') {
+      queueItem = { id, url: item, status: 'pending' };
+    } else {
+      queueItem = {
+        id,
+        url: item.url || '',
+        status: item.status || 'pending',
+        ...item
+      };
+    }
+    setQueue(prev => [...prev, queueItem]);
+    return queueItem;
   };
 
   const removeFromQueue = (id: string) => {
@@ -67,6 +86,9 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('downloadHistory');
   };
 
+  const startDownload = () => {};
+  const finishDownload = () => {};
+
   return (
     <DownloadContext.Provider value={{
       queue,
@@ -75,6 +97,10 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       removeFromQueue,
       updateQueueItem,
       clearHistory,
+      activeDownloads,
+      maxConcurrentDownloads,
+      startDownload,
+      finishDownload,
     }}>
       {children}
     </DownloadContext.Provider>
