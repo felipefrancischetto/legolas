@@ -309,6 +309,36 @@ export default function FileList() {
   // Verificar se há algum download em andamento
   const isProcessing = queue.some(item => item.status === 'downloading');
 
+  // Nova função para selecionar pasta de downloads com feedback
+  const handleSelectDownloadsFolder = async () => {
+    if (!('showDirectoryPicker' in window)) {
+      alert('Seu navegador não suporta seleção de pastas. Use o Chrome ou Edge mais recente.');
+      return;
+    }
+    try {
+      // Só pode ser chamado em resposta a um clique!
+      // @ts-ignore
+      const directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      setCustomDownloadsPath(directoryHandle.name);
+      localStorage.setItem('customDownloadsPath', directoryHandle.name);
+      // Atualizar a API/backend se necessário
+      await fetch('/api/set-downloads-path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: directoryHandle.name }),
+      });
+      // Atualizar a lista
+      fetchFiles();
+      alert('Pasta selecionada com sucesso!');
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        alert('Seleção de pasta cancelada.');
+      } else {
+        alert('Permissão negada ou erro ao acessar a pasta.');
+      }
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex-1 flex flex-col">
@@ -383,6 +413,12 @@ export default function FileList() {
           />
         </div>
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+          <button
+            onClick={handleSelectDownloadsFolder}
+            className="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-all duration-200 shadow"
+          >
+            Selecionar pasta de downloads
+          </button>
           {customDownloadsPath && (
             <div className="text-sm text-gray-400 animate-fade-in">
               Pasta atual: {customDownloadsPath}
