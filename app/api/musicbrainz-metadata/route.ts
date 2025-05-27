@@ -19,13 +19,26 @@ export async function POST(req: NextRequest) {
     const data = await response.json();
     const rec = data.recordings?.[0];
     if (!rec) return NextResponse.json({});
+    // Logar o objeto completo para depuração
+    console.log('MusicBrainz recording:', JSON.stringify(rec, null, 2));
     // Extrai metadados principais
+    const label = rec.releases?.[0]?.['label-info']?.[0]?.label?.name || '';
+    // Extrai todos os gêneros/tags relevantes
+    let generos = '';
+    if (rec.tags && Array.isArray(rec.tags)) {
+      generos = rec.tags.map((t: any) => t.name).join(', ');
+    }
+    // Logar possíveis campos de gênero
+    console.log('rec.tags:', rec.tags);
+    console.log('rec.genres:', rec.genres);
+    console.log('rec.releases[0].genres:', rec.releases?.[0]?.genres);
     const metadata = {
       titulo: rec.title,
       artista: rec['artist-credit']?.[0]?.name || '',
       album: rec.releases?.[0]?.title || '',
       ano: rec.releases?.[0]?.date?.slice(0, 4) || '',
-      genero: rec.tags?.[0]?.name || '',
+      genero: generos,
+      label,
       descricao: '',
     };
     return NextResponse.json(metadata);

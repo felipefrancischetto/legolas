@@ -49,6 +49,9 @@ export default function DownloadForm() {
   const [enrichWithBeatport, setEnrichWithBeatport] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  // Adicionar novo estado para steps detalhados
+  const [downloadSteps, setDownloadSteps] = useState<string[]>([]);
+  const [playerOpen, setPlayerOpen] = useState(false);
 
   const selectDownloadsFolder = async () => {
     try {
@@ -57,21 +60,16 @@ export default function DownloadForm() {
         mode: 'readwrite',
         startIn: 'downloads'
       });
-      
-      const path = await directoryHandle.getDirectoryHandle();
-      
       // Salvar a preferência no localStorage
-      localStorage.setItem('customDownloadsPath', path.name);
-      
+      localStorage.setItem('customDownloadsPath', directoryHandle.name);
       // Atualizar a API com o novo caminho
       await fetch('/api/set-downloads-path', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ path: path.name }),
+        body: JSON.stringify({ path: directoryHandle.name }),
       });
-      
       // Recarregar a lista de arquivos
       window.dispatchEvent(new CustomEvent('refresh-files'));
     } catch (error) {
@@ -149,6 +147,21 @@ export default function DownloadForm() {
       const res = await fetch('/api/playlist-status');
       const data = await res.json();
       setPlaylistStatus(data);
+      // Atualize o status detalhado durante o polling
+      if (data.videos) {
+        const total = data.videos.length;
+        const completed = data.videos.filter((v: any) => v.status === 'success' || v.status === 'existing').length;
+        const errors = data.videos.filter((v: any) => v.status === 'error').length;
+        setStatus(`Baixando playlist: ${completed}/${total} concluídos, ${errors} erros`);
+        setDownloadSteps(prev => {
+          // Evita adicionar passos duplicados
+          const newStep = `Baixando playlist: ${completed}/${total} concluídos, ${errors} erros`;
+          if (prev[prev.length - 1] !== newStep) {
+            return [...prev, newStep];
+          }
+          return prev;
+        });
+      }
       // Notificar novas músicas baixadas
       if (data.videos) {
         data.videos.forEach((v: any) => {
@@ -163,6 +176,7 @@ export default function DownloadForm() {
       }
       // Parar polling se terminou
       if (data.status === 'done') {
+        setLoading(false);
         if (pollingRef.current) clearInterval(pollingRef.current);
       }
     }, 2000);
@@ -233,6 +247,9 @@ export default function DownloadForm() {
         startDownload();
         window.dispatchEvent(new CustomEvent('open-download-queue'));
         const endpoint = url.includes('list=') ? 'playlist' : 'download';
+        if (endpoint === 'download') {
+          setDownloadSteps(prev => [...prev, "Baixando áudio..."]);
+        }
         const response = await fetch(`/api/${endpoint}?url=${encodeURIComponent(url)}`);
         const data = await response.json();
 
@@ -246,6 +263,7 @@ export default function DownloadForm() {
           const errors = data.results.filter((r: any) => r.status === 'error').length;
           setProgress(100);
           setStatus(`Download concluído! ${completed}/${total} músicas baixadas, ${errors} erros`);
+          setDownloadSteps(prev => [...prev, `Baixando playlist: ${completed}/${total} concluídos, ${errors} erros`]);
           setSuccess(true);
           if (currentDownloadId) {
             // Buscar metadados no MusicBrainz
@@ -270,7 +288,9 @@ export default function DownloadForm() {
               updateQueueItem(currentDownloadId, { status: 'completed', progress: 100 });
             }
           }
+          setDownloadSteps([]);
         } else {
+          // Download individual
           for (let i = 0; i <= 100; i += 5) {
             await new Promise(resolve => setTimeout(resolve, 100));
             setProgress(i);
@@ -279,6 +299,7 @@ export default function DownloadForm() {
               updateQueueItem(currentDownloadId, { status: 'downloading', progress: i });
             }
           }
+          setDownloadSteps(prev => [...prev, "Gravando metadados..."]);
           setProgress(100);
           setStatus('Download concluído!');
           setSuccess(true);
@@ -305,6 +326,7 @@ export default function DownloadForm() {
               updateQueueItem(currentDownloadId, { status: 'completed', progress: 100 });
             }
           }
+          setDownloadSteps(prev => [...prev, "Concluído!"]);
         }
         finishDownload();
         const event = new CustomEvent('refresh-files');
@@ -319,6 +341,7 @@ export default function DownloadForm() {
       setError(err instanceof Error ? err.message : 'Erro ao processar');
       setProgress(0);
       setStatus('Erro no download');
+      setDownloadSteps(prev => [...prev, "Erro no download"]);
       if (currentDownloadId) {
         updateQueueItem(currentDownloadId, { 
           status: 'error', 
@@ -328,37 +351,97 @@ export default function DownloadForm() {
       }
       finishDownload();
     } finally {
-      setLoading(false);
+      // Para downloads individuais, pode setar loading false aqui
+      if (!videoInfo?.isPlaylist) setLoading(false);
+      // Para playlists, loading será setado no polling
     }
   };
+
+  // No useEffect do componente, garantir showQueue = false ao montar
+  useEffect(() => { setShowQueue(false); }, []);
 
   return (
     <div
       className={`w-full mx-auto transition-all duration-300 rounded-2xl bg-zinc-900 relative ${minimized ? '' : ''}`}
     >
-      <div className="flex gap-2 justify-end items-center">
-        <button
-          className="bg-zinc-800 rounded-full p-2 hover:bg-zinc-700 transition" 
-          onClick={() => setShowQueue((q) => !q)}
-          aria-label={showQueue ? 'Fechar fila de downloads' : 'Abrir fila de downloads'}
-          type="button"
-        >
-          {/* Ícone de lista/fila */}
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" /></svg>
-        </button>
-        <button
-          className="bg-zinc-800 rounded-full p-2 hover:bg-zinc-700 transition"
-          onClick={() => setMinimized((m) => !m)}
-          aria-label={minimized ? 'Expandir' : 'Minimizar'}
-          type="button"
-        >
-          {/* Ícone de minimizar/expandir */}
-          {minimized ? (
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
-          ) : (
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" /></svg>
+      <div className="flex flex-row gap-2 items-start justify-between">
+            {/* Status detalhado logo abaixo do campo de URL */}
+            {(status || downloadSteps.length > 0 || (videoInfo?.isPlaylist && loading)) && (
+              <div className="mt-2">
+                {/* Sempre mostra o status principal */}
+                {status && (
+                  <div className={`text-sm flex items-center gap-2 ${success ? 'text-green-400' : error ? 'text-red-400' : 'text-blue-400'}`}>{status}</div>
+                )}
+                {/* Passos detalhados para playlist ou individual */}
+                {downloadSteps.length > 0 && (
+                  <div className="mt-2 flex items-center gap-2 text-sm">
+                    {downloadSteps[downloadSteps.length - 1]}
+                  </div>
+                )}
+              </div>
+            )}
+        {/* Barra/status de download sempre visível */}
+        <div className="flex-1 min-w-0 flex items-center gap-3">
+          {/* Playlist: label de progresso à esquerda da barra de status */}
+          {videoInfo?.isPlaylist && (
+            <div className="flex items-center gap-2 min-w-[180px]">
+              {loading && (
+                <span className="flex items-center gap-1 text-blue-400 text-sm">
+                  <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /></svg>
+                  {playlistStatus?.videos ? (
+                    <span>
+                      Baixando {playlistStatus.videos.filter((v: any) => v.status === 'success' || v.status === 'existing').length} de {playlistStatus.videos.length}
+                    </span>
+                  ) : (
+                    <span>Obtendo informações...</span>
+                  )}
+                </span>
+              )}
+              {!loading && playlistStatus?.status === 'done' && (
+                <span className="flex items-center gap-1 text-green-400 text-sm">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                  Concluído!
+                </span>
+              )}
+            </div>
           )}
-        </button>
+          {/* Mensagem de status sempre acima do input */}
+          {status && (
+            <div className={`text-sm p-3 rounded-md mb-2 flex-1 ${success ? 'text-green-500 bg-green-900/20' : error ? 'text-red-500 bg-red-900/20' : 'text-blue-400 bg-blue-900/20'}`}>
+              {status}
+            </div>
+          )}
+          {error && !status && (
+            <div className="text-red-500 text-sm bg-red-900/20 p-3 rounded-md mb-2 flex-1">
+              <p className="font-medium">Erro:</p>
+              <p>{error}</p>
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2 items-center flex-shrink-0">
+          <button
+            className="bg-zinc-800 rounded-full p-2 hover:bg-zinc-700 transition" 
+            onClick={() => setShowQueue((q) => !q)}
+            aria-label={showQueue ? 'Fechar fila de downloads' : 'Abrir fila de downloads'}
+            type="button"
+          >
+            {/* Ícone de lista/fila */}
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" /></svg>
+          </button>
+          <button
+            className="bg-zinc-800 rounded-full p-2 hover:bg-zinc-700 transition"
+            onClick={() => setMinimized((m) => !m)}
+            aria-label={minimized ? 'Expandir' : 'Minimizar'}
+            type="button"
+          >
+            {/* Ícone de minimizar/expandir */}
+            {minimized ? (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            ) : (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>
+            )}
+          </button>
+        </div>
       </div>
       {/* Linha principal do motor de busca e campos */}
       {!minimized && (
@@ -435,34 +518,7 @@ export default function DownloadForm() {
         </form>
       )}
 
-      {/* Barra/status de download sempre visível */}
-      <div>
-        {/* ... status, barra de progresso, mensagens ... */}
-        {status && (
-          <div className="text-blue-400 text-sm bg-blue-900/20 p-3 rounded-md">
-            {status}
-          </div>
-        )}
-        {error && (
-          <div className="text-red-500 text-sm bg-red-900/20 p-3 rounded-md">
-            <p className="font-medium">Erro:</p>
-            <p>{error}</p>
-          </div>
-        )}
-        {success && (
-          <div className="text-green-500 text-sm bg-green-900/20 p-3 rounded-md">
-            {success}
-          </div>
-        )}
-        {loading && (
-          <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden mt-2">
-            <div
-              className="bg-white h-full rounded-full transition-all duration-300 ease-out"
-              style={{ width: `${progress}%` }}
-            ></div>
-          </div>
-        )}
-      </div>
+
 
       {/* Quando expandido, mostra o preview do vídeo/playlist e toasts normalmente */}
       {!minimized && (
@@ -547,7 +603,7 @@ export default function DownloadForm() {
             </div>
           )}
 
-          {loading && playlistStatus && playlistStatus.videos && (
+          {videoInfo?.isPlaylist && loading && playlistStatus && playlistStatus.videos && (
             <div className="fixed top-4 right-4 z-50 space-y-2">
               {toasts.map((toast, idx) => (
                 <div key={idx} className="flex items-center bg-zinc-900 text-white px-4 py-2 rounded shadow-lg gap-2 animate-fade-in">
@@ -565,7 +621,7 @@ export default function DownloadForm() {
       {/* Exemplo de exibição da fila de downloads (pode ser substituído pelo seu componente real) */}
       {showQueue && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <DownloadQueue onClose={() => setShowQueue(false)} />
+          <DownloadQueue onClose={() => setShowQueue(false)} playerOpen={playerOpen} />
         </div>
       )}
     </div>

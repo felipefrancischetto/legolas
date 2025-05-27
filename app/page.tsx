@@ -26,7 +26,7 @@ export default function Home() {
             Baixe suas músicas favoritas do YouTube em formato MP3
           </p>
         </div>
-        <div className="w-full flex justify-end mb-6 gap-2">
+        {/* <div className="w-full flex justify-end mb-6 gap-2">
           <button
             className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-all font-medium shadow"
             onClick={() => setBeatportDownloaderModalOpen(true)}
@@ -61,7 +61,7 @@ export default function Home() {
           >
             Atualizar metadados de todas
           </button>
-        </div>
+        </div> */}
         <div className="space-y-6 flex flex-col flex-1 min-h-0 h-[70vh]">
           <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200">
             <DownloadForm />

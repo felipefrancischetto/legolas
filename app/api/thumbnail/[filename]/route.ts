@@ -6,7 +6,19 @@ import { readFile, access } from 'fs/promises';
 import { constants } from 'fs';
 
 const execAsync = promisify(exec);
-const downloadsFolder = join(process.cwd(), 'downloads');
+
+// Função para obter o caminho correto da pasta de downloads
+async function getDownloadsPath() {
+  try {
+    const configPath = join(process.cwd(), 'downloads.config.json');
+    const config = await readFile(configPath, 'utf-8');
+    const { path } = JSON.parse(config);
+    return join(process.cwd(), path);
+  } catch (error) {
+    // Se não houver configuração, use o caminho padrão
+    return join(process.cwd(), 'downloads');
+  }
+}
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,38 +34,33 @@ async function fileExists(path: string): Promise<boolean> {
 
 export async function GET(
   request: NextRequest,
-  params: any
+  paramsPromise: Promise<{ params: { filename: string } }>
 ) {
   try {
-    const filename = params?.params?.filename;
-    
+    const { params } = await paramsPromise;
+    const filename = params.filename;
     if (!filename) {
       return new NextResponse('Nome do arquivo é obrigatório', { status: 400 });
     }
-
     const decodedFilename = decodeURIComponent(filename);
+    // Usar o caminho correto da pasta de downloads
+    const downloadsFolder = await getDownloadsPath();
     const filePath = join(downloadsFolder, decodedFilename);
-
     if (!await fileExists(filePath)) {
       return new NextResponse('Arquivo não encontrado', { status: 404 });
     }
-
     // Criar nome único para arquivo temporário
     const tempImagePath = join(downloadsFolder, `thumb_${Date.now()}.jpg`);
-
     try {
       // Extrair a thumbnail para um arquivo temporário
       await execAsync(
         `ffmpeg -y -i "${filePath}" -vf "select=eq(n\\,0)" -vframes 1 "${tempImagePath}"`,
         { maxBuffer: 1024 * 1024 * 10 }
       );
-
       // Ler o arquivo de imagem
       const imageBuffer = await readFile(tempImagePath);
-
       // Limpar o arquivo temporário
       await execAsync(`del "${tempImagePath}"`).catch(() => {});
-
       return new NextResponse(imageBuffer, {
         headers: {
           'Content-Type': 'image/jpeg',
@@ -65,7 +72,6 @@ export async function GET(
       await execAsync(`del "${tempImagePath}"`).catch(() => {});
       throw error;
     }
-
   } catch (error) {
     console.error('Erro ao extrair thumbnail:', error);
     return new NextResponse('Erro ao extrair thumbnail', { status: 500 });

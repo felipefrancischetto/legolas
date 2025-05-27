@@ -51,6 +51,9 @@ async function extractAudioMetadata(filePath: string) {
       duration: formatDuration(parseFloat(info.format?.duration || '0')),
       bpm: tags.BPM || tags.bpm || null,
       key: tags.key || tags.initialkey || null,
+      genre: tags.genre || tags.Genre || null,
+      album: tags.album || tags.Album || null,
+      label: tags.publisher || tags.Publisher || tags.label || tags.Label || null,
       thumbnail: thumbnailUrl
     };
   } catch (error) {
@@ -70,9 +73,17 @@ export async function GET(request: NextRequest) {
     // Obter o caminho de downloads
     const downloadsFolder = await getDownloadsPath();
 
-    // Listar arquivos na pasta de downloads
-    const files = await readdir(downloadsFolder);
-    
+    let files: string[] = [];
+    try {
+      // Listar arquivos na pasta de downloads
+      files = await readdir(downloadsFolder);
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') {
+        // Pasta não existe, retorna lista vazia
+        return NextResponse.json({ files: [] });
+      }
+      throw err;
+    }
     // Filtrar apenas arquivos MP3
     const mp3Files = files.filter(file => file.toLowerCase().endsWith('.mp3'));
     

@@ -4,6 +4,7 @@ import { promisify } from 'util';
 import { mkdir, access, unlink, readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import { constants } from 'fs';
+import NodeID3 from 'node-id3';
 
 const execAsync = promisify(exec);
 
@@ -97,6 +98,53 @@ export async function GET(request: NextRequest) {
       }
     );
     console.log('Download concluído:', stdout);
+
+    // Buscar metadados no MusicBrainz
+    let metadata = null;
+    try {
+      const mbRes = await fetch('/api/musicbrainz-metadata', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: videoInfo.title, artist: videoInfo.uploader })
+      });
+      metadata = await mbRes.json();
+    } catch (err) {
+      console.error('Erro ao buscar metadados do MusicBrainz:', err);
+    }
+
+    // Escrever metadados no arquivo MP3
+    try {
+      const mp3File = `${downloadsFolder}/${videoInfo.title}.mp3`;
+      const exists = await fileExists(mp3File);
+      console.log('Arquivo MP3 existe para gravar metadados?', exists, mp3File);
+      console.log('Metadados buscados:', metadata);
+      if (metadata && exists) {
+        const tags = {
+          title: metadata.titulo || videoInfo.title,
+          artist: metadata.artista || videoInfo.uploader,
+          album: metadata.album || '',
+          year: metadata.ano || '',
+          genre: metadata.genero || '',
+          publisher: metadata.label || '',
+          comment: { language: 'eng', text: metadata.descricao || '' }
+        };
+        const success = NodeID3.write({
+          ...tags,
+          comment: {
+            language: 'por', // Portuguese language code
+            text: metadata.descricao || ''
+          }
+        }, mp3File);
+        console.log('Resultado da escrita dos metadados:', success);
+        if (!success) {
+          throw new Error('Falha ao gravar metadados ID3 no arquivo MP3');
+        }
+      } else {
+        console.warn('Metadados ausentes ou arquivo MP3 não encontrado para gravar tags.');
+      }
+    } catch (err) {
+      console.error('Erro ao gravar metadados ID3:', err);
+    }
 
     return NextResponse.json({
       status: 'concluído',

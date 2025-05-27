@@ -3,16 +3,51 @@
 import { useDownload } from '../contexts/DownloadContext';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { useEffect, useRef, useState } from 'react';
 
-export default function DownloadQueue({ onClose }: { onClose: () => void }) {
-  const { queue, removeFromQueue } = useDownload();
+export default function DownloadQueue({ onClose, playerOpen }: { onClose: () => void, playerOpen: boolean }) {
+  const { queue, removeFromQueue, retryDownload, cancelDownload, fetchAndSyncPlaylistStatus } = useDownload();
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const [pollingActive, setPollingActive] = useState(false);
+
+  useEffect(() => {
+    // Iniciar polling ao abrir a fila
+    setPollingActive(true);
+    return () => {
+      setPollingActive(false);
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pollingActive) return;
+    // Verifica se há playlist em andamento
+    const hasActivePlaylist = queue.some(item => item.isPlaylist && item.status !== 'completed');
+    if (hasActivePlaylist) {
+      pollingRef.current = setInterval(() => {
+        fetchAndSyncPlaylistStatus();
+      }, 2000);
+    } else if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [queue, fetchAndSyncPlaylistStatus, pollingActive]);
 
   if (queue.length === 0) {
     return null;
   }
 
   return (
-    <div className="fixed bottom-4 right-4 w-80 bg-zinc-900 rounded-lg border border-zinc-800 p-4 animate-slide-up">
+    <div className={`fixed right-4 ${playerOpen ? 'bottom-28' : 'bottom-4'} w-96 max-h-[80vh] bg-zinc-900 rounded-lg border border-zinc-800 p-4 animate-slide-up z-50`}>
       <div className="flex justify-between items-center mb-3">
         <h3 className="text-sm font-medium text-white">Fila de Downloads</h3>
         <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
@@ -44,6 +79,28 @@ export default function DownloadQueue({ onClose }: { onClose: () => void }) {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
+              {(item.status === 'downloading' || item.status === 'pending') && (
+                <button
+                  onClick={() => cancelDownload(item.id)}
+                  className="ml-2 text-yellow-400 hover:text-white transition-colors"
+                  title="Cancelar download"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 6L6 18" />
+                  </svg>
+                </button>
+              )}
+              {item.status === 'error' && (
+                <button
+                  onClick={() => retryDownload(item.id)}
+                  className="ml-2 text-blue-400 hover:text-white transition-colors"
+                  title="Tentar novamente"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582M20 20v-5h-.581M19.418 15A7.974 7.974 0 0012 8c-1.657 0-3.183.507-4.418 1.382" />
+                  </svg>
+                </button>
+              )}
             </div>
             
             {item.status === 'downloading' && (
@@ -75,10 +132,35 @@ export default function DownloadQueue({ onClose }: { onClose: () => void }) {
                       {playlistItem.status === 'downloading' && (
                         <div className="w-full h-full rounded-full bg-white animate-pulse" />
                       )}
+                      {playlistItem.status === 'error' && (
+                        <div className="w-full h-full rounded-full bg-red-400" />
+                      )}
                     </div>
-                    <p className="text-xs text-gray-400 truncate">
+                    <p className="text-xs text-gray-400 truncate flex-1">
                       {playlistItem.title}
                     </p>
+                    {(playlistItem.status === 'downloading' || playlistItem.status === 'pending') && (
+                      <button
+                        onClick={() => cancelDownload(item.id, index)}
+                        className="text-yellow-400 hover:text-white transition-colors"
+                        title="Cancelar download da faixa"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 6L6 18" />
+                        </svg>
+                      </button>
+                    )}
+                    {playlistItem.status === 'error' && (
+                      <button
+                        onClick={() => retryDownload(item.id, index)}
+                        className="text-blue-400 hover:text-white transition-colors"
+                        title="Tentar novamente esta faixa"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582M20 20v-5h-.581M19.418 15A7.974 7.974 0 0012 8c-1.657 0-3.183.507-4.418 1.382" />
+                        </svg>
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
