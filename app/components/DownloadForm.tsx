@@ -23,35 +23,33 @@ interface VideoInfo {
 
 export default function DownloadForm() {
   const [url, setUrl] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [fetchingInfo, setFetchingInfo] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState('');
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
-  const [playlistStatus, setPlaylistStatus] = useState<any>(null);
-  const [notified, setNotified] = useState<string[]>([]);
-  const [toasts, setToasts] = useState<{ title: string }[]>([]);
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const [selectedTracks, setSelectedTracks] = useState<number[]>([]);
+  const [format, setFormat] = useState('flac');
+  const [enrichWithBeatport, setEnrichWithBeatport] = useState(false);
+  const [minimized, setMinimized] = useState(false);
+  const [showQueue, setShowQueue] = useState(false);
+  const [playerOpen, setPlayerOpen] = useState(false);
+  const [currentDownloadId, setCurrentDownloadId] = useState<string | null>(null);
+
   const { 
     addToQueue, 
     updateQueueItem, 
     activeDownloads, 
     maxConcurrentDownloads,
     startDownload,
-    finishDownload
+    finishDownload,
+    downloadStatus,
+    setDownloadStatus,
+    playlistStatus,
+    setPlaylistStatus,
+    toasts,
+    addToast,
+    removeToast,
+    files,
+    queue,
+    getPlaylistProgress
   } = useDownload();
-  const [currentDownloadId, setCurrentDownloadId] = useState<string | null>(null);
-  // Estado para seleção de faixas na playlist (preview)
-  const [selectedTracks, setSelectedTracks] = useState<number[]>([]);
-  const [format, setFormat] = useState('mp3');
-  const [enrichWithBeatport, setEnrichWithBeatport] = useState(false);
-  const [minimized, setMinimized] = useState(false);
-  const [showQueue, setShowQueue] = useState(false);
-  // Adicionar novo estado para steps detalhados
-  const [downloadSteps, setDownloadSteps] = useState<string[]>([]);
-  const [playerOpen, setPlayerOpen] = useState(false);
 
   const selectDownloadsFolder = async () => {
     try {
@@ -96,8 +94,12 @@ export default function DownloadForm() {
         const playlistId = getPlaylistId(url);
         if (!playlistId) return;
         try {
-          setFetchingInfo(true);
-          setError('');
+          setDownloadStatus(prev => ({
+            ...prev,
+            fetchingInfo: true,
+            error: '',
+            videoInfo: null
+          }));
           const endpoint = `/api/playlist-info?id=${encodeURIComponent(playlistId)}`;
           const response = await fetch(endpoint);
           const data = await response.json();
@@ -105,16 +107,24 @@ export default function DownloadForm() {
           setVideoInfo({ ...data, isPlaylist: true });
         } catch (err) {
           setVideoInfo(null);
-          setError(err instanceof Error ? err.message : 'Erro ao buscar informações');
+          setDownloadStatus(prev => ({
+            ...prev,
+            error: err instanceof Error ? err.message : 'Erro ao buscar informações',
+            videoInfo: null
+          }));
         } finally {
-          setFetchingInfo(false);
+          setDownloadStatus(prev => ({ ...prev, fetchingInfo: false }));
         }
       } else {
         const videoId = getVideoId(url);
         if (!videoId) return;
         try {
-          setFetchingInfo(true);
-          setError('');
+          setDownloadStatus(prev => ({
+            ...prev,
+            fetchingInfo: true,
+            error: '',
+            videoInfo: null
+          }));
           const endpoint = `/api/video-info?id=${encodeURIComponent(videoId)}`;
           const response = await fetch(endpoint);
           const data = await response.json();
@@ -122,9 +132,13 @@ export default function DownloadForm() {
           setVideoInfo({ ...data, isPlaylist: false });
         } catch (err) {
           setVideoInfo(null);
-          setError(err instanceof Error ? err.message : 'Erro ao buscar informações');
+          setDownloadStatus(prev => ({
+            ...prev,
+            error: err instanceof Error ? err.message : 'Erro ao buscar informações',
+            videoInfo: null
+          }));
         } finally {
-          setFetchingInfo(false);
+          setDownloadStatus(prev => ({ ...prev, fetchingInfo: false }));
         }
       }
     };
@@ -136,60 +150,15 @@ export default function DownloadForm() {
       return () => clearTimeout(timer);
     } else {
       setVideoInfo(null);
-      setError('');
+      setDownloadStatus(prev => ({ ...prev, error: '' }));
     }
   }, [url]);
-
-  // Polling do status da playlist
-  useEffect(() => {
-    if (!loading || !videoInfo?.isPlaylist) return;
-    pollingRef.current = setInterval(async () => {
-      const res = await fetch('/api/playlist-status');
-      const data = await res.json();
-      setPlaylistStatus(data);
-      // Atualize o status detalhado durante o polling
-      if (data.videos) {
-        const total = data.videos.length;
-        const completed = data.videos.filter((v: any) => v.status === 'success' || v.status === 'existing').length;
-        const errors = data.videos.filter((v: any) => v.status === 'error').length;
-        setStatus(`Baixando playlist: ${completed}/${total} concluídos, ${errors} erros`);
-        setDownloadSteps(prev => {
-          // Evita adicionar passos duplicados
-          const newStep = `Baixando playlist: ${completed}/${total} concluídos, ${errors} erros`;
-          if (prev[prev.length - 1] !== newStep) {
-            return [...prev, newStep];
-          }
-          return prev;
-        });
-      }
-      // Notificar novas músicas baixadas
-      if (data.videos) {
-        data.videos.forEach((v: any) => {
-          if (v.status === 'success' && !notified.includes(v.title)) {
-            setToasts((prev) => [...prev, { title: v.title }]);
-            setNotified((prev) => [...prev, v.title]);
-            // Atualizar lista de arquivos
-            const event = new CustomEvent('refresh-files');
-            window.dispatchEvent(event);
-          }
-        });
-      }
-      // Parar polling se terminou
-      if (data.status === 'done') {
-        setLoading(false);
-        if (pollingRef.current) clearInterval(pollingRef.current);
-      }
-    }, 2000);
-    return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current);
-    };
-  }, [loading, videoInfo?.isPlaylist, notified]);
 
   // Toast auto-hide
   useEffect(() => {
     if (toasts.length === 0) return;
     const timer = setTimeout(() => {
-      setToasts((prev) => prev.slice(1));
+      removeToast(0);
     }, 4000);
     return () => clearTimeout(timer);
   }, [toasts]);
@@ -216,11 +185,14 @@ export default function DownloadForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setError('');
-    setSuccess(false);
-    setProgress(0);
-    setStatus('Iniciando download...');
+    setDownloadStatus({
+      loading: true,
+      error: null,
+      success: false,
+      progress: 0,
+      status: 'Iniciando download...',
+      downloadSteps: []
+    });
 
     try {
       // Adicionar à fila
@@ -248,9 +220,12 @@ export default function DownloadForm() {
         window.dispatchEvent(new CustomEvent('open-download-queue'));
         const endpoint = url.includes('list=') ? 'playlist' : 'download';
         if (endpoint === 'download') {
-          setDownloadSteps(prev => [...prev, "Baixando áudio..."]);
+          setDownloadStatus(prev => ({
+            ...prev,
+            downloadSteps: [...prev.downloadSteps, "Baixando áudio..."]
+          }));
         }
-        const response = await fetch(`/api/${endpoint}?url=${encodeURIComponent(url)}`);
+        const response = await fetch(`/api/${endpoint}?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`);
         const data = await response.json();
 
         if (!response.ok) {
@@ -261,48 +236,57 @@ export default function DownloadForm() {
           const total = data.results.length;
           const completed = data.results.filter((r: any) => r.status === 'success' || r.status === 'existing').length;
           const errors = data.results.filter((r: any) => r.status === 'error').length;
-          setProgress(100);
-          setStatus(`Download concluído! ${completed}/${total} músicas baixadas, ${errors} erros`);
-          setDownloadSteps(prev => [...prev, `Baixando playlist: ${completed}/${total} concluídos, ${errors} erros`]);
-          setSuccess(true);
-          if (currentDownloadId) {
-            // Buscar metadados no MusicBrainz
-            let metadata = undefined;
-            if (videoInfo?.title) {
-              try {
-                const mbRes = await fetch('/api/musicbrainz-metadata', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ title: videoInfo.title, artist: '' })
-                });
-                const mbMeta = await mbRes.json();
-                if (mbMeta && Object.keys(mbMeta).length > 0) {
-                  metadata = mbMeta;
-                }
-              } catch {}
-            }
-            // Se encontrou metadados, salva; senão, segue fluxo normal
-            if (metadata) {
-              updateQueueItem(currentDownloadId, { status: 'completed', progress: 100, metadata });
-            } else {
-              updateQueueItem(currentDownloadId, { status: 'completed', progress: 100 });
-            }
+          setDownloadStatus({
+            progress: 100,
+            status: `Download concluído! ${completed}/${total} músicas baixadas, ${errors} erros`,
+            downloadSteps: ["Baixando playlist", `Baixando playlist: ${completed}/${total} concluídos, ${errors} erros`],
+            success: true,
+            loading: false
+          });
+          if (currentDownloadId && videoInfo?.videos) {
+            // Para cada faixa da playlist, buscar e aplicar metadados
+            const updatedPlaylistItems = queueItem.playlistItems
+              ? await Promise.all(videoInfo.videos.map(async (track, idx) => {
+                  let metadata = undefined;
+                  try {
+                    const mbRes = await fetch('/api/musicbrainz-metadata', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ title: track.title, artist: track.artist || '' })
+                    });
+                    const mbMeta = await mbRes.json();
+                    if (mbMeta && Object.keys(mbMeta).length > 0) {
+                      metadata = mbMeta;
+                    }
+                  } catch {}
+                  return {
+                    ...queueItem.playlistItems![idx],
+                    metadata
+                  };
+                }))
+              : [];
+            updateQueueItem(currentDownloadId, { status: 'completed', progress: 100, playlistItems: updatedPlaylistItems });
           }
-          setDownloadSteps([]);
         } else {
           // Download individual
           for (let i = 0; i <= 100; i += 5) {
             await new Promise(resolve => setTimeout(resolve, 100));
-            setProgress(i);
-            setStatus(`Processando... ${i}%`);
+            setDownloadStatus({
+              progress: i,
+              status: `Processando... ${i}%`,
+              loading: true
+            });
             if (currentDownloadId) {
               updateQueueItem(currentDownloadId, { status: 'downloading', progress: i });
             }
           }
-          setDownloadSteps(prev => [...prev, "Gravando metadados..."]);
-          setProgress(100);
-          setStatus('Download concluído!');
-          setSuccess(true);
+          setDownloadStatus({
+            downloadSteps: [],
+            progress: 100,
+            status: 'Download concluído!',
+            success: true,
+            loading: false
+          });
           if (currentDownloadId) {
             // Buscar metadados no MusicBrainz
             let metadata = undefined;
@@ -326,22 +310,27 @@ export default function DownloadForm() {
               updateQueueItem(currentDownloadId, { status: 'completed', progress: 100 });
             }
           }
-          setDownloadSteps(prev => [...prev, "Concluído!"]);
         }
         finishDownload();
         const event = new CustomEvent('refresh-files');
         window.dispatchEvent(event);
       } else {
-        setStatus('Download em fila...');
+        setDownloadStatus({
+          status: 'Download em fila...',
+          loading: true
+        });
         if (currentDownloadId) {
           updateQueueItem(currentDownloadId, { status: 'queued' });
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erro ao processar');
-      setProgress(0);
-      setStatus('Erro no download');
-      setDownloadSteps(prev => [...prev, "Erro no download"]);
+      setDownloadStatus({
+        error: err instanceof Error ? err.message : 'Erro ao processar',
+        progress: 0,
+        status: 'Erro no download',
+        downloadSteps: ["Erro no download"],
+        loading: false
+      });
       if (currentDownloadId) {
         updateQueueItem(currentDownloadId, { 
           status: 'error', 
@@ -350,73 +339,68 @@ export default function DownloadForm() {
         });
       }
       finishDownload();
-    } finally {
-      // Para downloads individuais, pode setar loading false aqui
-      if (!videoInfo?.isPlaylist) setLoading(false);
-      // Para playlists, loading será setado no polling
     }
   };
 
   // No useEffect do componente, garantir showQueue = false ao montar
   useEffect(() => { setShowQueue(false); }, []);
 
+  // Progresso da playlist via contexto
+  const playlistProgress = videoInfo?.title ? getPlaylistProgress(videoInfo.title) : null;
+
   return (
-    <div
-      className={`w-full mx-auto transition-all duration-300 rounded-2xl bg-zinc-900 relative ${minimized ? '' : ''}`}
-    >
+    <div className={`w-full mx-auto transition-all duration-300 rounded-2xl bg-zinc-900 relative ${minimized ? '' : ''}`}>
+      {/* Barra/status de download sempre visível */}
       <div className="flex flex-row gap-2 items-start justify-between">
-            {/* Status detalhado logo abaixo do campo de URL */}
-            {(status || downloadSteps.length > 0 || (videoInfo?.isPlaylist && loading)) && (
-              <div className="mt-2">
-                {/* Sempre mostra o status principal */}
-                {status && (
-                  <div className={`text-sm flex items-center gap-2 ${success ? 'text-green-400' : error ? 'text-red-400' : 'text-blue-400'}`}>{status}</div>
-                )}
-                {/* Passos detalhados para playlist ou individual */}
-                {downloadSteps.length > 0 && (
-                  <div className="mt-2 flex items-center gap-2 text-sm">
-                    {downloadSteps[downloadSteps.length - 1]}
-                  </div>
+        <div className="flex-1 min-w-0 flex items-center gap-3">
+            {/* Playlist: label de progresso à esquerda da barra de status */}
+            {playlistProgress && (
+              <div className="flex items-center gap-2 min-w-[180px]">
+                {downloadStatus.loading ? (
+                  <span className="flex items-center gap-1 text-blue-400 text-sm">
+                    <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /></svg>
+                    <span>{playlistProgress}</span>
+                  </span>
+                ) : (
+                  playlistStatus?.status === 'done' && (
+                    <span className="flex items-center gap-1 text-green-400 text-sm">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                      Concluído!
+                    </span>
+                  )
                 )}
               </div>
             )}
-        {/* Barra/status de download sempre visível */}
-        <div className="flex-1 min-w-0 flex items-center gap-3">
-          {/* Playlist: label de progresso à esquerda da barra de status */}
-          {videoInfo?.isPlaylist && (
-            <div className="flex items-center gap-2 min-w-[180px]">
-              {loading && (
-                <span className="flex items-center gap-1 text-blue-400 text-sm">
-                  <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /></svg>
-                  {playlistStatus?.videos ? (
-                    <span>
-                      Baixando {playlistStatus.videos.filter((v: any) => v.status === 'success' || v.status === 'existing').length} de {playlistStatus.videos.length}
-                    </span>
-                  ) : (
-                    <span>Obtendo informações...</span>
-                  )}
-                </span>
-              )}
-              {!loading && playlistStatus?.status === 'done' && (
-                <span className="flex items-center gap-1 text-green-400 text-sm">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                  Concluído!
-                </span>
-              )}
-            </div>
-          )}
-          {/* Mensagem de status sempre acima do input */}
-          {status && (
-            <div className={`text-sm p-3 rounded-md mb-2 flex-1 ${success ? 'text-green-500 bg-green-900/20' : error ? 'text-red-500 bg-red-900/20' : 'text-blue-400 bg-blue-900/20'}`}>
-              {status}
-            </div>
-          )}
-          {error && !status && (
-            <div className="text-red-500 text-sm bg-red-900/20 p-3 rounded-md mb-2 flex-1">
-              <p className="font-medium">Erro:</p>
-              <p>{error}</p>
-            </div>
-          )}
+            {/* Mensagem de status sempre acima do input */}
+            {downloadStatus.status && (
+              <div className={`text-sm p-3 rounded-md mb-2 flex-1 flex items-center justify-between ${downloadStatus.success ? 'text-green-500 bg-green-900/20' : downloadStatus.error ? 'text-red-500 bg-red-900/20' : 'text-blue-400 bg-blue-900/20'}`}>
+                <span>{downloadStatus.status}</span>
+                {downloadStatus.success && (
+                  <button
+                    onClick={() => setDownloadStatus({
+                      loading: false,
+                      error: null,
+                      success: false,
+                      progress: 0,
+                      status: '',
+                      downloadSteps: []
+                    })}
+                    className="ml-2 text-gray-400 hover:text-white"
+                    title="Fechar"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            )}
+            {downloadStatus.error && !downloadStatus.status && (
+              <div className="text-red-500 text-sm bg-red-900/20 p-3 rounded-md mb-2 flex-1">
+                <p className="font-medium">Erro:</p>
+                <p>{downloadStatus.error}</p>
+              </div>
+            )}
         </div>
         <div className="flex gap-2 items-center flex-shrink-0">
           <button
@@ -443,6 +427,7 @@ export default function DownloadForm() {
           </button>
         </div>
       </div>
+      
       {/* Linha principal do motor de busca e campos */}
       {!minimized && (
         <form onSubmit={handleSubmit} className="flex flex-row gap-1 items-stretch mt-2 w-full"> {/* mt-2 para espaçamento após os botões */}
@@ -464,10 +449,8 @@ export default function DownloadForm() {
               onChange={(e) => setFormat(e.target.value)}
               className="h-11 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white"
             >
-              <option value="mp3">MP3 (AAC)</option>
-              <option value="flac">FLAC (Lossless)</option>
-              <option value="aiff">AIFF (Lossless)</option>
-              <option value="wav">WAV (Lossless)</option>
+              <option value="flac">FLAC</option>
+              <option value="mp3">MP3</option>
             </select>
           </div>
           <div className="flex-[0_0_auto] flex flex-col justify-end">
@@ -505,7 +488,7 @@ export default function DownloadForm() {
             <label className="block text-xs font-medium text-gray-300 mb-1 sr-only">Iniciar</label>
             <button
               type="submit"
-              disabled={loading}
+              disabled={downloadStatus.loading}
               className="h-9 px-4 flex flex-row items-center justify-center gap-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all shadow disabled:opacity-50"
               aria-label="Baixar"
             >
@@ -517,8 +500,6 @@ export default function DownloadForm() {
           </div>
         </form>
       )}
-
-
 
       {/* Quando expandido, mostra o preview do vídeo/playlist e toasts normalmente */}
       {!minimized && (
@@ -600,19 +581,6 @@ export default function DownloadForm() {
                   })}
                 </div>
               )}
-            </div>
-          )}
-
-          {videoInfo?.isPlaylist && loading && playlistStatus && playlistStatus.videos && (
-            <div className="fixed top-4 right-4 z-50 space-y-2">
-              {toasts.map((toast, idx) => (
-                <div key={idx} className="flex items-center bg-zinc-900 text-white px-4 py-2 rounded shadow-lg gap-2 animate-fade-in">
-                  <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                  </svg>
-                  <span className="font-medium">{toast.title}</span>
-                </div>
-              ))}
             </div>
           )}
         </>

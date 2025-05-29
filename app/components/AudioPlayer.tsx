@@ -29,9 +29,10 @@ interface AudioPlayerProps {
   file: FileInfo;
   onClose: () => void;
   autoPlay?: boolean;
+  onReady?: () => void;
 }
 
-const AudioPlayer = forwardRef(function AudioPlayer({ file, onClose, autoPlay = false }: AudioPlayerProps, ref) {
+const AudioPlayer = forwardRef(function AudioPlayer({ file, onClose, autoPlay = false, onReady }: AudioPlayerProps, ref) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -47,6 +48,7 @@ const AudioPlayer = forwardRef(function AudioPlayer({ file, onClose, autoPlay = 
   const waveformRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const [shouldAutoPlay, setShouldAutoPlay] = useState(autoPlay);
+  const prevReady = useRef(false);
 
   useEffect(() => {
     let wavesurfer: WaveSurfer | null = null;
@@ -212,6 +214,13 @@ const AudioPlayer = forwardRef(function AudioPlayer({ file, onClose, autoPlay = 
   useEffect(() => {
     setShouldAutoPlay(autoPlay);
   }, [file.name, autoPlay]);
+
+  useEffect(() => {
+    if (isReady && !prevReady.current && onReady) {
+      onReady();
+    }
+    prevReady.current = isReady;
+  }, [isReady, onReady]);
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-50 flex items-center bg-black px-4 py-2 border-t border-zinc-800 w-full" style={{ minHeight: 80 }}>

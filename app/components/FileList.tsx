@@ -5,6 +5,7 @@ import Image from 'next/image';
 import AudioPlayer from './AudioPlayer';
 import DownloadQueue from './DownloadQueue';
 import { useDownload } from '../contexts/DownloadContext';
+import { useCallback } from 'react';
 
 interface FileInfo {
   name: string;
@@ -84,6 +85,9 @@ export default function FileList() {
   const startWidth = useRef<number>(0);
   const audioPlayerRef = useRef<any>(null);
   const [playerOpen, setPlayerOpen] = useState(false);
+  const [playerReady, setPlayerReady] = useState(false);
+  const [actionMenu, setActionMenu] = useState<{ x: number; y: number; file: FileInfo | null } | null>(null);
+  const lastPlayedFile = useRef<string | null>(null);
 
   const selectDownloadsFolder = async () => {
     try {
@@ -392,12 +396,33 @@ export default function FileList() {
   }, [files, queue]);
 
   useEffect(() => {
-    if (currentFile && audioPlayerRef.current) {
+    if (
+      currentFile &&
+      audioPlayerRef.current &&
+      playerReady &&
+      lastPlayedFile.current !== currentFile.name
+    ) {
       audioPlayerRef.current.play();
+      setPlayerReady(false);
+      lastPlayedFile.current = currentFile.name;
     }
-  }, [currentFile]);
+  }, [currentFile, playerReady]);
 
   useEffect(() => { setPlayerOpen(!!currentFile); }, [currentFile]);
+
+  // Defina a altura do header/motor/logo e do player fixo
+  const alturaHeader = 519; // ajuste conforme seu layout real
+  const alturaPlayer = playerOpen ? 101 : 0;
+
+  // Fecha o menu de ações ao clicar fora
+  useEffect(() => {
+    if (!actionMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      setActionMenu(null);
+    };
+    window.addEventListener('mousedown', handleClick);
+    return () => window.removeEventListener('mousedown', handleClick);
+  }, [actionMenu]);
 
   if (loading) {
     return (
@@ -421,8 +446,10 @@ export default function FileList() {
   }
 
   return (
-    <div className="flex-1 flex flex-col">
-      <div className="space-y-1 animate-slide-up flex-1 flex flex-col">
+    <div className="flex-1 flex flex-col" style={{ paddingBottom: playerOpen ? alturaPlayer : 0 }}>
+      <div
+        className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200 flex-1 min-h-0 flex flex-col"
+      >
         <div className="flex justify-between items-center mb-4 gap-2">
           <h2 className="text-xl font-semibold text-white">Arquivos Baixados</h2>
           <div className="flex gap-2">
@@ -445,6 +472,14 @@ export default function FileList() {
               ) : (
                 'Atualizar Todos'
               )}
+            </button>
+
+            <button
+              onClick={handleSelectDownloadsFolder}
+              className="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-all duration-200 shadow"
+              title={customDownloadsPath ? `Pasta atual: ${customDownloadsPath}` : 'Selecionar pasta de downloads'}
+            >
+              Selecionar pasta de downloads
             </button>
             <button
               onClick={() => setGroupByAlbum(!groupByAlbum)}
@@ -472,16 +507,14 @@ export default function FileList() {
             className="w-full max-w-md px-4 py-2 rounded-md bg-zinc-800 border border-zinc-700 text-white placeholder-gray-400 focus:border-zinc-600 focus:ring-zinc-600 transition-all duration-200 shadow"
           />
         </div>
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
-          <button
-            onClick={handleSelectDownloadsFolder}
-            className="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-all duration-200 shadow"
-            title={customDownloadsPath ? `Pasta atual: ${customDownloadsPath}` : 'Selecionar pasta de downloads'}
-          >
-            Selecionar pasta de downloads
-          </button>
-        </div>
-        <div className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden w-full flex flex-col flex-1 min-h-0">
+        <div
+          className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden w-full flex flex-col flex-1 min-h-0"
+          style={{
+            minHeight: 0,
+            maxWidth: '100%',
+            maxHeight: `calc(100vh - ${alturaHeader + alturaPlayer}px)`
+          }}
+        >
           <div className="flex w-full px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10" style={{userSelect:'none'}}>
             {[
               { label: '#', sortable: true, align: 'center' },
@@ -494,7 +527,6 @@ export default function FileList() {
               { label: 'Gênero', sortable: true, align: 'center' },
               { label: 'Álbum', sortable: true, align: 'center' },
               { label: 'Label', sortable: true, align: 'center' },
-              { label: 'Ações', sortable: false, align: 'center' },
             ].map((col, idx) => (
               <div
                 key={col.label}
@@ -503,7 +535,7 @@ export default function FileList() {
                 onClick={col.sortable ? () => handleSort(col.label.toLowerCase().replace('ações','label') === 'ações' ? 'label' : col.label.toLowerCase()) : undefined}
               >
                 <span className="truncate">{col.label} {sortBy === col.label.toLowerCase() && (sortOrder === 'asc' ? '↑' : '↓')}</span>
-                {idx < colWidths.length - 1 && (
+                {idx < colWidths.length - 2 && (
                   <div
                     onMouseDown={e => handleResizeStart(idx, e)}
                     className="absolute right-0 top-0 h-full w-2 cursor-col-resize z-20"
@@ -513,7 +545,7 @@ export default function FileList() {
               </div>
             ))}
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto custom-scroll">
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scroll w-full min-w-0" style={{}}>
             {Object.entries(groupedFiles).map(([album, files]) => (
               <div key={album} className="animate-fade-in">
                 {groupByAlbum && album !== '' && (
@@ -524,19 +556,24 @@ export default function FileList() {
                 {files.map((file, index) => (
                   <div
                     key={file.path}
-                    className="flex items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs"
+                    className="flex items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs cursor-pointer"
                     style={{ minHeight: 50 }}
+                    onClick={e => {
+                      if (e.button === 0) {
+                        e.stopPropagation();
+                        setActionMenu({
+                          x: (e as React.MouseEvent).clientX,
+                          y: (e as React.MouseEvent).clientY,
+                          file
+                        });
+                      }
+                    }}
                   >
-                    <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[0], minWidth:40}}>{files.indexOf(file) + 1}</div>
+                    <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[0], minWidth:40}}>{sortedFiles.indexOf(file) + 1}</div>
                     <div className="flex items-center justify-center" style={{width:colWidths[1], minWidth:40}}>
                       <button
                         onClick={() => {
                           setCurrentFile({ ...file, autoPlay: true });
-                          setTimeout(() => {
-                            if (audioPlayerRef.current) {
-                              audioPlayerRef.current.play();
-                            }
-                          }, 500);
                         }}
                         className="w-10 h-10 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110"
                       >
@@ -567,37 +604,6 @@ export default function FileList() {
                     <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[9], minWidth:40}}>
                       <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.label || ''}>{file.label || '-'}</span>
                     </div>
-                    <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[10], minWidth:40}}>
-                      <select
-                        className="bg-zinc-700 text-white rounded p-1 text-xs focus:outline-none"
-                        onChange={e => {
-                          const action = e.target.value;
-                          if (action === 'update') {
-                            updateMetadataForFile(file.name);
-                          } else if (action === 'download') {
-                            window.open(`/api/downloads/${encodeURIComponent(file.name)}`, '_blank');
-                          }
-                          e.target.selectedIndex = 0;
-                        }}
-                        defaultValue=""
-                        disabled={metadataStatus[file.name] === 'loading' || file.isBeatportFormat}
-                        title={
-                          file.isBeatportFormat
-                            ? 'Arquivo já está no formato Beatport'
-                            : metadataStatus[file.name] === 'error' || (metadataStatus[file.name] && metadataStatus[file.name] !== 'idle' && metadataStatus[file.name] !== 'success' && metadataStatus[file.name] !== 'loading')
-                              ? String(metadataStatus[file.name])
-                              : metadataStatus[file.name] === 'success'
-                                ? 'Metadados atualizados com sucesso!'
-                                : metadataStatus[file.name] === 'loading'
-                                  ? 'Atualizando metadados...'
-                                  : 'Ações'
-                        }
-                      >
-                        <option value="" disabled hidden>Ações</option>
-                        <option value="update" disabled={metadataStatus[file.name] === 'loading' || file.isBeatportFormat}>Atualizar metadados</option>
-                        <option value="download">Baixar arquivo</option>
-                      </select>
-                    </div>
                   </div>
                 ))}
               </div>
@@ -608,26 +614,49 @@ export default function FileList() {
 
       {currentFile && (
         <>
-          <AudioPlayer ref={audioPlayerRef} file={currentFile} onClose={() => { setCurrentFile(null); setPlayerOpen(false); }} />
+          <AudioPlayer 
+            ref={audioPlayerRef} 
+            file={currentFile} 
+            onClose={() => { setCurrentFile(null); setPlayerOpen(false); }} 
+            onReady={() => setPlayerReady(true)}
+          />
         </>
       )}
+      
       {showQueue && queue.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <DownloadQueue onClose={() => setShowQueue(false)} playerOpen={playerOpen} />
         </div>
       )}
+
+      {/* Menu flutuante de ações */}
+      {actionMenu && actionMenu.file && (
+        <div
+          className="fixed z-50 bg-zinc-800 border border-zinc-700 rounded shadow-lg p-2 flex flex-col min-w-[180px] animate-fade-in"
+          style={{ left: actionMenu.x, top: actionMenu.y }}
+          onClick={e => e.stopPropagation()}
+        >
+          <button
+            className="w-full text-left px-3 py-2 hover:bg-zinc-700 text-white rounded"
+            disabled={metadataStatus[actionMenu.file.name] === 'loading' || actionMenu.file.isBeatportFormat}
+            onClick={() => {
+              updateMetadataForFile(actionMenu.file!.name);
+              setActionMenu(null);
+            }}
+          >
+            Atualizar metadados
+          </button>
+          <button
+            className="w-full text-left px-3 py-2 hover:bg-zinc-700 text-white rounded"
+            onClick={() => {
+              window.open(`/api/downloads/${encodeURIComponent(actionMenu.file!.name)}`, '_blank');
+              setActionMenu(null);
+            }}
+          >
+            Baixar arquivo
+          </button>
+        </div>
+      )}
     </div>
   );
 }
-
-function formatDateTime(dateString?: string) {
-  if (!dateString) return '-';
-  const date = new Date(dateString);
-  const now = new Date();
-  const isToday = date.toDateString() === now.toDateString();
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  if (isToday) {
-    return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-  }
-  return `${pad(date.getDate())}/${pad(date.getMonth() + 1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-} 

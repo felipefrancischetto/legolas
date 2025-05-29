@@ -3,44 +3,14 @@
 import { useDownload } from '../contexts/DownloadContext';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { useEffect, useRef, useState } from 'react';
 
 export default function DownloadQueue({ onClose, playerOpen }: { onClose: () => void, playerOpen: boolean }) {
-  const { queue, removeFromQueue, retryDownload, cancelDownload, fetchAndSyncPlaylistStatus } = useDownload();
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
-  const [pollingActive, setPollingActive] = useState(false);
-
-  useEffect(() => {
-    // Iniciar polling ao abrir a fila
-    setPollingActive(true);
-    return () => {
-      setPollingActive(false);
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!pollingActive) return;
-    // Verifica se há playlist em andamento
-    const hasActivePlaylist = queue.some(item => item.isPlaylist && item.status !== 'completed');
-    if (hasActivePlaylist) {
-      pollingRef.current = setInterval(() => {
-        fetchAndSyncPlaylistStatus();
-      }, 2000);
-    } else if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-    return () => {
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
-    };
-  }, [queue, fetchAndSyncPlaylistStatus, pollingActive]);
+  const { 
+    queue, 
+    removeFromQueue, 
+    retryDownload, 
+    cancelDownload, 
+  } = useDownload();
 
   if (queue.length === 0) {
     return null;

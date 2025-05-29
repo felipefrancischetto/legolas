@@ -8,6 +8,17 @@ interface DownloadItem {
   status: 'pending' | 'queued' | 'downloading' | 'completed' | 'error';
   progress?: number;
   error?: string;
+  title?: string;
+  isPlaylist?: boolean;
+  playlistItems?: Array<{
+    title: string;
+    status: 'pending' | 'downloading' | 'completed' | 'error';
+    progress: number;
+    error?: string;
+  }>;
+  format?: string;
+  enrichWithBeatport?: boolean;
+  metadata?: any;
   [key: string]: any;
 }
 
@@ -27,6 +38,29 @@ interface DownloadContextType {
   fetchAndSyncPlaylistStatus: () => Promise<void>;
   files: any[];
   fetchFiles: () => Promise<void>;
+  downloadStatus: {
+    loading: boolean;
+    error: string | null;
+    success: boolean;
+    progress: number;
+    status: string;
+    downloadSteps: string[];
+  };
+  setDownloadStatus: (status: Partial<DownloadContextType['downloadStatus']> | ((prev: DownloadContextType['downloadStatus']) => Partial<DownloadContextType['downloadStatus']>)) => void;
+  playlistStatus: {
+    videos: Array<{
+      title: string;
+      status: string;
+      progress: number;
+      error?: string;
+    }> | null;
+    status: string;
+  };
+  setPlaylistStatus: (status: Partial<DownloadContextType['playlistStatus']>) => void;
+  toasts: Array<{ title: string }>;
+  addToast: (toast: { title: string }) => void;
+  removeToast: (index: number) => void;
+  getPlaylistProgress: (title: string) => string | null;
 }
 
 const DownloadContext = createContext<DownloadContextType | undefined>(undefined);
@@ -37,6 +71,46 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   const [files, setFiles] = useState<any[]>([]);
   const maxConcurrentDownloads = 3;
   const activeDownloads = queue.filter(item => item.status === 'downloading').length;
+
+  // Novos estados compartilhados
+  const [downloadStatus, setDownloadStatus] = useState<DownloadContextType['downloadStatus']>({
+    loading: false,
+    error: null,
+    success: false,
+    progress: 0,
+    status: '',
+    downloadSteps: []
+  });
+
+  const [playlistStatus, setPlaylistStatus] = useState<DownloadContextType['playlistStatus']>({
+    videos: null,
+    status: ''
+  });
+
+  const [toasts, setToasts] = useState<Array<{ title: string }>>([]);
+
+  // Funções para gerenciar toasts
+  const addToast = (toast: { title: string }) => {
+    setToasts(prev => [...prev, toast]);
+  };
+
+  const removeToast = (index: number) => {
+    setToasts(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Função para atualizar o status de download
+  const updateDownloadStatus = (status: Partial<DownloadContextType['downloadStatus']> | ((prev: DownloadContextType['downloadStatus']) => Partial<DownloadContextType['downloadStatus']>)) => {
+    if (typeof status === 'function') {
+      setDownloadStatus(prev => ({ ...prev, ...status(prev) }));
+    } else {
+      setDownloadStatus(prev => ({ ...prev, ...status }));
+    }
+  };
+
+  // Função para atualizar o status da playlist
+  const updatePlaylistStatus = (status: Partial<DownloadContextType['playlistStatus']>) => {
+    setPlaylistStatus(prev => ({ ...prev, ...status }));
+  };
 
   // Carregar histórico do localStorage
   useEffect(() => {
@@ -178,6 +252,21 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
           if (updatedPlaylistItems.every((pl: any) => pl.status === 'completed')) overallStatus = 'completed';
           else if (updatedPlaylistItems.some((pl: any) => pl.status === 'downloading')) overallStatus = 'downloading';
           else if (updatedPlaylistItems.some((pl: any) => pl.status === 'error')) overallStatus = 'error';
+          // Calcula progresso individual da playlist
+          const total = updatedPlaylistItems.length;
+          const completed = updatedPlaylistItems.filter((pl: any) => pl.status === 'completed').length;
+          const errors = updatedPlaylistItems.filter((pl: any) => pl.status === 'error').length;
+          const remaining = total - completed - errors;
+          if (overallStatus !== 'completed') {
+            setDownloadStatus(prev => ({
+              ...prev,
+              status: `Baixando playlist: ${completed} concluídas, ${remaining} restantes, ${errors} erros`,
+              downloadSteps: [
+                ...prev.downloadSteps,
+                `Baixando playlist: ${completed} concluídas, ${remaining} restantes, ${errors} erros`
+              ]
+            }));
+          }
           return {
             ...item,
             playlistItems: updatedPlaylistItems,
@@ -189,6 +278,30 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       // Ignorar erros de polling
     }
   };
+
+  // Função para obter progresso da playlist
+  const getPlaylistProgress = (title: string): string | null => {
+    const playlistItem = queue.find(item => item.isPlaylist && item.title === title);
+    if (playlistItem && playlistItem.playlistItems) {
+      const total = playlistItem.playlistItems.length;
+      const completed = playlistItem.playlistItems.filter(i => i.status === 'completed').length;
+      const errors = playlistItem.playlistItems.filter(i => i.status === 'error').length;
+      const remaining = total - completed - errors;
+      return `Baixando playlist: ${completed} concluídas, ${remaining} restantes, ${errors} erros`;
+    }
+    return null;
+  };
+
+  useEffect(() => {
+    // Polling global para playlists em andamento
+    const interval = setInterval(() => {
+      const hasActivePlaylist = queue.some(item => item.isPlaylist && item.status !== 'completed');
+      if (hasActivePlaylist) {
+        fetchAndSyncPlaylistStatus();
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [queue]);
 
   return (
     <DownloadContext.Provider value={{
@@ -207,6 +320,14 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       fetchAndSyncPlaylistStatus,
       files,
       fetchFiles,
+      downloadStatus,
+      setDownloadStatus: updateDownloadStatus,
+      playlistStatus,
+      setPlaylistStatus: updatePlaylistStatus,
+      toasts,
+      addToast,
+      removeToast,
+      getPlaylistProgress
     }}>
       {children}
     </DownloadContext.Provider>

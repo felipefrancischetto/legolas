@@ -84,8 +84,11 @@ export async function GET(request: NextRequest) {
       }
       throw err;
     }
-    // Filtrar apenas arquivos MP3
-    const mp3Files = files.filter(file => file.toLowerCase().endsWith('.mp3'));
+    // Filtrar apenas arquivos de áudio (MP3 e FLAC)
+    const audioFiles = files.filter(file => {
+      const ext = file.toLowerCase();
+      return ext.endsWith('.mp3') || ext.endsWith('.flac');
+    });
     
     // Buscar datas de download do playlist-status.json
     let downloadDates: Record<string, string> = {};
@@ -104,14 +107,14 @@ export async function GET(request: NextRequest) {
     }
     // Obter informações de cada arquivo
     const fileInfos = await Promise.all(
-      mp3Files.map(async (file) => {
+      audioFiles.map(async (file) => {
         const filePath = join(downloadsFolder, file);
         const metadata = await extractAudioMetadata(filePath);
         // Buscar data/hora pelo título
-        const downloadedAt = downloadDates[metadata.title || file.replace(/\.mp3$/i, '')] || null;
+        const downloadedAt = downloadDates[metadata.title || file.replace(/\.(mp3|flac)$/i, '')] || null;
         return {
           name: file,
-          displayName: file.replace(/\.mp3$/i, ''),
+          displayName: file.replace(/\.(mp3|flac)$/i, ''),
           path: filePath,
           size: 0, // TODO: Implementar tamanho do arquivo
           downloadedAt,

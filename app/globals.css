@@ -158,3 +158,19 @@ body {
     @apply text-sm;
   }
 }
+
+.custom-scroll {
+  scrollbar-color: #404040 #18181b;
+}
+.custom-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: #18181b;
+}
+.custom-scroll::-webkit-scrollbar-thumb {
+  background: #404040;
+  border-radius: 8px;
+}
+.custom-scroll::-webkit-scrollbar-corner {
+  background: #18181b;
+}

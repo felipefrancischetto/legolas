@@ -7,7 +7,7 @@ const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Legolas Downloader",
-  description: "Baixe suas músicas favoritas do YouTube em formato MP3.",
+  description: "Baixe suas músicas favoritas",
 };
 
 export default function RootLayout({

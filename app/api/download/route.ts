@@ -20,26 +20,6 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-async function cleanupTempFiles(filename: string) {
-  const basePath = join(process.cwd(), 'downloads');
-  const tempFiles = [
-    `${basePath}.temp.mp3`,
-    `${basePath}.webm`,
-    `${basePath}.webm.part`,
-    `${basePath}.webp`
-  ];
-
-  for (const file of tempFiles) {
-    try {
-      if (await fileExists(file)) {
-        await unlink(file);
-      }
-    } catch (error) {
-      console.warn(`Não foi possível remover arquivo temporário ${file}:`, error);
-    }
-  }
-}
-
 async function getDownloadsPath() {
   try {
     const configPath = join(process.cwd(), 'downloads.config.json');
@@ -56,6 +36,7 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const url = searchParams.get('url');
+    const format = searchParams.get('format') || 'flac';
     
     if (!url) {
       return NextResponse.json(
@@ -64,7 +45,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log('Iniciando download para URL:', url);
+    console.log('Iniciando download para URL:', url, 'Formato:', format);
 
     // Obter o caminho de downloads
     const downloadsFolder = await getDownloadsPath();
@@ -84,10 +65,10 @@ export async function GET(request: NextRequest) {
     );
     const videoInfo = JSON.parse(infoJson);
 
-    // Baixar o vídeo como MP3 com metadados
+    // Baixar o vídeo no formato selecionado com metadados
     console.log('Iniciando download do áudio...');
     const { stdout } = await execAsync(
-      `yt-dlp -x --audio-format mp3 --audio-quality 0 ` +
+      `yt-dlp -x --audio-format ${format} --audio-quality 10` +
       `--embed-thumbnail --convert-thumbnails jpg ` +
       `--add-metadata ` +
       `--cookies "cookies.txt" ` +
@@ -102,21 +83,26 @@ export async function GET(request: NextRequest) {
     // Buscar metadados no MusicBrainz
     let metadata = null;
     try {
-      const mbRes = await fetch('/api/musicbrainz-metadata', {
+      // Montar URL absoluta usando o host do request
+      const host = request.headers.get('host');
+      const protocol = host?.startsWith('localhost') || host?.startsWith('127.0.0.1') ? 'http' : 'https';
+      const mbRes = await fetch(`${protocol}://${host}/api/musicbrainz-metadata`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: videoInfo.title, artist: videoInfo.uploader })
       });
       metadata = await mbRes.json();
+      console.log('Metadados do MusicBrainz:', metadata);
+      console.log('videoInfo:', videoInfo);
     } catch (err) {
       console.error('Erro ao buscar metadados do MusicBrainz:', err);
     }
 
-    // Escrever metadados no arquivo MP3
+    // Escrever metadados no arquivo
     try {
-      const mp3File = `${downloadsFolder}/${videoInfo.title}.mp3`;
-      const exists = await fileExists(mp3File);
-      console.log('Arquivo MP3 existe para gravar metadados?', exists, mp3File);
+      const audioFile = `${downloadsFolder}/${videoInfo.title}.${format}`;
+      const exists = await fileExists(audioFile);
+      console.log('Arquivo de áudio existe para gravar metadados?', exists, audioFile);
       console.log('Metadados buscados:', metadata);
       if (metadata && exists) {
         const tags = {
@@ -134,13 +120,13 @@ export async function GET(request: NextRequest) {
             language: 'por', // Portuguese language code
             text: metadata.descricao || ''
           }
-        }, mp3File);
+        }, audioFile);
         console.log('Resultado da escrita dos metadados:', success);
         if (!success) {
-          throw new Error('Falha ao gravar metadados ID3 no arquivo MP3');
+          throw new Error('Falha ao gravar metadados ID3 no arquivo de áudio');
         }
       } else {
-        console.warn('Metadados ausentes ou arquivo MP3 não encontrado para gravar tags.');
+        console.warn('Metadados ausentes ou arquivo de áudio não encontrado para gravar tags.');
       }
     } catch (err) {
       console.error('Erro ao gravar metadados ID3:', err);
