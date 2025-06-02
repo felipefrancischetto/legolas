@@ -1,10 +1,8 @@
 'use client';
 
 import { useDownload } from '../contexts/DownloadContext';
-import { formatDistanceToNow } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
 
-export default function DownloadQueue({ onClose, playerOpen }: { onClose: () => void, playerOpen: boolean }) {
+export default function DownloadQueue({ onClose }: { onClose: () => void }) {
   const { 
     queue, 
     removeFromQueue, 
@@ -17,7 +15,7 @@ export default function DownloadQueue({ onClose, playerOpen }: { onClose: () => 
   }
 
   return (
-    <div className={`fixed right-4 ${playerOpen ? 'bottom-28' : 'bottom-4'} w-96 max-h-[80vh] bg-zinc-900 rounded-lg border border-zinc-800 p-4 animate-slide-up z-50`}>
+    <div className={`fixed right-4 w-96 max-h-[80vh] bg-zinc-900 rounded-lg border border-zinc-800 p-4 animate-slide-up z-50`}>
       <div className="flex justify-between items-center mb-3">
         <h3 className="text-sm font-medium text-white">Fila de Downloads</h3>
         <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">

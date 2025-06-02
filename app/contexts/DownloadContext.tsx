@@ -36,8 +36,6 @@ interface DownloadContextType {
   retryDownload: (id: string, playlistIndex?: number) => void;
   cancelDownload: (id: string, playlistIndex?: number) => void;
   fetchAndSyncPlaylistStatus: () => Promise<void>;
-  files: any[];
-  fetchFiles: () => Promise<void>;
   downloadStatus: {
     loading: boolean;
     error: string | null;
@@ -68,7 +66,6 @@ const DownloadContext = createContext<DownloadContextType | undefined>(undefined
 export function DownloadProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<DownloadItem[]>([]);
   const [history, setHistory] = useState<DownloadItem[]>([]);
-  const [files, setFiles] = useState<any[]>([]);
   const maxConcurrentDownloads = 3;
   const activeDownloads = queue.filter(item => item.status === 'downloading').length;
 
@@ -203,23 +200,11 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     }));
   };
 
-  // Função para buscar arquivos baixados
-  const fetchFiles = async () => {
-    try {
-      const response = await fetch('/api/files');
-      const data = await response.json();
-      setFiles(data.files || []);
-    } catch (error) {
-      // Ignorar erro
-    }
-  };
-
-  // Sincroniza status real da playlist com o backend E EXISTÊNCIA DO ARQUIVO
+  // Sincroniza status real da playlist com o backend
   const fetchAndSyncPlaylistStatus = async () => {
     try {
       const res = await fetch('/api/playlist-status');
       const data = await res.json();
-      await fetchFiles();
       if (data && Array.isArray(data.videos)) {
         setQueue(prevQueue => prevQueue.map(item => {
           if (!item.isPlaylist || !item.playlistItems) return item;
@@ -227,16 +212,8 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
           const updatedPlaylistItems = item.playlistItems.map((plItem: any, idx: number) => {
             const backendStatus = data.videos[idx];
             if (!backendStatus) return plItem;
-            // Checar se arquivo existe
-            const fileExists = files.some(f => {
-              // Comparar por título ou displayName
-              return (
-                (f.title && f.title.trim().toLowerCase() === plItem.title.trim().toLowerCase()) ||
-                (f.displayName && f.displayName.trim().toLowerCase() === plItem.title.trim().toLowerCase())
-              );
-            });
             let status: any = plItem.status;
-            if ((backendStatus.status === 'success' || backendStatus.status === 'existing') && fileExists) status = 'completed';
+            if (backendStatus.status === 'success' || backendStatus.status === 'existing') status = 'completed';
             else if (backendStatus.status === 'downloading') status = 'downloading';
             else if (backendStatus.status === 'error') status = 'error';
             else status = 'pending';
@@ -318,8 +295,6 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       retryDownload,
       cancelDownload,
       fetchAndSyncPlaylistStatus,
-      files,
-      fetchFiles,
       downloadStatus,
       setDownloadStatus: updateDownloadStatus,
       playlistStatus,

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import PlaylistTracklistModal from '../components/PlaylistTracklistModal';
 
 interface Track {
   title: string;
@@ -16,6 +17,7 @@ export default function PlaylistTracklistScrape() {
   const [results, setResults] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   const handleSearch = async () => {
     setLoading(true);
@@ -66,6 +68,19 @@ export default function PlaylistTracklistScrape() {
         {error && <div className="text-red-400 mt-4">{error}</div>}
         {results.length > 0 && (
           <div className="mt-6 space-y-4">
+            <div className="flex justify-end mt-6 gap-2">
+              <Link href="/playlist-to-youtube/create">
+                <button className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-all font-medium shadow">
+                  Criar playlist no YouTube
+                </button>
+              </Link>
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="px-4 py-2 bg-zinc-700 text-white rounded-md hover:bg-zinc-800 transition-all font-medium shadow"
+              >
+                Ver faixas da playlist
+              </button>
+            </div>
             <h2 className="text-lg font-semibold text-white mb-2">Faixas encontradas:</h2>
             {results.map((track, i) => (
               <div key={i} className="flex flex-col gap-1 bg-zinc-800 rounded p-3">
@@ -104,6 +119,11 @@ export default function PlaylistTracklistScrape() {
                 </div>
               </div>
             ))}
+            <PlaylistTracklistModal
+              isOpen={isModalOpen}
+              onClose={() => setIsModalOpen(false)}
+              playlistUrl={setlistUrl}
+            />
           </div>
         )}
       </div>

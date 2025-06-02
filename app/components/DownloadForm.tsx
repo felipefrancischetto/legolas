@@ -29,7 +29,6 @@ export default function DownloadForm() {
   const [enrichWithBeatport, setEnrichWithBeatport] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
-  const [playerOpen, setPlayerOpen] = useState(false);
   const [currentDownloadId, setCurrentDownloadId] = useState<string | null>(null);
 
   const { 
@@ -42,12 +41,8 @@ export default function DownloadForm() {
     downloadStatus,
     setDownloadStatus,
     playlistStatus,
-    setPlaylistStatus,
     toasts,
-    addToast,
     removeToast,
-    files,
-    queue,
     getPlaylistProgress
   } = useDownload();
 
@@ -488,14 +483,26 @@ export default function DownloadForm() {
             <label className="block text-xs font-medium text-gray-300 mb-1 sr-only">Iniciar</label>
             <button
               type="submit"
-              disabled={downloadStatus.loading}
-              className="h-9 px-4 flex flex-row items-center justify-center gap-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all shadow disabled:opacity-50"
+              disabled={downloadStatus.loading || !videoInfo}
+              className="h-9 px-4 flex flex-row items-center justify-center gap-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all shadow disabled:opacity-50 disabled:cursor-not-allowed"
               aria-label="Baixar"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
-              </svg>
-              <span className="text-sm font-medium">Baixar</span>
+              {downloadStatus.loading ? (
+                <>
+                  <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <span className="text-sm font-medium">Baixando...</span>
+                </>
+              ) : (
+                <>
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
+                  </svg>
+                  <span className="text-sm font-medium">Baixar</span>
+                </>
+              )}
             </button>
           </div>
         </form>
@@ -589,7 +596,7 @@ export default function DownloadForm() {
       {/* Exemplo de exibição da fila de downloads (pode ser substituído pelo seu componente real) */}
       {showQueue && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <DownloadQueue onClose={() => setShowQueue(false)} playerOpen={playerOpen} />
+          <DownloadQueue onClose={() => setShowQueue(false)} />
         </div>
       )}
     </div>

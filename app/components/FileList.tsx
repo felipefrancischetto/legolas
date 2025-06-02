@@ -5,7 +5,9 @@ import Image from 'next/image';
 import AudioPlayer from './AudioPlayer';
 import DownloadQueue from './DownloadQueue';
 import { useDownload } from '../contexts/DownloadContext';
-import { useCallback } from 'react';
+import { useFile } from '../contexts/FileContext';
+import { useUI } from '../contexts/UIContext';
+import { usePlayer } from '../contexts/PlayerContext';
 
 interface FileInfo {
   name: string;
@@ -30,7 +32,6 @@ interface FileInfo {
   fileCreatedAt?: string;
   isBeatportFormat?: boolean;
   label?: string;
-  autoPlay?: boolean;
 }
 
 const MusicIcon = () => (
@@ -42,82 +43,75 @@ const MusicIcon = () => (
 const ThumbnailImage = ({ file, files }: { file: FileInfo, files: FileInfo[] }) => {
   const [error, setError] = useState(false);
   const exists = files.some(f => f.name === file.name);
+  
   if (!exists || error) {
     return (
-      <div className="w-full h-full flex items-center justify-center">
-        <MusicIcon />
+      <div className="w-full h-full flex items-center justify-center bg-zinc-800 rounded">
+        <svg className="w-6 h-6 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+        </svg>
       </div>
     );
   }
+
   const thumbnailUrl = `/api/thumbnail/${encodeURIComponent(file.name)}`;
   return (
-    <Image
-      src={thumbnailUrl}
-      alt={file.title || file.displayName}
-      width={32}
-      height={32}
-      className="object-cover w-full h-full"
-      onError={() => setError(true)}
-      priority
-    />
+    <div className="w-full h-full relative">
+      <Image
+        src={thumbnailUrl}
+        alt={file.title || file.displayName}
+        width={32}
+        height={32}
+        className="object-cover w-full h-full rounded"
+        onError={() => setError(true)}
+        priority
+      />
+    </div>
   );
 };
 
 export default function FileList() {
-  const [files, setFiles] = useState<FileInfo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [currentFile, setCurrentFile] = useState<FileInfo | null>(null);
-  const [customDownloadsPath, setCustomDownloadsPath] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [sortBy, setSortBy] = useState<string>('fileCreatedAt');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [metadataStatus, setMetadataStatus] = useState<{ [fileName: string]: 'idle' | 'loading' | 'success' | 'error' | string }>({});
-  const [isUpdatingAll, setIsUpdatingAll] = useState(false);
-  const [updateProgress, setUpdateProgress] = useState({ current: 0, total: 0 });
-  const [showQueue, setShowQueue] = useState(false);
-  const [groupByAlbum, setGroupByAlbum] = useState(false);
-  const { queue, maxConcurrentDownloads, updateQueueItem } = useDownload();
-  // Larguras iniciais das colunas (em px)
-  const initialWidths = [32, 48, 200, 80, 120, 60, 60, 100, 100, 80, 120];
-  const [colWidths, setColWidths] = useState<number[]>(initialWidths);
+  const {
+    files,
+    setFiles,
+    loading,
+    setLoading,
+    metadataStatus,
+    setMetadataStatus,
+    isUpdatingAll,
+    setIsUpdatingAll,
+    updateProgress,
+    setUpdateProgress,
+    customDownloadsPath,
+    setCustomDownloadsPath,
+  } = useFile();
+
+  const {
+    search,
+    setSearch,
+    sortBy,
+    setSortBy,
+    sortOrder,
+    setSortOrder,
+    groupByAlbum,
+    setGroupByAlbum,
+    showQueue,
+    setShowQueue,
+    playerOpen,
+    setPlayerOpen,
+    actionMenu,
+    setActionMenu,
+    colWidths,
+    setColWidths,
+  } = useUI();
+
+  const { play } = usePlayer();
+  const { queue, updateQueueItem } = useDownload();
   const resizingCol = useRef<number | null>(null);
   const startX = useRef<number>(0);
   const startWidth = useRef<number>(0);
   const audioPlayerRef = useRef<any>(null);
-  const [playerOpen, setPlayerOpen] = useState(false);
-  const [playerReady, setPlayerReady] = useState(false);
-  const [actionMenu, setActionMenu] = useState<{ x: number; y: number; file: FileInfo | null } | null>(null);
   const lastPlayedFile = useRef<string | null>(null);
-
-  const selectDownloadsFolder = async () => {
-    try {
-      // @ts-ignore - showDirectoryPicker é uma API experimental
-      const directoryHandle = await window.showDirectoryPicker({
-        mode: 'readwrite',
-        startIn: 'downloads'
-      });
-      
-      const path = await directoryHandle.getDirectoryHandle();
-      setCustomDownloadsPath(path.name);
-      
-      // Salvar a preferência no localStorage
-      localStorage.setItem('customDownloadsPath', path.name);
-      
-      // Atualizar a API com o novo caminho
-      await fetch('/api/set-downloads-path', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ path: path.name }),
-      });
-      
-      // Recarregar a lista de arquivos
-      fetchFiles();
-    } catch (error) {
-      console.error('Erro ao selecionar pasta:', error);
-    }
-  };
 
   const fetchFiles = async () => {
     try {
@@ -270,7 +264,7 @@ export default function FileList() {
   };
 
   async function updateMetadataForFile(fileName: string) {
-    setMetadataStatus(s => ({ ...s, [fileName]: 'loading' }));
+    setMetadataStatus({ ...metadataStatus, [fileName]: 'loading' });
     try {
       const response = await fetch('/api/update-metadata', {
         method: 'POST',
@@ -279,13 +273,13 @@ export default function FileList() {
       });
       const result = await response.json();
       if (!response.ok || result.error) {
-        setMetadataStatus(s => ({ ...s, [fileName]: result.error || 'error' }));
+        setMetadataStatus({ ...metadataStatus, [fileName]: result.error || 'error' });
         return;
       }
-      setMetadataStatus(s => ({ ...s, [fileName]: 'success' }));
+      setMetadataStatus({ ...metadataStatus, [fileName]: 'success' });
       fetchFiles();
     } catch (err: any) {
-      setMetadataStatus(s => ({ ...s, [fileName]: err.message || 'error' }));
+      setMetadataStatus({ ...metadataStatus, [fileName]: err.message || 'error' });
     }
   }
 
@@ -297,7 +291,7 @@ export default function FileList() {
     setUpdateProgress({ current: 0, total: filesToUpdate.length });
 
     for (const file of filesToUpdate) {
-      setMetadataStatus(s => ({ ...s, [file.name]: 'loading' }));
+      setMetadataStatus({ ...metadataStatus, [file.name]: 'loading' });
       try {
         const response = await fetch('/api/update-metadata', {
           method: 'POST',
@@ -306,14 +300,14 @@ export default function FileList() {
         });
         const result = await response.json();
         if (!response.ok || result.error) {
-          setMetadataStatus(s => ({ ...s, [file.name]: result.error || 'error' }));
+          setMetadataStatus({ ...metadataStatus, [file.name]: result.error || 'error' });
         } else {
-          setMetadataStatus(s => ({ ...s, [file.name]: 'success' }));
+          setMetadataStatus({ ...metadataStatus, [file.name]: 'success' });
         }
       } catch (err: any) {
-        setMetadataStatus(s => ({ ...s, [file.name]: err.message || 'error' }));
+        setMetadataStatus({ ...metadataStatus, [file.name]: err.message || 'error' });
       }
-      setUpdateProgress(prev => ({ ...prev, current: prev.current + 1 }));
+      setUpdateProgress({ ...updateProgress, current: updateProgress.current + 1 });
     }
 
     setIsUpdatingAll(false);
@@ -370,11 +364,9 @@ export default function FileList() {
   const handleResizing = (e: MouseEvent) => {
     if (resizingCol.current === null) return;
     const delta = e.clientX - startX.current;
-    setColWidths(widths => {
-      const newWidths = [...widths];
-      newWidths[resizingCol.current!] = Math.max(40, startWidth.current + delta);
-      return newWidths;
-    });
+    const newWidths = [...colWidths];
+    newWidths[resizingCol.current!] = Math.max(40, startWidth.current + delta);
+    setColWidths(newWidths);
   };
 
   // Função para finalizar o resize
@@ -394,21 +386,6 @@ export default function FileList() {
       }
     });
   }, [files, queue]);
-
-  useEffect(() => {
-    if (
-      currentFile &&
-      audioPlayerRef.current &&
-      playerReady &&
-      lastPlayedFile.current !== currentFile.name
-    ) {
-      audioPlayerRef.current.play();
-      setPlayerReady(false);
-      lastPlayedFile.current = currentFile.name;
-    }
-  }, [currentFile, playerReady]);
-
-  useEffect(() => { setPlayerOpen(!!currentFile); }, [currentFile]);
 
   // Defina a altura do header/motor/logo e do player fixo
   const alturaHeader = 519; // ajuste conforme seu layout real
@@ -573,7 +550,8 @@ export default function FileList() {
                     <div className="flex items-center justify-center" style={{width:colWidths[1], minWidth:40}}>
                       <button
                         onClick={() => {
-                          setCurrentFile({ ...file, autoPlay: true });
+                          play(file);
+                          setPlayerOpen(true);
                         }}
                         className="w-10 h-10 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110"
                       >
@@ -612,20 +590,11 @@ export default function FileList() {
         </div>
       </div>
 
-      {currentFile && (
-        <>
-          <AudioPlayer 
-            ref={audioPlayerRef} 
-            file={currentFile} 
-            onClose={() => { setCurrentFile(null); setPlayerOpen(false); }} 
-            onReady={() => setPlayerReady(true)}
-          />
-        </>
-      )}
+      {playerOpen && <AudioPlayer />}
       
       {showQueue && queue.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <DownloadQueue onClose={() => setShowQueue(false)} playerOpen={playerOpen} />
+          <DownloadQueue onClose={() => setShowQueue(false)} />
         </div>
       )}
 

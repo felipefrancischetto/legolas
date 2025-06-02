@@ -115,6 +115,12 @@ export default function PlaylistTracklistModal({ isOpen, onClose, playlistUrl }:
                   >
                     Baixar
                   </button>
+                  <button
+                    onClick={onClose}
+                    className="ml-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 transition-colors"
+                  >
+                    Ver faixas da playlist
+                  </button>
                 </div>
               ))}
             </div>

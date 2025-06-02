@@ -38,19 +38,13 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-type RouteContext = {
-  params: {
-    filename: string;
-  };
-};
-
 export async function GET(
-  _: NextRequest,
-  context: RouteContext
+  request: NextRequest,
+  { params }: { params: { filename: string } }
 ): Promise<NextResponse> {
   let tempImagePath = '';
   try {
-    const filename = context?.params?.filename;
+    const filename = params.filename;
     if (!filename) {
       return new NextResponse('Nome do arquivo é obrigatório', { status: 400 });
     }
@@ -74,16 +68,70 @@ export async function GET(
     console.log('Caminho da thumbnail temporária:', tempImagePath);
 
     // Extrair a thumbnail para um arquivo temporário
-    const ffmpegCommand = `ffmpeg -y -i "${filePath}" -vf "select=eq(n\\,0)" -vframes 1 "${tempImagePath}"`;
-    console.log('Comando ffmpeg:', ffmpegCommand);
-    
-    await execAsync(ffmpegCommand, { maxBuffer: 1024 * 1024 * 10 });
-    
-    // Verificar se a thumbnail foi gerada
-    if (!await fileExists(tempImagePath)) {
-      throw new Error('Falha ao gerar thumbnail');
+    try {
+      // Primeiro, verificar se o arquivo tem stream de vídeo
+      const { stdout: probeOutput } = await execAsync(
+        `ffprobe -v quiet -print_format json -show_streams "${filePath}"`,
+        { maxBuffer: 1024 * 1024 * 10 }
+      );
+      
+      const probeInfo = JSON.parse(probeOutput);
+      const hasVideoStream = probeInfo.streams?.some((stream: any) => stream.codec_type === 'video');
+      
+      if (!hasVideoStream) {
+        // Se não tem stream de vídeo, tentar extrair a URL do YouTube dos metadados
+        const { stdout: metadataOutput } = await execAsync(
+          `ffprobe -v quiet -print_format json -show_format "${filePath}"`,
+          { maxBuffer: 1024 * 1024 * 10 }
+        );
+        
+        const metadata = JSON.parse(metadataOutput);
+        const youtubeUrl = metadata.format?.tags?.purl || metadata.format?.tags?.comment;
+        
+        if (youtubeUrl && youtubeUrl.includes('youtube.com/watch?v=')) {
+          const videoId = youtubeUrl.split('v=')[1].split('&')[0];
+          const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+          
+          try {
+            const response = await fetch(thumbnailUrl);
+            if (response.ok) {
+              const imageBuffer = await response.arrayBuffer();
+              return new NextResponse(imageBuffer, {
+                headers: {
+                  'Content-Type': 'image/jpeg',
+                  'Cache-Control': 'public, max-age=31536000'
+                }
+              });
+            }
+          } catch (error) {
+            console.error('Erro ao baixar thumbnail do YouTube:', error);
+          }
+        }
+        
+        // Se não conseguiu obter a thumbnail do YouTube, tentar extrair dos metadados
+        try {
+          const extractCommand = `ffmpeg -y -i "${filePath}" -map 0:v? -vframes 1 "${tempImagePath}"`;
+          await execAsync(extractCommand, { maxBuffer: 1024 * 1024 * 10 });
+          
+          // Verificar se a thumbnail foi gerada
+          if (!await fileExists(tempImagePath)) {
+            console.log('Nenhuma imagem encontrada nos metadados, retornando 404');
+            return new NextResponse('', { status: 404 });
+          }
+        } catch (extractError) {
+          console.error('Erro ao extrair imagem dos metadados:', extractError);
+          return new NextResponse('', { status: 404 });
+        }
+      } else {
+        // Se tem stream de vídeo, usar o comando original
+        const ffmpegCommand = `ffmpeg -y -i "${filePath}" -vf "select=eq(n\\,0)" -vframes 1 "${tempImagePath}"`;
+        await execAsync(ffmpegCommand, { maxBuffer: 1024 * 1024 * 10 });
+      }
+    } catch (error) {
+      console.error('Erro ao executar comando ffmpeg:', error);
+      return new NextResponse('', { status: 404 });
     }
-
+    
     // Ler o arquivo de imagem
     const imageBuffer = await readFile(tempImagePath);
     

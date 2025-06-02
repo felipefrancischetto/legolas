@@ -1,0 +1,18 @@
+{
+  "success": true,
+  "metadata": {
+    "title": "Not Found",
+    "artist": "Unknown Artist",
+    "url": "https://www.1001tracklists.com/tracklist/p0wm1xt/joris-voorn-spectrum-radio-422-silo-brooklyn-united-states-2024-03-30-2025-05-23.html",
+    "totalTracks": 0,
+    "scrapedAt": "2025-06-02T11:47:11.388Z"
+  },
+  "tracks": [],
+  "stats": {
+    "totalTracks": 0,
+    "tracksWithLinks": 0,
+    "uniquePlatforms": [],
+    "scrapingTime": 295586,
+    "method": "playwright"
+  }
+}

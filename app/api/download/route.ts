@@ -92,8 +92,6 @@ export async function GET(request: NextRequest) {
         body: JSON.stringify({ title: videoInfo.title, artist: videoInfo.uploader })
       });
       metadata = await mbRes.json();
-      console.log('Metadados do MusicBrainz:', metadata);
-      console.log('videoInfo:', videoInfo);
     } catch (err) {
       console.error('Erro ao buscar metadados do MusicBrainz:', err);
     }
