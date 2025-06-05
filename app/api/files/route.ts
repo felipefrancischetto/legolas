@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readdir, readFile } from 'fs/promises';
+import { readdir, readFile, stat } from 'fs/promises';
 import { join } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -110,24 +110,45 @@ export async function GET(request: NextRequest) {
       audioFiles.map(async (file) => {
         const filePath = join(downloadsFolder, file);
         const metadata = await extractAudioMetadata(filePath);
+        const fileStats = await stat(filePath);
+        
         // Buscar data/hora pelo título
         const downloadedAt = downloadDates[metadata.title || file.replace(/\.(mp3|flac)$/i, '')] || null;
+        
+        // Usar data de criação do arquivo como fallback
+        const fileCreatedAt = fileStats.birthtime.toISOString();
+        
         return {
           name: file,
           displayName: file.replace(/\.(mp3|flac)$/i, ''),
           path: filePath,
-          size: 0, // TODO: Implementar tamanho do arquivo
+          size: fileStats.size,
           downloadedAt,
+          fileCreatedAt,
           ...metadata
         };
       })
     );
+    
     // Ordenar por data/hora (mais recente primeiro)
+    // Prioridade: downloadedAt > fileCreatedAt > nome do arquivo
     fileInfos.sort((a, b) => {
-      if (a.downloadedAt && b.downloadedAt) return b.downloadedAt.localeCompare(a.downloadedAt);
-      if (a.downloadedAt) return -1;
-      if (b.downloadedAt) return 1;
-      return (b.title || b.displayName).localeCompare(a.title || a.displayName);
+      // Se ambos têm downloadedAt, usar essa data
+      if (a.downloadedAt && b.downloadedAt) {
+        return new Date(b.downloadedAt).getTime() - new Date(a.downloadedAt).getTime();
+      }
+      
+      // Se apenas um tem downloadedAt, ele vem primeiro
+      if (a.downloadedAt && !b.downloadedAt) return -1;
+      if (!a.downloadedAt && b.downloadedAt) return 1;
+      
+      // Se nenhum tem downloadedAt, usar fileCreatedAt
+      if (a.fileCreatedAt && b.fileCreatedAt) {
+        return new Date(b.fileCreatedAt).getTime() - new Date(a.fileCreatedAt).getTime();
+      }
+      
+      // Fallback para nome do arquivo
+      return (a.title || a.displayName).localeCompare(b.title || b.displayName);
     });
 
     return NextResponse.json({ files: fileInfos });

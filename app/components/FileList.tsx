@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef } from 'react';
 import Image from 'next/image';
-import AudioPlayer from './AudioPlayer';
 import DownloadQueue from './DownloadQueue';
 import { useDownload } from '../contexts/DownloadContext';
 import { useFile } from '../contexts/FileContext';
@@ -181,6 +180,7 @@ export default function FileList() {
     );
   });
 
+  // Aplicar ordenação apenas se o usuário selecionou uma coluna específica
   if (sortBy) {
     sortedFiles.sort((a, b) => {
       let valA, valB;
@@ -387,10 +387,6 @@ export default function FileList() {
     });
   }, [files, queue]);
 
-  // Defina a altura do header/motor/logo e do player fixo
-  const alturaHeader = 519; // ajuste conforme seu layout real
-  const alturaPlayer = playerOpen ? 101 : 0;
-
   // Fecha o menu de ações ao clicar fora
   useEffect(() => {
     if (!actionMenu) return;
@@ -403,194 +399,188 @@ export default function FileList() {
 
   if (loading) {
     return (
-      <div className="flex-1 flex flex-col">
-        <div className="flex-1 flex justify-center items-center animate-fade-in">
-          <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-        </div>
+      <div className="flex-1 flex justify-center items-center animate-fade-in">
+        <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
       </div>
     );
   }
 
   if ((files || []).length === 0) {
     return (
-      <div className="flex-1 flex flex-col">
-        <div className="flex-1 flex flex-col justify-center items-center text-center text-gray-400 animate-fade-in">
-          <MusicIcon />
-          <p className="mt-2">Nenhum arquivo baixado ainda.</p>
-        </div>
+      <div className="flex-1 flex flex-col justify-center items-center text-center text-gray-400 animate-fade-in">
+        <MusicIcon />
+        <p className="mt-2">Nenhum arquivo baixado ainda.</p>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col" style={{ paddingBottom: playerOpen ? alturaPlayer : 0 }}>
-      <div
-        className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200 flex-1 min-h-0 flex flex-col"
-      >
-        <div className="flex justify-between items-center mb-4 gap-2">
-          <h2 className="text-xl font-semibold text-white">Arquivos Baixados</h2>
-          <div className="flex gap-2">
-            <button
-              onClick={updateAllMetadata}
-              disabled={isUpdatingAll || files.every(f => f.isBeatportFormat)}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                isUpdatingAll || files.every(f => f.isBeatportFormat)
-                  ? 'bg-zinc-700 text-gray-400 cursor-not-allowed'
-                  : 'bg-blue-600 text-white hover:bg-blue-700'
-              }`}
-            >
-              {isUpdatingAll ? (
-                <div className="flex items-center gap-2">
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  </svg>
-                  <span>Atualizando... ({updateProgress.current}/{updateProgress.total})</span>
-                </div>
-              ) : (
-                'Atualizar Todos'
-              )}
-            </button>
-
-            <button
-              onClick={handleSelectDownloadsFolder}
-              className="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-all duration-200 shadow"
-              title={customDownloadsPath ? `Pasta atual: ${customDownloadsPath}` : 'Selecionar pasta de downloads'}
-            >
-              Selecionar pasta de downloads
-            </button>
-            <button
-              onClick={() => setGroupByAlbum(!groupByAlbum)}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                groupByAlbum
-                  ? 'bg-blue-600 text-white hover:bg-blue-700'
-                  : 'bg-zinc-700 text-white hover:bg-zinc-600'
-              }`}
-            >
+    <>
+      <div className="flex justify-between items-center mb-4 gap-2">
+        <h2 className="text-xl font-semibold text-white">Arquivos Baixados</h2>
+        <div className="flex gap-2">
+          <button
+            onClick={updateAllMetadata}
+            disabled={isUpdatingAll || files.every(f => f.isBeatportFormat)}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
+              isUpdatingAll || files.every(f => f.isBeatportFormat)
+                ? 'bg-zinc-700 text-gray-400 cursor-not-allowed'
+                : 'bg-blue-600 text-white hover:bg-blue-700'
+            }`}
+          >
+            {isUpdatingAll ? (
               <div className="flex items-center gap-2">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                 </svg>
-                {groupByAlbum ? 'Desagrupar' : 'Agrupar por Álbum'}
+                <span>Atualizando... ({updateProgress.current}/{updateProgress.total})</span>
               </div>
-            </button>
-          </div>
-        </div>
-        <div className="flex justify-between items-center mb-2 w-full max-w-[1280px] mx-auto">
-          <input
-            type="text"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Buscar por título ou artista..."
-            className="w-full max-w-md px-4 py-2 rounded-md bg-zinc-800 border border-zinc-700 text-white placeholder-gray-400 focus:border-zinc-600 focus:ring-zinc-600 transition-all duration-200 shadow"
-          />
-        </div>
-        <div
-          className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden w-full flex flex-col flex-1 min-h-0"
-          style={{
-            minHeight: 0,
-            maxWidth: '100%',
-            maxHeight: `calc(100vh - ${alturaHeader + alturaPlayer}px)`
-          }}
-        >
-          <div className="flex w-full px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10" style={{userSelect:'none'}}>
-            {[
-              { label: '#', sortable: true, align: 'center' },
-              { label: '', sortable: false, align: 'center' },
-              { label: 'Título', sortable: true, align: 'left' },
-              { label: 'Duração', sortable: true, align: 'center' },
-              { label: 'Artista', sortable: true, align: 'left' },
-              { label: 'BPM', sortable: true, align: 'center' },
-              { label: 'Key', sortable: true, align: 'center' },
-              { label: 'Gênero', sortable: true, align: 'center' },
-              { label: 'Álbum', sortable: true, align: 'center' },
-              { label: 'Label', sortable: true, align: 'center' },
-            ].map((col, idx) => (
-              <div
-                key={col.label}
-                className={`flex items-center h-8 relative ${col.sortable ? 'cursor-pointer select-none' : ''} ${col.align === 'center' ? 'justify-center' : 'justify-start'}`}
-                style={{ width: colWidths[idx], minWidth: 40 }}
-                onClick={col.sortable ? () => handleSort(col.label.toLowerCase().replace('ações','label') === 'ações' ? 'label' : col.label.toLowerCase()) : undefined}
-              >
-                <span className="truncate">{col.label} {sortBy === col.label.toLowerCase() && (sortOrder === 'asc' ? '↑' : '↓')}</span>
-                {idx < colWidths.length - 2 && (
-                  <div
-                    onMouseDown={e => handleResizeStart(idx, e)}
-                    className="absolute right-0 top-0 h-full w-2 cursor-col-resize z-20"
-                    style={{ userSelect: 'none' }}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="flex-1 min-h-0 overflow-y-auto custom-scroll w-full min-w-0" style={{}}>
-            {Object.entries(groupedFiles).map(([album, files]) => (
-              <div key={album} className="animate-fade-in">
-                {groupByAlbum && album !== '' && (
-                  <div className="sticky top-0 bg-zinc-900 z-10 px-2 py-2 border-b border-zinc-700">
-                    <h3 className="text-sm font-medium text-white">{album}</h3>
-                  </div>
-                )}
-                {files.map((file, index) => (
-                  <div
-                    key={file.path}
-                    className="flex items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs cursor-pointer"
-                    style={{ minHeight: 50 }}
-                    onClick={e => {
-                      if (e.button === 0) {
-                        e.stopPropagation();
-                        setActionMenu({
-                          x: (e as React.MouseEvent).clientX,
-                          y: (e as React.MouseEvent).clientY,
-                          file
-                        });
-                      }
-                    }}
-                  >
-                    <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[0], minWidth:40}}>{sortedFiles.indexOf(file) + 1}</div>
-                    <div className="flex items-center justify-center" style={{width:colWidths[1], minWidth:40}}>
-                      <button
-                        onClick={() => {
-                          play(file);
-                          setPlayerOpen(true);
-                        }}
-                        className="w-10 h-10 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110"
-                      >
-                        <ThumbnailImage file={file} files={files} />
-                        <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M8 5v14l11-7z" />
-                          </svg>
-                        </div>
-                      </button>
-                    </div>
-                    <div className="truncate text-gray-400 flex items-center gap-2 justify-start" style={{width:colWidths[2], minWidth:40}}>
-                      {file.title || file.displayName}
-                      {file.isBeatportFormat && (
-                        <span className="text-xs text-green-500" title="Arquivo já está no formato Beatport">
-                          ✓
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[3], minWidth:40}}>{file.duration || '-'}</div>
-                    <div className="truncate text-gray-400 flex items-center justify-start" style={{width:colWidths[4], minWidth:40}}>{file.artist || '-'}</div>
-                    <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[5], minWidth:40}}>{file.bpm || '-'}</div>
-                    <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[6], minWidth:40}}>{file.key || '-'}</div>
-                    <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[7], minWidth:40}}>{file.genre || '-'}</div>
-                    <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[8], minWidth:40}}>
-                      <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.album || ''}>{file.album || '-'}</span>
-                    </div>
-                    <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[9], minWidth:40}}>
-                      <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.label || ''}>{file.label || '-'}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
+            ) : (
+              'Atualizar Todos'
+            )}
+          </button>
+
+          <button
+            onClick={handleSelectDownloadsFolder}
+            className="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-all duration-200 shadow"
+            title={customDownloadsPath ? `Pasta atual: ${customDownloadsPath}` : 'Selecionar pasta de downloads'}
+          >
+            Selecionar pasta de downloads
+          </button>
+          <button
+            onClick={() => setGroupByAlbum(!groupByAlbum)}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
+              groupByAlbum
+                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                : 'bg-zinc-700 text-white hover:bg-zinc-600'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              </svg>
+              {groupByAlbum ? 'Desagrupar' : 'Agrupar por Álbum'}
+            </div>
+          </button>
         </div>
       </div>
-
-      {playerOpen && <AudioPlayer />}
+      
+      <div className="flex justify-between items-center mb-2">
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Buscar por título ou artista..."
+          className="w-full max-w-md px-4 py-2 rounded-md bg-zinc-800 border border-zinc-700 text-white placeholder-gray-400 focus:border-zinc-600 focus:ring-zinc-600 transition-all duration-200 shadow"
+        />
+      </div>
+      
+      <div 
+        className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden flex flex-col flex-1"
+        style={{ 
+          maxHeight: playerOpen ? '400px' : 'none'
+        }}
+      >
+        <div className="flex w-full px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10" style={{userSelect:'none'}}>
+          {[
+            { label: '#', sortable: true, align: 'center' },
+            { label: '', sortable: false, align: 'center' },
+            { label: 'Título', sortable: true, align: 'left' },
+            { label: 'Duração', sortable: true, align: 'center' },
+            { label: 'Artista', sortable: true, align: 'left' },
+            { label: 'BPM', sortable: true, align: 'center' },
+            { label: 'Key', sortable: true, align: 'center' },
+            { label: 'Gênero', sortable: true, align: 'center' },
+            { label: 'Álbum', sortable: true, align: 'center' },
+            { label: 'Label', sortable: true, align: 'center' },
+          ].map((col, idx) => (
+            <div
+              key={col.label}
+              className={`flex items-center h-8 relative ${col.sortable ? 'cursor-pointer select-none' : ''} ${col.align === 'center' ? 'justify-center' : 'justify-start'}`}
+              style={{ width: colWidths[idx], minWidth: 40 }}
+              onClick={col.sortable ? () => handleSort(col.label.toLowerCase().replace('ações','label') === 'ações' ? 'label' : col.label.toLowerCase()) : undefined}
+            >
+              <span className="truncate">{col.label} {sortBy === col.label.toLowerCase() && (sortOrder === 'asc' ? '↑' : '↓')}</span>
+              {idx < colWidths.length - 2 && (
+                <div
+                  onMouseDown={e => handleResizeStart(idx, e)}
+                  className="absolute right-0 top-0 h-full w-2 cursor-col-resize z-20"
+                  style={{ userSelect: 'none' }}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+        <div 
+          className="flex-1 min-h-0 overflow-y-auto custom-scroll"
+        >
+          {Object.entries(groupedFiles).map(([album, files]) => (
+            <div key={album} className="animate-fade-in">
+              {groupByAlbum && album !== '' && (
+                <div className="sticky top-0 bg-zinc-900 z-10 px-2 py-2 border-b border-zinc-700">
+                  <h3 className="text-sm font-medium text-white">{album}</h3>
+                </div>
+              )}
+              {files.map((file, index) => (
+                <div
+                  key={file.path}
+                  className="flex items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs cursor-pointer"
+                  style={{ minHeight: 50 }}
+                  onClick={e => {
+                    if (e.button === 0) {
+                      e.stopPropagation();
+                      setActionMenu({
+                        x: (e as React.MouseEvent).clientX,
+                        y: (e as React.MouseEvent).clientY,
+                        file
+                      });
+                    }
+                  }}
+                >
+                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[0], minWidth:40}}>
+                    {files.length - files.indexOf(file)}
+                  </div>
+                  <div className="flex items-center justify-center" style={{width:colWidths[1], minWidth:40}}>
+                    <button
+                      onClick={() => {
+                        play(file);
+                        setPlayerOpen(true);
+                      }}
+                      className="w-10 h-10 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110"
+                    >
+                      <ThumbnailImage file={file} files={files} />
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M8 5v14l11-7z" />
+                        </svg>
+                      </div>
+                    </button>
+                  </div>
+                  <div className="truncate text-gray-400 flex items-center gap-2 justify-start" style={{width:colWidths[2], minWidth:40}}>
+                    {file.title || file.displayName}
+                    {file.isBeatportFormat && (
+                      <span className="text-xs text-green-500" title="Arquivo já está no formato Beatport">
+                        ✓
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[3], minWidth:40}}>{file.duration || '-'}</div>
+                  <div className="truncate text-gray-400 flex items-center justify-start" style={{width:colWidths[4], minWidth:40}}>{file.artist || '-'}</div>
+                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[5], minWidth:40}}>{file.bpm || '-'}</div>
+                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[6], minWidth:40}}>{file.key || '-'}</div>
+                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[7], minWidth:40}}>{file.genre || '-'}</div>
+                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[8], minWidth:40}}>
+                    <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.album || ''}>{file.album || '-'}</span>
+                  </div>
+                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[9], minWidth:40}}>
+                    <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.label || ''}>{file.label || '-'}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
       
       {showQueue && queue.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -626,6 +616,6 @@ export default function FileList() {
           </button>
         </div>
       )}
-    </div>
+    </>
   );
 }
