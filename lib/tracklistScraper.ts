@@ -88,7 +88,31 @@ class TracklistScraper {
     const startTime = Date.now();
     const finalOptions = { ...this.defaultOptions, ...options };
     
-    // Validate URL
+    // Check if it's a YouTube URL - skip scraping for YouTube playlists
+    if (this.isYouTubeUrl(url)) {
+      console.log('YouTube playlist detected - skipping tracklist scraping');
+      return {
+        success: true,
+        metadata: {
+          title: 'YouTube Playlist',
+          artist: 'Various Artists',
+          url,
+          totalTracks: 0,
+          scrapedAt: new Date()
+        },
+        tracks: [],
+        stats: {
+          totalTracks: 0,
+          tracksWithLinks: 0,
+          uniquePlatforms: [],
+          scrapingTime: 0,
+          method: 'cheerio'
+        },
+        errors: []
+      };
+    }
+    
+    // Validate URL for 1001tracklists.com
     if (!validationUtils.validate1001TracklistsUrl(url)) {
       throw new Error('Invalid 1001tracklists.com URL format');
     }
@@ -178,6 +202,15 @@ class TracklistScraper {
         },
         errors: [errorMessage]
       };
+    }
+  }
+
+  private isYouTubeUrl(url: string): boolean {
+    try {
+      const parsedUrl = new URL(url);
+      return parsedUrl.hostname.includes('youtube.com') || parsedUrl.hostname.includes('youtu.be');
+    } catch {
+      return false;
     }
   }
 

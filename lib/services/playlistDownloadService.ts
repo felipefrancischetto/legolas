@@ -112,7 +112,8 @@ export class PlaylistDownloadService {
         scrapedTracklist = [];
       }
 
-      // First, get playlist info to determine number of tracks
+      // Get playlist info to determine number of tracks
+      logger.info('🔍 Getting playlist information...');
       const { stdout: playlistInfo } = await execAsync(
         `yt-dlp --dump-json --flat-playlist "${url}"`,
         { maxBuffer: 1024 * 1024 * 50 } // 50MB buffer for large playlists
@@ -131,45 +132,32 @@ export class PlaylistDownloadService {
         .filter(entry => entry !== null);
 
       result.totalTracks = playlistEntries.length;
-      logger.info(`Found ${result.totalTracks} tracks in playlist`);
+      logger.info(`📊 Found ${result.totalTracks} tracks in playlist`);
 
-      // 2. Associar scraping aos playlistEntries
-      // Adiciona campo 'scraping' em cada entry, se possível
+      // Associate scraping data with playlist entries
       playlistEntries.forEach((entry, idx) => {
-        // Tenta associar por posição (idx)
+        // Try to associate by position (idx)
         if (scrapedTracklist[idx]) {
           entry.scraping = scrapedTracklist[idx];
         } else {
-          // fallback: tenta por título
+          // fallback: try by title
           const found = scrapedTracklist.find(t => t.title && entry.title && t.title.toLowerCase().includes(entry.title.toLowerCase()));
           if (found) entry.scraping = found;
         }
       });
 
-      // Download all tracks
-      logger.info('Starting batch download...');
-      const { stdout: downloadOutput } = await execAsync(
-        `yt-dlp -x --audio-format ${format} --audio-quality ${quality} ` +
-        `--embed-thumbnail --convert-thumbnails jpg ` +
-        `--add-metadata ` +
-        `--cookies "cookies.txt" ` +
-        `-o "${downloadsFolder}/%(title)s.%(ext)s" ` +
-        `--no-part --force-overwrites "${url}"`,
-        { maxBuffer: 1024 * 1024 * 100 } // 100MB buffer for large downloads
+      // **NOVO FLUXO: Download + Metadata por música individual**
+      logger.info('🎵 Starting sequential download with real-time metadata enhancement...');
+      await this.downloadAndProcessTracksSequentially(
+        url,
+        playlistEntries,
+        downloadsFolder,
+        format,
+        quality,
+        enhanceMetadata,
+        useBeatport,
+        result
       );
-
-      logger.info('Batch download completed');
-
-      if (enhanceMetadata) {
-        await this.enhancePlaylistMetadata(
-          downloadsFolder, 
-          format, 
-          playlistEntries, 
-          maxConcurrent,
-          result,
-          useBeatport
-        );
-      }
 
       result.success = true;
       logger.info(`Playlist download completed. Enhanced ${result.enhancedTracks}/${result.totalTracks} tracks (Beatport: ${result.beatportTracksFound})`);
@@ -182,6 +170,154 @@ export class PlaylistDownloadService {
 
     // Retorna também o scraping da tracklist junto do resultado
     return { ...result, tracklistScraping: scrapedTracklist };
+  }
+
+  private async downloadAndProcessTracksSequentially(
+    playlistUrl: string,
+    playlistEntries: any[],
+    downloadsFolder: string,
+    format: string,
+    quality: string,
+    enhanceMetadata: boolean,
+    useBeatport: boolean,
+    result: PlaylistDownloadResult
+  ): Promise<void> {
+    logger.info(`🚀 Processing ${playlistEntries.length} tracks sequentially...`);
+
+    for (let i = 0; i < playlistEntries.length; i++) {
+      const entry = playlistEntries[i];
+      const trackNumber = i + 1;
+      const totalTracks = playlistEntries.length;
+      
+      logger.info(`\n🎵 [${trackNumber}/${totalTracks}] Processing: "${entry.title}"`);
+
+      try {
+        // 1. Download individual track
+        const trackUrl = `https://www.youtube.com/watch?v=${entry.id}`;
+        const filename = sanitizeTitle(entry.title || 'Unknown');
+        const outputPath = `${downloadsFolder}/${filename}.%(ext)s`;
+
+        logger.info(`   ⬇️ Downloading track ${trackNumber}...`);
+        
+        // Tentativa 1: Com cookies normais
+        let downloadOutput = '';
+        let downloadSuccess = false;
+        let hadYouTubeIssues = false;
+        
+        try {
+          const { stdout } = await execAsync(
+            `yt-dlp -x --audio-format ${format} --audio-quality ${quality} ` +
+            `--embed-thumbnail --convert-thumbnails jpg ` +
+            `--add-metadata ` +
+            `--cookies "cookies.txt" ` +
+            `--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" ` +
+            `--sleep-interval 2 --max-sleep-interval 5 ` +
+            `-o "${outputPath}" ` +
+            `--no-part --force-overwrites "${trackUrl}"`,
+            { maxBuffer: 1024 * 1024 * 20 } // 20MB buffer per track
+          );
+          downloadOutput = stdout;
+          downloadSuccess = true;
+          logger.info(`   ✅ Download successful with standard method`);
+          
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          
+          if (errorMessage.includes('Sign in to confirm') || errorMessage.includes('not a bot')) {
+            hadYouTubeIssues = true;
+            logger.warn(`   ⚠️ YouTube bot detection triggered for track ${trackNumber}`);
+            logger.warn(`   🔄 Trying alternative method with browser cookies...`);
+            
+            // Tentativa 2: Com cookies do browser
+            try {
+              const { stdout } = await execAsync(
+                `yt-dlp -x --audio-format ${format} --audio-quality ${quality} ` +
+                `--embed-thumbnail --convert-thumbnails jpg ` +
+                `--add-metadata ` +
+                `--cookies-from-browser chrome ` +
+                `--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" ` +
+                `--sleep-interval 5 --max-sleep-interval 10 ` +
+                `-o "${outputPath}" ` +
+                `--no-part --force-overwrites "${trackUrl}"`,
+                { maxBuffer: 1024 * 1024 * 20, timeout: 120000 } // 2 minutos timeout
+              );
+              downloadOutput = stdout;
+              downloadSuccess = true;
+              logger.info(`   ✅ Download successful with browser cookies method`);
+              
+            } catch (browserError) {
+              logger.error(`   ❌ Both download methods failed for track ${trackNumber}`);
+              logger.error(`   🚨 YouTube may be blocking access - consider waiting before retrying`);
+              throw new Error(`YouTube access blocked: ${errorMessage}`);
+            }
+          } else {
+            throw error; // Re-throw se não for problema de bot detection
+          }
+        }
+
+        const finalFilePath = `${downloadsFolder}/${filename}.${format}`;
+        
+        // 2. Enhance metadata immediately after download
+        if (enhanceMetadata) {
+          logger.info(`   🔍 Enhancing metadata for track ${trackNumber}...`);
+          const enhanced = await this.enhanceFileMetadata(
+            finalFilePath, 
+            `${filename}.${format}`, 
+            useBeatport, 
+            entry
+          );
+
+          if (enhanced.success) {
+            result.enhancedTracks++;
+            if (enhanced.fromBeatport) {
+              result.beatportTracksFound = (result.beatportTracksFound || 0) + 1;
+            }
+            logger.info(`   ✅ Metadata enhanced successfully!`);
+          } else {
+            logger.warn(`   ⚠️ Failed to enhance metadata`);
+          }
+        }
+
+        result.processedTracks++;
+        logger.info(`   ✅ Track ${trackNumber} completed! Progress: ${result.processedTracks}/${totalTracks}`);
+
+        // Progress report every 5 tracks
+        if (trackNumber % 5 === 0) {
+          const successRate = ((result.enhancedTracks / result.processedTracks) * 100).toFixed(1);
+          logger.info(`📊 Progress Report: ${result.processedTracks}/${totalTracks} processed, ${result.enhancedTracks} enhanced (${successRate}%), ${result.beatportTracksFound || 0} from Beatport`);
+        }
+
+        // Smart delay based on success/failure
+        if (trackNumber < totalTracks) {
+          if (hadYouTubeIssues) {
+            // Longer delay if we had YouTube issues
+            logger.info(`   ⏳ Extended delay (15s) due to YouTube issues...`);
+            await new Promise(resolve => setTimeout(resolve, 15000));
+          } else {
+            // Normal delay
+            await new Promise(resolve => setTimeout(resolve, 3000));
+          }
+        }
+
+      } catch (error) {
+        const errorMessage = `Failed to process track ${trackNumber} ("${entry.title}"): ${error instanceof Error ? error.message : 'Unknown error'}`;
+        result.errors.push(errorMessage);
+        logger.error(`   ❌ ${errorMessage}`);
+        
+        // Continue with next track instead of failing entire playlist
+        continue;
+      }
+    }
+
+    // Final summary
+    const successRate = result.totalTracks > 0 ? ((result.enhancedTracks / result.totalTracks) * 100).toFixed(1) : '0';
+    logger.info(`\n🎉 Sequential processing completed!`);
+    logger.info(`📊 Final Statistics:`);
+    logger.info(`   - Total tracks: ${result.totalTracks}`);
+    logger.info(`   - Successfully processed: ${result.processedTracks}`);
+    logger.info(`   - Enhanced with metadata: ${result.enhancedTracks} (${successRate}%)`);
+    logger.info(`   - Enhanced with Beatport: ${result.beatportTracksFound || 0}`);
+    logger.info(`   - Errors: ${result.errors.length}`);
   }
 
   private async enhancePlaylistMetadata(
@@ -349,7 +485,7 @@ export class PlaylistDownloadService {
         initialkey: metadata.key || '',
         comment: {
           language: 'por',
-          text: `Enhanced metadata${useBeatport ? ' (Beatport mode)' : ''} | Artist: ${finalArtist} | BPM: ${metadata.bpm || 'N/A'} | Key: ${metadata.key || 'N/A'} | Label: ${metadata.label || 'N/A'} | Sources: ${metadata.sources?.join(', ') || 'None'}`
+          text: `Enhanced metadata${useBeatport ? ' (Beatport mode)' : ''} | Artist: ${finalArtist} | BPM: ${metadata.bpm || 'N/A'} | Key: ${metadata.key || 'N/A'} | Genre: ${metadata.genre || 'N/A'} | Album: ${metadata.album || 'N/A'} | Label: ${metadata.label || 'N/A'} | Sources: ${metadata.sources?.join(', ') || 'None'}`
         }
       };
       logger.info(`[DEBUG] enhancedTags a serem escritos: ${JSON.stringify(enhancedTags)}`);
@@ -381,13 +517,19 @@ export class PlaylistDownloadService {
       // Create temporary file for ffmpeg output with correct .flac extension
       const tempPath = filePath.replace('.flac', '_temp.flac');
       
-      // Helper function to escape metadata values for ffmpeg
+      // Helper function to escape metadata values for ffmpeg in PowerShell
       const escapeMetadataValue = (value: string): string => {
         if (!value) return '';
-        // Replace pipes with hyphens to avoid shell interpretation
+        // PowerShell-safe escaping
         return value
-          .replace(/\|/g, '-')  // Replace pipes with hyphens
-          .replace(/"/g, '\\"') // Escape quotes
+          .replace(/\|/g, '-')        // Replace pipes with hyphens (PowerShell interprets | as pipe)
+          .replace(/:/g, ' -')        // Replace colons (PowerShell interprets : as command separator)
+          .replace(/"/g, "'")         // Replace double quotes with single quotes
+          .replace(/\$/g, '')         // Remove $ signs (PowerShell variables)
+          .replace(/`/g, "'")         // Replace backticks (PowerShell escape char)
+          .replace(/&/g, 'and')       // Replace & (PowerShell background operator)
+          .replace(/<|>/g, '')        // Remove redirects
+          .replace(/;/g, ',')         // Replace semicolons
           .trim();
       };
       
@@ -433,17 +575,36 @@ export class PlaylistDownloadService {
       }
 
       // Add comment with source info (escape pipes to avoid shell interpretation)
-      const commentText = `Enhanced metadata${useBeatport ? ' (Beatport mode)' : ''} - BPM: ${metadata.bpm || 'N/A'} - Key: ${metadata.key || 'N/A'} - Label: ${metadata.label || 'N/A'} - Sources: ${metadata.sources?.join(', ') || 'None'}`;
+      const commentText = `Enhanced metadata${useBeatport ? ' (Beatport mode)' : ''} -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${metadata.album || 'N/A'} -- Label: ${metadata.label || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`;
       ffmpegArgs.push('-metadata', `"comment=${escapeMetadataValue(commentText)}"`);
 
       // Specify FLAC format explicitly and output to temp file
       ffmpegArgs.push('-f', 'flac', `"${tempPath}"`);
 
-      // Execute ffmpeg command
+      // Execute ffmpeg command - Use PowerShell-safe format
       const ffmpegCommand = `ffmpeg -y ${ffmpegArgs.join(' ')}`;
       logger.info(`Writing FLAC metadata with: ${ffmpegCommand}`);
       
-      const { stdout, stderr } = await execAsync(ffmpegCommand);
+      // Execute with shell: false to avoid PowerShell interpretation issues
+      const { execSync } = require('child_process');
+      try {
+        execSync(ffmpegCommand, { 
+          stdio: 'pipe',
+          encoding: 'utf8',
+          timeout: 30000,
+          windowsHide: true
+        });
+      } catch (execError: any) {
+        // Fallback: try with cmd.exe instead of PowerShell
+        logger.warn('FFmpeg failed with PowerShell, trying with cmd.exe...');
+        const cmdCommand = `cmd /c "${ffmpegCommand}"`;
+        execSync(cmdCommand, { 
+          stdio: 'pipe',
+          encoding: 'utf8',
+          timeout: 30000,
+          windowsHide: true
+        });
+      }
       
       // Replace original file with updated version
       const { rename } = require('fs/promises');

@@ -974,7 +974,7 @@ class BeatportProviderV2 implements MetadataProvider {
         await page.evaluate(() => {
           const cookieButtons = Array.from(document.querySelectorAll('button'));
           for (const button of cookieButtons) {
-            const text = button.textContent?.toLowerCase() || '';
+            const text = (button.textContent || '').toLowerCase();
             if (text.includes('accept') || text.includes('aceitar') || text.includes('i accept')) {
               button.click();
               return true;
@@ -997,32 +997,81 @@ class BeatportProviderV2 implements MetadataProvider {
         
         for (let i = 0; i < links.length; i++) {
           const link = links[i];
-          const text = link.textContent?.trim() || '';
+          const text = (link.textContent || '').trim();
           let score = 0;
           
-          if (text.toLowerCase().includes(searchTitle.toLowerCase())) score += 500;
-          if (text.toLowerCase().includes(searchArtist.toLowerCase())) score += 200;
-          if (text.toLowerCase().includes('original mix')) score += 100;
+          // Algoritmo de matching corrigido (evita confusão entre artista e título)
+          const textLower = text.toLowerCase();
+          const searchTitleLower = searchTitle.toLowerCase();
+          const searchArtistLower = searchArtist.toLowerCase();
           
-          console.log(`   Link ${i + 1}: "${text}" (Score: ${score})`);
+          // PRIORIDADE MÁXIMA: Título da música deve estar presente (evita confusão)
+          const hasTitleWord = textLower.includes(searchTitleLower);
+          if (hasTitleWord) {
+            score += 1000; // MUITO IMPORTANTE - garante que o título correto seja encontrado
+          }
+          
+          // PRIORIDADE SECUNDÁRIA: Artista deve estar presente  
+          const hasArtist = textLower.includes(searchArtistLower);
+          if (hasArtist) {
+            score += 500;
+          }
+          
+          // BONUS GIGANTE: Se tem ambos título E artista (match perfeito)
+          if (hasTitleWord && hasArtist) {
+            score += 2000; // BONUS ENORME para evitar qualquer confusão
+          }
+          
+          // PENALIDADE CRÍTICA: Se tem apenas artista mas não o título 
+          // (evita confusão como "Barac" track do Oliver Schories vs "Cacique" do Barac)
+          if (hasArtist && !hasTitleWord) {
+            score -= 500; // PENALIDADE para evitar matches incorretos
+          }
+          
+          // Prioridade especial para matches exatos de versões
+          const isClub = textLower.includes('club');
+          const isEdit = textLower.includes('edit');
+          const isOriginal = textLower.includes('original');
+          const isRemix = textLower.includes('remix');
+          
+          // Se busca por "club edit", priorizar essa versão
+          if (isClub && isEdit && searchTitle.toLowerCase().includes('club') && searchTitle.toLowerCase().includes('edit')) {
+            score += 1000;
+          } else if (isOriginal && !searchTitle.toLowerCase().includes('club') && !searchTitle.toLowerCase().includes('edit') && !searchTitle.toLowerCase().includes('remix')) {
+            score += 150; // Bonus para original quando não especificado
+          } else if (isRemix && searchTitle.toLowerCase().includes('remix')) {
+            score += 300;
+          }
+          
+          // Penalidade para versões não solicitadas
+          if ((isRemix || isEdit || isClub) && !searchTitle.toLowerCase().includes('remix') && !searchTitle.toLowerCase().includes('edit') && !searchTitle.toLowerCase().includes('club')) {
+            score -= 100;
+          }
+          
+          console.log(`   ${i + 1}. "${text}" (Score: ${score})`);
           
           if (score > bestScore) {
             bestScore = score;
             const href = link.getAttribute('href');
             // Converter URL relativa para absoluta
-            bestHref = href?.startsWith('http') ? href : `https://www.beatport.com${href}`;
-            console.log(`   ✅ Novo melhor: ${bestHref} (Score: ${bestScore})`);
+            bestHref = (href && href.startsWith('http')) ? href : `https://www.beatport.com${href}`;
+            console.log(`   🎯 ✅ NOVO MELHOR MATCH: ${bestHref} (Score: ${bestScore})`);
           }
         }
         
-        console.log(`🎯 [BeatportV2] Melhor URL final: ${bestHref}`);
+        console.log(`\n🎯 [BeatportV2] RESULTADO DO ALGORITMO DE MATCHING:`);
+        console.log(`   🔍 Busca original: "${searchTitle}" - "${searchArtist}"`);
+        console.log(`   🎯 Melhor match encontrado: ${bestHref || 'NENHUM'}`);
+        console.log(`   📊 Score final: ${bestScore}`);
+        console.log(`   📋 Total de links analisados: ${links.length}`);
+        console.log(`   ============================================================\n`);
         return bestHref;
       }, title, artist);
       
       console.log(`🔗 [BeatportV2] Track URL encontrada: ${trackUrl}`);
       
       if (!trackUrl) {
-        console.log(`❌ [BeatportV2] Nenhuma URL de track encontrada`);
+        console.log(`❌ [BeatportV2] Nenhuma URL de track encontrada para "${title}" - "${artist}"`);
         await browser.close();
         return null;
       }
@@ -1034,6 +1083,13 @@ class BeatportProviderV2 implements MetadataProvider {
         return null;
       }
       
+      // LOG DETALHADO DA URL ENCONTRADA PARA VALIDAÇÃO
+      console.log(`\n🎯 [BeatportV2] VALIDAÇÃO DE URL ENCONTRADA:`);
+      console.log(`   🔍 Busca: "${title}" - "${artist}"`);
+      console.log(`   🌐 URL: ${trackUrl}`);
+      console.log(`   📋 Copie esta URL para validar manualmente no browser`);
+      console.log(`   ======================================================\n`);
+      
       await page.goto(trackUrl, { waitUntil: 'networkidle0', timeout: 45000 });
       await new Promise(resolve => setTimeout(resolve, 4000));
       
@@ -1042,7 +1098,7 @@ class BeatportProviderV2 implements MetadataProvider {
         await page.evaluate(() => {
           const cookieButtons = Array.from(document.querySelectorAll('button'));
           for (const button of cookieButtons) {
-            const text = button.textContent?.toLowerCase() || '';
+            const text = (button.textContent || '').toLowerCase();
             if (text.includes('accept') || text.includes('aceitar') || text.includes('i accept')) {
               button.click();
               return true;
@@ -1055,98 +1111,216 @@ class BeatportProviderV2 implements MetadataProvider {
         console.log(`⚠️  [BeatportV2] Erro ao tratar cookies na página da track: ${cookieError instanceof Error ? cookieError.message : cookieError}`);
       }
       // Extração precisa usando os seletores identificados na inspeção
-      const metadata = await page.evaluate(() => {
-        console.log('[DEBUG] Iniciando extração com seletores corretos...');
+      const metadata = await page.evaluate(function() {
+        console.log('[DEBUG] Iniciando extração dentro do browser...');
+        console.log('[DEBUG] URL atual:', window.location.href);
+        console.log('[DEBUG] Título da página:', document.title);
         
-        // Helper para extrair valor de MetaItem usando estrutura div/span
-        function getMetaValue(labelText) {
-          // Buscar todos os MetaItems
-          const metaItems = document.querySelectorAll('.TrackMeta-style__MetaItem-sc-9c332570-0');
-          
-          for (const item of metaItems) {
-            const label = item.querySelector('div');
-            const value = item.querySelector('span');
-            
-                         if (label && value) {
-               const labelContent = (label.textContent || '').trim().replace(':', '');
-               const valueContent = (value.textContent || '').trim();
-               
-               console.log(`[DEBUG] MetaItem encontrado: "${labelContent}" = "${valueContent}"`);
-               
-               if (labelContent === labelText) {
-                 console.log(`[DEBUG] ✅ Match encontrado para "${labelText}": "${valueContent}"`);
-                 return valueContent;
-               }
-             }
-          }
-          return null;
-        }
+        var bodyText = document.body.textContent || '';
+        console.log('[DEBUG] Tamanho do bodyText:', bodyText.length);
+        console.log('[DEBUG] Primeiros 500 chars:', bodyText.substring(0, 500));
         
-        // Extrair dados usando os seletores corretos
-        const bpmText = getMetaValue('BPM');
-        const keyText = getMetaValue('Tom');
-        const genreText = getMetaValue('Gênero');
-        const labelText = getMetaValue('Gravadora');
-        
-        console.log(`[DEBUG] Dados extraídos:`, {
-          bpm: bpmText,
-          key: keyText,
-          genre: genreText,
-          label: labelText
-        });
-        
-        // Processar BPM
-        let bpm = undefined;
-        if (bpmText) {
-          const bpmNum = parseInt(bpmText);
-          if (bpmNum >= 80 && bpmNum <= 200) {
-            bpm = bpmNum;
+        // BPM: buscar padrão "BPM: 127"
+        var bpm = null;
+        var bmpMatches = bodyText.match(/BPM:\s*(\d+)/);
+        console.log('[DEBUG] BPM matches:', bmpMatches);
+        if (bmpMatches) {
+          var bmpValue = parseInt(bmpMatches[1]);
+          if (bmpValue >= 80 && bmpValue <= 200) {
+            bpm = bmpValue;
+            console.log('[DEBUG] BPM encontrado:', bpm);
           }
         }
         
-        // Processar Key
-        let key = undefined;
-        if (keyText) {
-          // Normalizar key (ex: "F Min" -> "F Minor")
-          key = keyText
-            .replace(/\bMin\b/gi, 'Minor')
-            .replace(/\bMaj\b/gi, 'Major')
+        // Key: buscar "Key:" ou "Tom:" seguido da key musical  
+        var key = null;
+        var keyMatches = bodyText.match(/(?:Key|Tom):\s*([A-G][#♯♭b]?\s*(?:Minor|Major|Min|Maj))/);
+        if (keyMatches) {
+          key = keyMatches[1]
+            .replace(/\bMin\b/g, 'Minor')
+            .replace(/\bMaj\b/g, 'Major')
             .replace(/\s+/g, ' ')
             .trim();
         }
         
-        // Processar Genre
-        let genre = genreText || undefined;
+        // Genre: buscar "Genre:" ou "Gênero:" seguido do gênero (patterns melhorados e expandidos)
+        var genre = null;
         
-        // Processar Label
-        let label = labelText || undefined;
-        
-        // Extrair Artist do título da página
-        const pageTitle = document.title;
-        let artist = '';
-        if (pageTitle) {
-          const artistMatch = pageTitle.match(/^(.+?)\s*-\s*/);
-          if (artistMatch) {
-            artist = artistMatch[1].trim();
+        // PADRÃO 1: Pattern específico para gêneros compostos como "Minimal / Deep Tech", "140 / Deep Dubstep / Grime"
+        var genreMatches1 = bodyText.match(/(?:Genre|Gênero):\s*([^<\n\r]*?(?:\/[^<\n\r]*)*?)(?:\s*(?:Gravadora|Label|BPM|Key|Tom):|$)/i);
+        if (genreMatches1) {
+          var foundGenre = genreMatches1[1].trim();
+          // Remover números isolados no início (como "140 / Deep Dubstep")
+          foundGenre = foundGenre.replace(/^\d+\s*\/\s*/, '');
+          // Limpar texto indesejado
+          foundGenre = foundGenre.replace(/\s*(?:Aparece|em|POWER|Pitch|On|Reproduzir|Adicionar|Play|Add|Queue|Faixas|recomendadas).*$/i, '');
+          
+          if (foundGenre.length >= 4 && foundGenre.length <= 50) {
+            genre = foundGenre;
           }
         }
         
-        const result = {
-          artist: artist,
-                     bpm: bpm,
-          key: key,
-          genre: genre,
-          label: label
-        };
+        // PADRÃO 2: Se não encontrou, tentar patterns específicos para gêneros conhecidos
+        if (!genre) {
+          var knownGenres = [
+            'Progressive House', 'Deep House', 'Tech House', 'Minimal House', 'Future House',
+            'Trance', 'Progressive Trance', 'Uplifting Trance', 'Vocal Trance',
+            'Techno', 'Minimal Techno', 'Deep Techno',
+            'Electronica', 'Electro House', 'Big Room',
+            'Minimal', 'Deep Tech', 'Minimal Tech',
+            'Dubstep', 'Deep Dubstep', 'Future Bass',
+            'Drum & Bass', 'Breaks', 'Breakbeat',
+            'Downtempo', 'Chillout', 'Ambient'
+          ];
+          
+          for (var i = 0; i < knownGenres.length; i++) {
+            var knownGenre = knownGenres[i];
+            var genreRegex = new RegExp('(?:Genre|Gênero):[^<\\n]*?' + knownGenre.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+            if (bodyText.match(genreRegex)) {
+              genre = knownGenre;
+              break;
+            }
+          }
+        }
         
-        console.log(`[DEBUG] Resultado final:`, result);
-        return result;
+        // PADRÃO 3: Buscar por gêneros individuais sem ":" se ainda não encontrou
+        if (!genre) {
+          var simpleGenreMatch = bodyText.match(/\b(Progressive House|Deep House|Tech House|Trance|Techno|Electronica|House)\b/i);
+          if (simpleGenreMatch) {
+            genre = simpleGenreMatch[1];
+          }
+        }
+        
+        // Limpeza final
+        if (genre) {
+          genre = genre.trim();
+          // Padronizar alguns nomes
+          if (genre.toLowerCase().includes('prog') && genre.toLowerCase().includes('house')) {
+            genre = 'Progressive House';
+          } else if (genre.toLowerCase().includes('deep') && genre.toLowerCase().includes('house')) {
+            genre = 'Deep House';
+          } else if (genre.toLowerCase().includes('tech') && genre.toLowerCase().includes('house')) {
+            genre = 'Tech House';
+          }
+          
+          // Validar comprimento final
+          if (genre.length < 3 || genre.length > 50) genre = null;
+        }
+        
+        // Label: buscar "Label:" ou "Gravadora:" seguido da gravadora (pattern inteligente)
+        var label = null;
+        var labelMatches = bodyText.match(/(?:Label|Gravadora):\s*([A-Za-z][A-Za-z0-9\s&.,-]{2,40})/);
+        if (labelMatches) {
+          label = labelMatches[1].trim();
+          
+          // Limpeza inteligente: preservar labels conhecidas como "Cronos"
+          var knownLabels = ['Cronos', 'Virgin', 'Armada', 'Spinnin', 'Ultra', 'Revealed', 'STMPD'];
+          var isKnownLabel = false;
+          
+          for (var i = 0; i < knownLabels.length; i++) {
+            if (label.toLowerCase().startsWith(knownLabels[i].toLowerCase())) {
+              label = knownLabels[i];
+              isKnownLabel = true;
+              break;
+            }
+          }
+          
+          // Se não é uma label conhecida, fazer limpeza cuidadosa
+          if (!isKnownLabel) {
+            // Remover texto da UI que aparece depois da label
+            label = label.replace(/\s*(?:Aparece|em|POWER|Pitch|On|Reproduzir|Adicionar|Play|Add|Queue|Faixas|recomendadas).*$/i, '').trim();
+            // Manter só a primeira palavra se for muito longa
+            if (label.length > 15) {
+              var firstWord = label.split(/\s+/)[0];
+              if (firstWord.length >= 3) {
+                label = firstWord;
+              }
+            }
+          }
+          
+          // Validar tamanho final
+          if (label.length < 2 || label.length > 25) label = null;
+        }
+        
+        // Artist do título da página
+        var artist = '';
+        var pageTitle = document.title || '';
+        var artistMatches = pageTitle.match(/^(.+?)\s*-/);
+        if (artistMatches) {
+          artist = artistMatches[1].trim();
+        }
+        
+        // Album/Release: buscar "Release:" ou nome do release na página
+        var album = null;
+        // Buscar por padrão "Release: Album Name" ou similar
+        var albumMatches = bodyText.match(/(?:Release|Album):\s*([A-Za-z][A-Za-z0-9\s&.,'-]{2,50})/i);
+        if (albumMatches) {
+          album = albumMatches[1].trim();
+          
+          // Limpeza: remover texto extra que possa ter vindo junto
+          album = album.replace(/\s*(?:Aparece|em|POWER|Pitch|On|Reproduzir|Adicionar|Play|Add|Queue|Faixas|recomendadas|Gravadora|Label).*$/i, '').trim();
+          
+          // Se for muito longo, pegar só a primeira parte
+          if (album.length > 30) {
+            var firstPart = album.split(/[\s\-]/)[0];
+            if (firstPart.length >= 3) {
+              album = firstPart;
+            }
+          }
+          
+          // Validar tamanho final
+          if (album.length < 2 || album.length > 40) album = null;
+        }
+        
+        // Se não encontrou album específico, tentar extrair do título da música (muitas vezes é single)
+        if (!album && pageTitle) {
+          var trackMatch = pageTitle.match(/^.+?\s*-\s*(.+?)\s*::/);
+          if (trackMatch && trackMatch[1]) {
+            // Se o nome da track parece ser um single/EP
+            var trackName = trackMatch[1].trim();
+            if (trackName.length <= 30 && !trackName.toLowerCase().includes('beatport')) {
+              album = trackName + ' (Single)';
+            }
+          }
+        }
+        
+        return {
+          artist: artist,
+          bpm: bpm || undefined,
+          key: key || undefined,
+          genre: genre || undefined,
+          label: label || undefined,
+          album: album || undefined,  // NOVO: incluir album
+          url: window.location.href,  // NOVO: incluir URL para validação
+          pageTitle: document.title   // NOVO: incluir título da página
+        };
       });
       await browser.close();
-      if (!metadata || (!metadata.bpm && !metadata.key && !metadata.genre && !metadata.label && !metadata.artist)) {
+      
+      // LOG DETALHADO DOS METADADOS EXTRAÍDOS
+      if (metadata && (metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.artist)) {
+        console.log(`\n✅ [BeatportV2] METADADOS EXTRAÍDOS COM SUCESSO:`);
+        console.log(`   🌐 URL Beatport: ${metadata.url || trackUrl}`);
+        console.log(`   📄 Título da página: ${metadata.pageTitle || 'N/A'}`);
+        console.log(`   👨‍🎤 Artist: ${metadata.artist || 'N/A'}`);
+        console.log(`   🎵 BPM: ${metadata.bpm || 'N/A'}`);
+        console.log(`   🔑 Key: ${metadata.key || 'N/A'}`);
+        console.log(`   🎭 Genre: ${metadata.genre || 'N/A'}`);
+        console.log(`   💿 Album: ${metadata.album || 'N/A'}`);
+        console.log(`   🏷️ Label: ${metadata.label || 'N/A'}`);
+        console.log(`   =========================================================`);
+        console.log(`   🔗 VALIDAÇÃO: Copie a URL acima e verifique se os dados conferem!`);
+        console.log(`   =========================================================\n`);
+        
+        return metadata;
+      } else {
+        console.log(`\n❌ [BeatportV2] NENHUM METADADO ÚTIL EXTRAÍDO:`);
+        console.log(`   🌐 URL tentada: ${metadata?.url || trackUrl}`);
+        console.log(`   📄 Título da página: ${metadata?.pageTitle || 'N/A'}`);
+        console.log(`   ⚠️ Verifique se a URL está correta e contém os dados esperados`);
+        console.log(`   ==========================================================\n`);
         return null;
       }
-      return metadata;
     } catch (error) {
       console.error(`❌ [BeatportV2] Erro detalhado:`, error instanceof Error ? error.message : error);
       console.error(`❌ [BeatportV2] Stack trace:`, error instanceof Error ? error.stack : 'N/A');

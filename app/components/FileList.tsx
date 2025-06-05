@@ -1,44 +1,13 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, memo, useCallback } from 'react';
 import Image from 'next/image';
 import DownloadQueue from './DownloadQueue';
 import { useDownload } from '../contexts/DownloadContext';
 import { useFile } from '../contexts/FileContext';
 import { useUI } from '../contexts/UIContext';
 import { usePlayer } from '../contexts/PlayerContext';
-
-// Cache de thumbnails no frontend para evitar múltiplas requisições
-const thumbnailCache = new Map<string, { url: string; timestamp: number; isLoading: boolean }>();
-const CACHE_DURATION = 30 * 60 * 1000; // 30 minutos
-
-// Função para gerenciar o cache de thumbnails
-function getThumbnailUrl(filename: string): string {
-  const now = Date.now();
-  
-  // Limpeza periódica do cache
-  for (const [key, cacheEntry] of thumbnailCache.entries()) {
-    if (now - cacheEntry.timestamp > CACHE_DURATION) {
-      thumbnailCache.delete(key);
-    }
-  }
-  
-  // Verificar cache primeiro
-  const cached = thumbnailCache.get(filename);
-  if (cached && (now - cached.timestamp) < CACHE_DURATION) {
-    return cached.url;
-  }
-  
-  // Se não tem cache válido, armazenar nova URL
-  const apiUrl = `/api/thumbnail/${encodeURIComponent(filename)}?t=${now}`;
-  thumbnailCache.set(filename, {
-    url: apiUrl,
-    timestamp: now,
-    isLoading: false
-  });
-  
-  return apiUrl;
-}
+import { getThumbnailUrl } from '../utils/thumbnailCache';
 
 interface FileInfo {
   name: string;
@@ -71,11 +40,11 @@ const MusicIcon = () => (
   </svg>
 );
 
-const ThumbnailImage = ({ file, files }: { file: FileInfo, files: FileInfo[] }) => {
+// Memoizando o ThumbnailImage para evitar re-renders desnecessários
+const ThumbnailImage = memo(({ file, fileExists }: { file: FileInfo, fileExists: boolean }) => {
   const [error, setError] = useState(false);
-  const exists = files.some(f => f.name === file.name);
   
-  if (!exists || error) {
+  if (!fileExists || error) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-zinc-800 rounded">
         <svg className="w-6 h-6 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -99,7 +68,78 @@ const ThumbnailImage = ({ file, files }: { file: FileInfo, files: FileInfo[] }) 
       />
     </div>
   );
-};
+});
+
+ThumbnailImage.displayName = 'ThumbnailImage';
+
+// Memoizando o FileRow para evitar re-renders desnecessários
+const FileRow = memo(({ 
+  file, 
+  index, 
+  files,
+  colWidths, 
+  onPlay, 
+  onContextMenu 
+}: {
+  file: FileInfo;
+  index: number;
+  files: FileInfo[];
+  colWidths: number[];
+  onPlay: (file: FileInfo) => void;
+  onContextMenu: (e: React.MouseEvent, file: FileInfo) => void;
+}) => {
+  const fileExists = files.some(f => f.name === file.name);
+  
+  return (
+    <div
+      key={file.path}
+      className="flex items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs cursor-pointer"
+      style={{ minHeight: 50 }}
+      onClick={e => onContextMenu(e, file)}
+    >
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[0], minWidth:40}}>
+        {index + 1}
+      </div>
+      <div className="flex items-center justify-center" style={{width:colWidths[1], minWidth:40}}>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onPlay(file);
+          }}
+          className="w-10 h-10 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110"
+        >
+          <ThumbnailImage file={file} fileExists={fileExists} />
+          <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
+            <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          </div>
+        </button>
+      </div>
+      <div className="truncate text-gray-400 flex items-center gap-2 justify-start" style={{width:colWidths[2], minWidth:40}}>
+        {file.title || file.displayName}
+        {file.isBeatportFormat && (
+          <span className="text-xs text-green-500" title="Arquivo já está no formato Beatport">
+            ✓
+          </span>
+        )}
+      </div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[3], minWidth:40}}>{file.duration || '-'}</div>
+      <div className="truncate text-gray-400 flex items-center justify-start" style={{width:colWidths[4], minWidth:40}}>{file.artist || '-'}</div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[5], minWidth:40}}>{file.bpm || '-'}</div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[6], minWidth:40}}>{file.key || '-'}</div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[7], minWidth:40}}>{file.genre || '-'}</div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[8], minWidth:40}}>
+        <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.album || ''}>{file.album || '-'}</span>
+      </div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[9], minWidth:40}}>
+        <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.label || ''}>{file.label || '-'}</span>
+      </div>
+    </div>
+  );
+});
+
+FileRow.displayName = 'FileRow';
 
 export default function FileList() {
   const {
@@ -144,7 +184,7 @@ export default function FileList() {
   const audioPlayerRef = useRef<any>(null);
   const lastPlayedFile = useRef<string | null>(null);
 
-  const fetchFiles = async () => {
+  const fetchFiles = useCallback(async () => {
     try {
       const response = await fetch('/api/files');
       const data = await response.json();
@@ -154,7 +194,7 @@ export default function FileList() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [setFiles, setLoading]);
 
   useEffect(() => {
     // Carregar a preferência salva
@@ -165,8 +205,8 @@ export default function FileList() {
     
     fetchFiles();
 
-    // Atualizar a cada 15 segundos
-    const interval = setInterval(fetchFiles, 15000);
+    // Atualizar a cada 30 segundos (reduzido de 15s para diminuir re-renders)
+    const interval = setInterval(fetchFiles, 30000);
 
     // Atualizar quando um novo download for concluído
     const handleRefresh = () => fetchFiles();
@@ -181,17 +221,17 @@ export default function FileList() {
       window.removeEventListener('refresh-files', handleRefresh);
       window.removeEventListener('open-download-queue', openQueue);
     };
-  }, []);
+  }, [fetchFiles, setCustomDownloadsPath, setShowQueue]);
 
   // Função para alternar ordenação
-  const handleSort = (column: string) => {
+  const handleSort = useCallback((column: string) => {
     if (sortBy === column) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
     } else {
       setSortBy(column);
       setSortOrder('asc');
     }
-  };
+  }, [sortBy, sortOrder, setSortBy, setSortOrder]);
 
   // Função de comparação genérica
   const compare = (a: any, b: any) => {
@@ -202,86 +242,92 @@ export default function FileList() {
     return String(a).localeCompare(String(b), undefined, { sensitivity: 'base', numeric: true });
   };
 
-  // Ordenar arquivos filtrados
-  const sortedFiles = [...(files || [])].filter(file => {
-    const query = search.toLowerCase();
-    return (
-      (file.displayName && file.displayName.toLowerCase().includes(query)) ||
-      (file.title && file.title.toLowerCase().includes(query)) ||
-      (file.artist && file.artist.toLowerCase().includes(query))
-    );
-  });
-
-  // Aplicar ordenação apenas se o usuário selecionou uma coluna específica
-  if (sortBy) {
-    sortedFiles.sort((a, b) => {
-      let valA, valB;
-      switch (sortBy) {
-        case '#':
-          valA = files.indexOf(a);
-          valB = files.indexOf(b);
-          break;
-        case 'title':
-          valA = a.title || a.displayName;
-          valB = b.title || b.displayName;
-          break;
-        case 'duration':
-          valA = a.duration;
-          valB = b.duration;
-          break;
-        case 'artist':
-          valA = a.artist;
-          valB = b.artist;
-          break;
-        case 'bpm':
-          valA = a.bpm;
-          valB = b.bpm;
-          break;
-        case 'key':
-          valA = a.key;
-          valB = b.key;
-          break;
-        case 'genre':
-          valA = a.genre;
-          valB = b.genre;
-          break;
-        case 'album':
-          valA = a.album;
-          valB = b.album;
-          break;
-        case 'downloadedAt':
-          valA = a.downloadedAt;
-          valB = b.downloadedAt;
-          break;
-        case 'fileCreatedAt':
-          valA = a.fileCreatedAt;
-          valB = b.fileCreatedAt;
-          break;
-        case 'label':
-          valA = a.label;
-          valB = b.label;
-          break;
-        default:
-          // fallback seguro para tipos
-          const fileInfoMap: Record<string, any> = a;
-          const fileInfoMapB: Record<string, any> = b;
-          valA = fileInfoMap[sortBy];
-          valB = fileInfoMapB[sortBy];
-      }
-      const cmp = compare(valA, valB);
-      return sortOrder === 'asc' ? cmp : -cmp;
+  // Memoizando a ordenação e filtragem
+  const sortedFiles = useCallback(() => {
+    const filtered = [...(files || [])].filter(file => {
+      const query = search.toLowerCase();
+      return (
+        (file.displayName && file.displayName.toLowerCase().includes(query)) ||
+        (file.title && file.title.toLowerCase().includes(query)) ||
+        (file.artist && file.artist.toLowerCase().includes(query))
+      );
     });
-  }
 
-  // Agrupar por álbum se necessário
-  const groupedFiles = groupByAlbum ? sortedFiles.reduce((groups, file) => {
-    const album = file.album || 'Sem Álbum';
-    if (!groups[album]) {
-      groups[album] = [];
+    // Aplicar ordenação apenas se o usuário selecionou uma coluna específica
+    if (sortBy) {
+      filtered.sort((a, b) => {
+        let valA, valB;
+        switch (sortBy) {
+          case '#':
+            valA = files.indexOf(a);
+            valB = files.indexOf(b);
+            break;
+          case 'title':
+            valA = a.title || a.displayName;
+            valB = b.title || b.displayName;
+            break;
+          case 'duration':
+            valA = a.duration;
+            valB = b.duration;
+            break;
+          case 'artist':
+            valA = a.artist;
+            valB = b.artist;
+            break;
+          case 'bpm':
+            valA = a.bpm;
+            valB = b.bpm;
+            break;
+          case 'key':
+            valA = a.key;
+            valB = b.key;
+            break;
+          case 'genre':
+            valA = a.genre;
+            valB = b.genre;
+            break;
+          case 'album':
+            valA = a.album;
+            valB = b.album;
+            break;
+          case 'downloadedAt':
+            valA = a.downloadedAt;
+            valB = b.downloadedAt;
+            break;
+          case 'fileCreatedAt':
+            valA = a.fileCreatedAt;
+            valB = b.fileCreatedAt;
+            break;
+          case 'label':
+            valA = a.label;
+            valB = b.label;
+            break;
+          default:
+            const fileInfoMap: Record<string, any> = a;
+            const fileInfoMapB: Record<string, any> = b;
+            valA = fileInfoMap[sortBy];
+            valB = fileInfoMapB[sortBy];
+        }
+        const cmp = compare(valA, valB);
+        return sortOrder === 'asc' ? cmp : -cmp;
+      });
     }
-    groups[album].push(file);
-    return groups;
-  }, {} as Record<string, FileInfo[]>) : { '': sortedFiles };
+
+    return filtered;
+  }, [files, search, sortBy, sortOrder]);
+
+  // Memoizando o agrupamento
+  const groupedFiles = useCallback(() => {
+    const sorted = sortedFiles();
+    return groupByAlbum ? sorted.reduce((groups, file) => {
+      const album = file.album || 'Sem Álbum';
+      if (!groups[album]) {
+        groups[album] = [];
+      }
+      groups[album].push(file);
+      return groups;
+    }, {} as Record<string, FileInfo[]>) : { '': sorted };
+  }, [sortedFiles, groupByAlbum]);
 
   const openDownloadsFolder = () => {
     // Caminho padrão do Windows (ajuste conforme necessário)
@@ -417,7 +463,7 @@ export default function FileList() {
         updateQueueItem(item.id, { status: 'completed', progress: 100 });
       }
     });
-  }, [files, queue]);
+  }, [files, queue, updateQueueItem]);
 
   // Fecha o menu de ações ao clicar fora
   useEffect(() => {
@@ -427,7 +473,24 @@ export default function FileList() {
     };
     window.addEventListener('mousedown', handleClick);
     return () => window.removeEventListener('mousedown', handleClick);
-  }, [actionMenu]);
+  }, [actionMenu, setActionMenu]);
+
+  // Handlers memoizados
+  const handlePlay = useCallback((file: FileInfo) => {
+    play(file);
+    setPlayerOpen(true);
+  }, [play, setPlayerOpen]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, file: FileInfo) => {
+    if (e.button === 0) {
+      e.stopPropagation();
+      setActionMenu({
+        x: e.clientX,
+        y: e.clientY,
+        file
+      });
+    }
+  }, [setActionMenu]);
 
   if (loading) {
     return (
@@ -445,6 +508,8 @@ export default function FileList() {
       </div>
     );
   }
+
+  const finalGroupedFiles = groupedFiles();
 
   return (
     <>
@@ -546,7 +611,7 @@ export default function FileList() {
         <div 
           className="flex-1 min-h-0 overflow-y-auto custom-scroll"
         >
-          {Object.entries(groupedFiles).map(([album, files]) => (
+          {Object.entries(finalGroupedFiles).map(([album, files]) => (
             <div key={album} className="animate-fade-in">
               {groupByAlbum && album !== '' && (
                 <div className="sticky top-0 bg-zinc-900 z-10 px-2 py-2 border-b border-zinc-700">
@@ -554,60 +619,15 @@ export default function FileList() {
                 </div>
               )}
               {files.map((file, index) => (
-                <div
+                <FileRow
                   key={file.path}
-                  className="flex items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs cursor-pointer"
-                  style={{ minHeight: 50 }}
-                  onClick={e => {
-                    if (e.button === 0) {
-                      e.stopPropagation();
-                      setActionMenu({
-                        x: (e as React.MouseEvent).clientX,
-                        y: (e as React.MouseEvent).clientY,
-                        file
-                      });
-                    }
-                  }}
-                >
-                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[0], minWidth:40}}>
-                    {files.length - files.indexOf(file)}
-                  </div>
-                  <div className="flex items-center justify-center" style={{width:colWidths[1], minWidth:40}}>
-                    <button
-                      onClick={() => {
-                        play(file);
-                        setPlayerOpen(true);
-                      }}
-                      className="w-10 h-10 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110"
-                    >
-                      <ThumbnailImage file={file} files={files} />
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-                          <path d="M8 5v14l11-7z" />
-                        </svg>
-                      </div>
-                    </button>
-                  </div>
-                  <div className="truncate text-gray-400 flex items-center gap-2 justify-start" style={{width:colWidths[2], minWidth:40}}>
-                    {file.title || file.displayName}
-                    {file.isBeatportFormat && (
-                      <span className="text-xs text-green-500" title="Arquivo já está no formato Beatport">
-                        ✓
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[3], minWidth:40}}>{file.duration || '-'}</div>
-                  <div className="truncate text-gray-400 flex items-center justify-start" style={{width:colWidths[4], minWidth:40}}>{file.artist || '-'}</div>
-                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[5], minWidth:40}}>{file.bpm || '-'}</div>
-                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[6], minWidth:40}}>{file.key || '-'}</div>
-                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[7], minWidth:40}}>{file.genre || '-'}</div>
-                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[8], minWidth:40}}>
-                    <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.album || ''}>{file.album || '-'}</span>
-                  </div>
-                  <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[9], minWidth:40}}>
-                    <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.label || ''}>{file.label || '-'}</span>
-                  </div>
-                </div>
+                  file={file}
+                  index={index}
+                  files={files}
+                  colWidths={colWidths}
+                  onPlay={handlePlay}
+                  onContextMenu={handleContextMenu}
+                />
               ))}
             </div>
           ))}

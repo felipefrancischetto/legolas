@@ -4,38 +4,7 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import Image from 'next/image';
 import WaveSurfer from 'wavesurfer.js';
 import { usePlayer } from '../contexts/PlayerContext';
-
-// Cache de thumbnails no frontend para evitar múltiplas requisições
-const thumbnailCache = new Map<string, { url: string; timestamp: number; isLoading: boolean }>();
-const CACHE_DURATION = 30 * 60 * 1000; // 30 minutos
-
-// Função simples para cache de thumbnail (não é um hook)
-function getThumbnailUrl(filename: string): string {
-  const now = Date.now();
-  
-  // Limpeza periódica do cache
-  for (const [key, cacheEntry] of thumbnailCache.entries()) {
-    if (now - cacheEntry.timestamp > CACHE_DURATION) {
-      thumbnailCache.delete(key);
-    }
-  }
-  
-  // Verificar cache primeiro
-  const cached = thumbnailCache.get(filename);
-  if (cached && (now - cached.timestamp) < CACHE_DURATION) {
-    return cached.url;
-  }
-  
-  // Se não tem cache válido, armazenar nova URL
-  const apiUrl = `/api/thumbnail/${encodeURIComponent(filename)}?t=${now}`;
-  thumbnailCache.set(filename, {
-    url: apiUrl,
-    timestamp: now,
-    isLoading: false
-  });
-  
-  return apiUrl;
-}
+import { getThumbnailUrl } from '../utils/thumbnailCache';
 
 export default function AudioPlayer() {
   const waveformRef = useRef<HTMLDivElement>(null);
@@ -97,7 +66,7 @@ export default function AudioPlayer() {
     });
 
     wavesurfer.on('loading', (percent) => {
-      // Não setar isLoading aqui
+      // Não setar isLoading aqui para evitar re-renders desnecessários
     });
 
     wavesurferRef.current = wavesurfer;

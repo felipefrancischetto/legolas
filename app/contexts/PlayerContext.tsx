@@ -79,12 +79,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   };
 
   const play = useCallback((file: FileInfo) => {
-    updatePlayerState({
-      currentFile: file,
-      isPlaying: true,
-      isLoading: true,
-      isReady: false,
-      error: null
+    // Evita re-render se for o mesmo arquivo
+    updatePlayerState(prev => {
+      if (prev.currentFile?.name === file.name && prev.isPlaying) {
+        return {}; // Não atualiza se já está tocando o mesmo arquivo
+      }
+      return {
+        currentFile: file,
+        isPlaying: true,
+        isLoading: true,
+        isReady: false,
+        error: null
+      };
     });
   }, []);
 
