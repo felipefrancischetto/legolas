@@ -63,6 +63,7 @@ export interface ScrapingOptions {
   validateLinks?: boolean;
   includeMetadata?: boolean;
   exportFormat?: 'json' | 'csv' | 'xlsx';
+  useBeatport?: boolean;
 }
 
 export interface CacheEntry {

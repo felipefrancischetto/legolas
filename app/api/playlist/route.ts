@@ -1,30 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import { mkdir, readFile } from 'fs/promises';
-import { join } from 'path';
-
-const execAsync = promisify(exec);
+import { playlistDownloadService } from '@/lib/services/playlistDownloadService';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-async function getDownloadsPath() {
-  try {
-    const configPath = join(process.cwd(), 'downloads.config.json');
-    const config = await readFile(configPath, 'utf-8');
-    const { path } = JSON.parse(config);
-    return join(process.cwd(), path);
-  } catch (error) {
-    return join(process.cwd(), 'downloads');
-  }
-}
 
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const url = searchParams.get('url');
     const format = searchParams.get('format') || 'mp3';
+    const enhanceMetadata = searchParams.get('enhanceMetadata') !== 'false'; // Default to true
+    const maxConcurrent = parseInt(searchParams.get('maxConcurrent') || '3');
+    const useBeatport = searchParams.get('useBeatport') === 'true'; // Toggle para Beatport
     
     if (!url) {
       return NextResponse.json(
@@ -33,34 +20,49 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log('Iniciando download da playlist:', url, 'Formato:', format);
-
-    // Obter o caminho de downloads
-    const downloadsFolder = await getDownloadsPath();
-
-    // Criar pasta de downloads se não existir
-    await mkdir(downloadsFolder, { recursive: true });
-    console.log('Pasta de downloads criada/verificada:', downloadsFolder);
-
-    // Baixar a playlist no formato selecionado
-    console.log('Iniciando download da playlist...');
-    const { stdout } = await execAsync(
-      `yt-dlp -x --audio-format ${format} --audio-quality 0 ` +
-      `--embed-thumbnail --convert-thumbnails jpg ` +
-      `--add-metadata ` +
-      `--cookies "cookies.txt" ` +
-      `-o "${downloadsFolder}/%(title)s.%(ext)s" ` +
-      `--no-part --force-overwrites "${url}"`,
-      {
-        maxBuffer: 1024 * 1024 * 10 // 10MB buffer
-      }
-    );
-    console.log('Download da playlist concluído:', stdout);
-
-    return NextResponse.json({
-      status: 'concluído',
-      message: 'Download da playlist concluído com sucesso'
+    console.log('Iniciando download melhorado da playlist:', url, {
+      format,
+      enhanceMetadata,
+      maxConcurrent,
+      useBeatport
     });
+
+    // Use the enhanced playlist download service
+    const result = await playlistDownloadService.downloadPlaylist(url, {
+      format: format as 'mp3' | 'flac' | 'wav',
+      enhanceMetadata,
+      maxConcurrent,
+      useBeatport // Passar o toggle para o serviço
+    });
+
+    if (result.success) {
+      return NextResponse.json({
+        status: 'concluído',
+        message: 'Download da playlist concluído com sucesso',
+        details: {
+          totalTracks: result.totalTracks,
+          processedTracks: result.processedTracks,
+          enhancedTracks: result.enhancedTracks,
+          enhancementRate: result.totalTracks > 0 ? 
+            Math.round((result.enhancedTracks / result.totalTracks) * 100) : 0,
+          downloadPath: result.downloadPath,
+          errors: result.errors,
+          beatportMode: useBeatport
+        }
+      });
+    } else {
+      return NextResponse.json({
+        status: 'erro',
+        message: 'Erro no download da playlist',
+        details: {
+          totalTracks: result.totalTracks,
+          processedTracks: result.processedTracks,
+          enhancedTracks: result.enhancedTracks,
+          errors: result.errors,
+          beatportMode: useBeatport
+        }
+      }, { status: 500 });
+    }
 
   } catch (error) {
     console.error('Erro detalhado ao processar playlist:', error);

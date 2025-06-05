@@ -45,15 +45,39 @@ async function extractAudioMetadata(filePath: string) {
       thumbnailUrl = `/api/thumbnail/${encodeURIComponent(filePath.split('/').pop() || '')}`;
     }
 
+    // Extrair artista de múltiplas fontes e fallbacks
+    const artist = tags.artist || tags.ARTIST || 
+                   tags.albumartist || tags.ALBUMARTIST || 
+                   tags.performer || tags.PERFORMER || 
+                   null;
+
+    // Extrair BPM de múltiplas fontes
+    const bpm = tags.BPM || tags.bpm || tags.TEMPO || tags.tempo || null;
+
+    // Extrair Key de múltiplas fontes  
+    const key = tags.key || tags.KEY || 
+                tags.initialKey || tags.INITIALKEY || 
+                tags.initialkey || tags.INITIAL_KEY || null;
+
+    // Extrair gênero (limpar se contiver BPM misturado)
+    let genre = tags.genre || tags.Genre || tags.GENRE || null;
+    if (genre) {
+      // Se o gênero contém números no início (como "140 / Deep Dubstep"), limpar
+      const genreClean = genre.replace(/^\d+\s*\/?\s*/, '').trim();
+      if (genreClean && genreClean !== genre) {
+        genre = genreClean;
+      }
+    }
+
     return {
-      title: tags.title || null,
-      artist: tags.artist || null,
+      title: tags.title || tags.TITLE || null,
+      artist: artist,
       duration: formatDuration(parseFloat(info.format?.duration || '0')),
-      bpm: tags.BPM || tags.bpm || null,
-      key: tags.key || tags.initialkey || null,
-      genre: tags.genre || tags.Genre || null,
-      album: tags.album || tags.Album || null,
-      label: tags.publisher || tags.Publisher || tags.label || tags.Label || null,
+      bpm: bpm,
+      key: key,
+      genre: genre,
+      album: tags.album || tags.Album || tags.ALBUM || null,
+      label: tags.publisher || tags.Publisher || tags.label || tags.Label || tags.LABEL || null,
       thumbnail: thumbnailUrl
     };
   } catch (error) {
@@ -130,25 +154,27 @@ export async function GET(request: NextRequest) {
       })
     );
     
-    // Ordenar por data/hora (mais recente primeiro)
-    // Prioridade: downloadedAt > fileCreatedAt > nome do arquivo
+    // Ordenar por data/hora de forma mais estável
+    // Prioridade: downloadedAt > fileCreatedAt > ordem alfabética por título
     fileInfos.sort((a, b) => {
-      // Se ambos têm downloadedAt, usar essa data
+      // Se ambos têm downloadedAt, usar essa data (mais antigo primeiro para manter ordem de playlist)
       if (a.downloadedAt && b.downloadedAt) {
-        return new Date(b.downloadedAt).getTime() - new Date(a.downloadedAt).getTime();
+        return new Date(a.downloadedAt).getTime() - new Date(b.downloadedAt).getTime();
       }
       
       // Se apenas um tem downloadedAt, ele vem primeiro
       if (a.downloadedAt && !b.downloadedAt) return -1;
       if (!a.downloadedAt && b.downloadedAt) return 1;
       
-      // Se nenhum tem downloadedAt, usar fileCreatedAt
+      // Se nenhum tem downloadedAt, usar fileCreatedAt (mais antigo primeiro)
       if (a.fileCreatedAt && b.fileCreatedAt) {
-        return new Date(b.fileCreatedAt).getTime() - new Date(a.fileCreatedAt).getTime();
+        return new Date(a.fileCreatedAt).getTime() - new Date(b.fileCreatedAt).getTime();
       }
       
-      // Fallback para nome do arquivo
-      return (a.title || a.displayName).localeCompare(b.title || b.displayName);
+      // Fallback para ordem alfabética por título
+      const titleA = a.title || a.displayName || '';
+      const titleB = b.title || b.displayName || '';
+      return titleA.localeCompare(titleB);
     });
 
     return NextResponse.json({ files: fileInfos });

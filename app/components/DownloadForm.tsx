@@ -220,7 +220,7 @@ export default function DownloadForm() {
             downloadSteps: [...prev.downloadSteps, "Baixando áudio..."]
           }));
         }
-        const response = await fetch(`/api/${endpoint}?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`);
+        const response = await fetch(`/api/${endpoint}?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}&useBeatport=${enrichWithBeatport}`);
         const data = await response.json();
 
         if (!response.ok) {
@@ -244,14 +244,18 @@ export default function DownloadForm() {
               ? await Promise.all(videoInfo.videos.map(async (track, idx) => {
                   let metadata = undefined;
                   try {
-                    const mbRes = await fetch('/api/musicbrainz-metadata', {
+                    const metadataRes = await fetch('/api/enhanced-metadata', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ title: track.title, artist: track.artist || '' })
+                      body: JSON.stringify({ 
+                        title: track.title, 
+                        artist: track.artist || '',
+                        useBeatport: enrichWithBeatport // Usar o toggle
+                      })
                     });
-                    const mbMeta = await mbRes.json();
-                    if (mbMeta && Object.keys(mbMeta).length > 0) {
-                      metadata = mbMeta;
+                    const enhancedMeta = await metadataRes.json();
+                    if (enhancedMeta.success && enhancedMeta.metadata && Object.keys(enhancedMeta.metadata).length > 0) {
+                      metadata = enhancedMeta.metadata;
                     }
                   } catch {}
                   return {
@@ -283,18 +287,22 @@ export default function DownloadForm() {
             loading: false
           });
           if (currentDownloadId) {
-            // Buscar metadados no MusicBrainz
+            // Buscar metadados usando enhanced-metadata
             let metadata = undefined;
             if (videoInfo?.title) {
               try {
-                const mbRes = await fetch('/api/musicbrainz-metadata', {
+                const metadataRes = await fetch('/api/enhanced-metadata', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ title: videoInfo.title, artist: '' })
+                  body: JSON.stringify({ 
+                    title: videoInfo.title, 
+                    artist: '',
+                    useBeatport: enrichWithBeatport // Usar o toggle
+                  })
                 });
-                const mbMeta = await mbRes.json();
-                if (mbMeta && Object.keys(mbMeta).length > 0) {
-                  metadata = mbMeta;
+                const enhancedMeta = await metadataRes.json();
+                if (enhancedMeta.success && enhancedMeta.metadata && Object.keys(enhancedMeta.metadata).length > 0) {
+                  metadata = enhancedMeta.metadata;
                 }
               } catch {}
             }

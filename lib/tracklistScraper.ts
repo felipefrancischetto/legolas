@@ -80,7 +80,8 @@ class TracklistScraper {
     headers: {},
     validateLinks: true,
     includeMetadata: true,
-    exportFormat: 'json'
+    exportFormat: 'json',
+    useBeatport: false
   };
 
   async scrapeTracklist(url: string, options: Partial<ScrapingOptions> = {}): Promise<ScrapingResult> {
@@ -227,7 +228,7 @@ class TracklistScraper {
     const tracks = await this.extractTracks($, options);
     
     const scrapingTime = Date.now() - startTime;
-    const uniquePlatforms = _.uniq(tracks.flatMap(track => track.links.map(link => link.platform as string)));
+    const uniquePlatforms = _.uniq(tracks.flatMap(track => track.links.map(link => link.platform))) as string[];
 
     return {
       success: true,
@@ -323,7 +324,7 @@ class TracklistScraper {
       });
 
       const scrapingTime = Date.now() - startTime;
-      const uniquePlatforms = _.uniq(pageData.tracks.flatMap((track: any) => track.links.map((link: any) => link.platform as string)));
+      const uniquePlatforms = _.uniq(pageData.tracks.flatMap((track: any) => track.links.map((link: any) => link.platform))) as string[];
 
       return {
         success: true,
@@ -616,7 +617,7 @@ class TracklistScraper {
       }
 
       const scrapingTime = Date.now() - startTime;
-      const uniquePlatforms = _.uniq(result.tracks.flatMap((track: any) => track.links.map((link: any) => link.platform as string)));
+      const uniquePlatforms = _.uniq(result.tracks.flatMap((track: any) => track.links.map((link: any) => link.platform))) as string[];
 
       return {
         success: true,
@@ -741,8 +742,8 @@ class TracklistScraper {
         };
 
         const artist = getTrackData(['.artist', '.trackArtist', '.performer', '[data-artist]']);
-        const time = getTrackData(['.time', '.duration', '.length', '[data-time]']);
-        const label = getTrackData(['.label', '.recordLabel', '.release-label', '[data-label]']);
+        const time = getTrackData(['.time, .duration, .length', '[data-time]']);
+        const label = getTrackData(['.label, .recordLabel, .release-label', '[data-label]']);
 
         // Enhanced link extraction
         const links: any[] = [];
@@ -893,7 +894,7 @@ class TracklistScraper {
 
     // Add metadata enhancement if requested
     if (options.includeMetadata) {
-      result = await this.enhanceMetadata(result);
+      result = await this.enhanceMetadata(result, options.useBeatport);
     }
 
     // Remove duplicates
@@ -925,20 +926,61 @@ class TracklistScraper {
     return result;
   }
 
-  private async enhanceMetadata(result: ScrapingResult): Promise<ScrapingResult> {
-    // Add metadata enhancement logic here
-    // This could include:
-    // - BPM detection
-    // - Genre classification
-    // - Key detection
-    // - Duration parsing
+  private async enhanceMetadata(result: ScrapingResult, useBeatport: boolean = false): Promise<ScrapingResult> {
+    // Import the metadata aggregator
+    const { metadataAggregator } = await import('./services/metadataService');
     
-    for (const track of result.tracks) {
-      if (track.time && validationUtils.validateTimeFormat(track.time)) {
-        track.metadata = {
-          ...track.metadata,
-          duration: track.time
-        };
+    // Process tracks in batches to avoid overwhelming APIs
+    const batchSize = 5;
+    const batches: Track[][] = [];
+    for (let i = 0; i < result.tracks.length; i += batchSize) {
+      batches.push(result.tracks.slice(i, i + batchSize));
+    }
+
+    console.log(`Starting metadata enhancement... (Beatport mode: ${useBeatport})`);
+
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      console.log(`Enhancing metadata batch ${i + 1}/${batches.length} (${batch.length} tracks) - Beatport: ${useBeatport}`);
+
+      const enhancePromises = batch.map(async (track) => {
+        if (!track.title) return;
+
+        try {
+          const metadata = await metadataAggregator.searchMetadata(
+            track.title,
+            track.artist || '',
+            { useBeatport }
+          );
+
+          // Update track metadata with enhanced data
+          track.metadata = {
+            ...track.metadata,
+            genre: metadata.genre || track.metadata?.genre,
+            bpm: metadata.bpm || track.metadata?.bpm,
+            key: metadata.key || track.metadata?.key,
+            year: metadata.year || track.metadata?.year,
+            duration: track.time || track.metadata?.duration
+          };
+
+          // Update track fields with enhanced data
+          if (metadata.label && !track.label) {
+            track.label = metadata.label;
+          }
+
+          const beatportText = metadata.sources?.includes('Beatport') ? ' 🎯 (BEATPORT)' : '';
+          console.log(`Enhanced track: ${track.title} (Sources: ${metadata.sources?.join(', ') || 'None'})${beatportText}`);
+
+        } catch (error) {
+          console.error(`Failed to enhance metadata for track: ${track.title}`, error instanceof Error ? error.message : 'Unknown error');
+        }
+      });
+
+      await Promise.all(enhancePromises);
+
+      // Add delay between batches to respect API rate limits
+      if (i < batches.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
 

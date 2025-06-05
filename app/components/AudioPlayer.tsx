@@ -5,6 +5,38 @@ import Image from 'next/image';
 import WaveSurfer from 'wavesurfer.js';
 import { usePlayer } from '../contexts/PlayerContext';
 
+// Cache de thumbnails no frontend para evitar múltiplas requisições
+const thumbnailCache = new Map<string, { url: string; timestamp: number; isLoading: boolean }>();
+const CACHE_DURATION = 30 * 60 * 1000; // 30 minutos
+
+// Função simples para cache de thumbnail (não é um hook)
+function getThumbnailUrl(filename: string): string {
+  const now = Date.now();
+  
+  // Limpeza periódica do cache
+  for (const [key, cacheEntry] of thumbnailCache.entries()) {
+    if (now - cacheEntry.timestamp > CACHE_DURATION) {
+      thumbnailCache.delete(key);
+    }
+  }
+  
+  // Verificar cache primeiro
+  const cached = thumbnailCache.get(filename);
+  if (cached && (now - cached.timestamp) < CACHE_DURATION) {
+    return cached.url;
+  }
+  
+  // Se não tem cache válido, armazenar nova URL
+  const apiUrl = `/api/thumbnail/${encodeURIComponent(filename)}?t=${now}`;
+  thumbnailCache.set(filename, {
+    url: apiUrl,
+    timestamp: now,
+    isLoading: false
+  });
+  
+  return apiUrl;
+}
+
 export default function AudioPlayer() {
   const waveformRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
@@ -151,7 +183,7 @@ export default function AudioPlayer() {
         {/* Info da faixa */}
         <div className="flex items-center gap-4 min-w-[260px]">
           <Image
-            src={`/api/thumbnail/${encodeURIComponent(playerState.currentFile.name)}`}
+            src={getThumbnailUrl(playerState.currentFile.name)}
             alt={playerState.currentFile.title || playerState.currentFile.displayName}
             width={56}
             height={56}
@@ -255,7 +287,7 @@ export default function AudioPlayer() {
       {minimized && (
         <div className="fixed bottom-4 right-4 z-[100] bg-zinc-900 rounded-xl shadow-lg flex items-center gap-3 px-3 py-2 min-w-[220px] max-w-[320px] border border-zinc-800">
           <Image
-            src={`/api/thumbnail/${encodeURIComponent(playerState.currentFile.name)}`}
+            src={getThumbnailUrl(playerState.currentFile.name)}
             alt={playerState.currentFile.title || playerState.currentFile.displayName}
             width={40}
             height={40}

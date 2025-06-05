@@ -8,6 +8,38 @@ import { useFile } from '../contexts/FileContext';
 import { useUI } from '../contexts/UIContext';
 import { usePlayer } from '../contexts/PlayerContext';
 
+// Cache de thumbnails no frontend para evitar múltiplas requisições
+const thumbnailCache = new Map<string, { url: string; timestamp: number; isLoading: boolean }>();
+const CACHE_DURATION = 30 * 60 * 1000; // 30 minutos
+
+// Função para gerenciar o cache de thumbnails
+function getThumbnailUrl(filename: string): string {
+  const now = Date.now();
+  
+  // Limpeza periódica do cache
+  for (const [key, cacheEntry] of thumbnailCache.entries()) {
+    if (now - cacheEntry.timestamp > CACHE_DURATION) {
+      thumbnailCache.delete(key);
+    }
+  }
+  
+  // Verificar cache primeiro
+  const cached = thumbnailCache.get(filename);
+  if (cached && (now - cached.timestamp) < CACHE_DURATION) {
+    return cached.url;
+  }
+  
+  // Se não tem cache válido, armazenar nova URL
+  const apiUrl = `/api/thumbnail/${encodeURIComponent(filename)}?t=${now}`;
+  thumbnailCache.set(filename, {
+    url: apiUrl,
+    timestamp: now,
+    isLoading: false
+  });
+  
+  return apiUrl;
+}
+
 interface FileInfo {
   name: string;
   displayName: string;
@@ -53,7 +85,7 @@ const ThumbnailImage = ({ file, files }: { file: FileInfo, files: FileInfo[] }) 
     );
   }
 
-  const thumbnailUrl = `/api/thumbnail/${encodeURIComponent(file.name)}`;
+  const thumbnailUrl = getThumbnailUrl(file.name);
   return (
     <div className="w-full h-full relative">
       <Image
@@ -63,7 +95,7 @@ const ThumbnailImage = ({ file, files }: { file: FileInfo, files: FileInfo[] }) 
         height={32}
         className="object-cover w-full h-full rounded"
         onError={() => setError(true)}
-        priority
+        loading="lazy"
       />
     </div>
   );
