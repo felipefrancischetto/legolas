@@ -1,13 +1,15 @@
 'use client';
 
 import { useDownload } from '../contexts/DownloadContext';
+import DownloadStatusIndicator from './DownloadStatusIndicator';
 
 export default function DownloadQueue({ onClose }: { onClose: () => void }) {
   const { 
     queue, 
     removeFromQueue, 
     retryDownload, 
-    cancelDownload, 
+    cancelDownload,
+    getPlaylistProgressData 
   } = useDownload();
 
   if (queue.length === 0) {
@@ -24,117 +26,115 @@ export default function DownloadQueue({ onClose }: { onClose: () => void }) {
           </svg>
         </button>
       </div>
-      <div className="space-y-2 max-h-60 overflow-y-auto">
-        {queue.map((item) => (
-          <div
-            key={item.id}
-            className="bg-zinc-800 rounded p-3 animate-fade-in"
-          >
-            <div className="flex justify-between items-start mb-2">
-              <div className="flex-1 min-w-0 flex items-center gap-2">
-                <p className="text-sm text-white truncate">{item.title}</p>
-                {item.status === 'completed' && (
-                  <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
+      <div className="space-y-3 max-h-60 overflow-y-auto">
+        {queue.map((item) => {
+          // Usar dados precisos do progresso da playlist
+          const progressData = item.isPlaylist ? getPlaylistProgressData(item.id) : null;
+          const playlistProgress = progressData ? {
+            current: progressData.current,
+            total: progressData.total,
+            completed: progressData.completed,
+            errors: progressData.errors,
+            downloading: progressData.downloading || 0
+          } : undefined;
+
+          return (
+            <div key={item.id} className="relative">
+              <DownloadStatusIndicator
+                type={item.isPlaylist ? 'playlist' : 'individual'}
+                status={item.status as any}
+                title={item.title || 'Download sem título'}
+                progress={item.progress || 0}
+                playlistProgress={playlistProgress}
+                error={item.error}
+                loading={item.status === 'downloading'}
+                allowMinimize={true}
+                defaultMinimized={item.status === 'completed'} // Minimizar downloads concluídos por padrão
+                autoMinimizeAfter={item.isPlaylist ? 8 : 3} // Menos tempo na fila
+              />
+              
+              {/* Botões de ação */}
+              <div className="absolute top-2 right-2 flex gap-1">
+                {(item.status === 'downloading' || item.status === 'pending') && (
+                  <button
+                    onClick={() => cancelDownload(item.id)}
+                    className="p-1 text-yellow-400 hover:text-white transition-colors bg-zinc-800/80 rounded"
+                    title="Cancelar download"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 )}
+                {item.status === 'error' && (
+                  <button
+                    onClick={() => retryDownload(item.id)}
+                    className="p-1 text-blue-400 hover:text-white transition-colors bg-zinc-800/80 rounded"
+                    title="Tentar novamente"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582M20 20v-5h-.581M19.418 15A7.974 7.974 0 0012 8c-1.657 0-3.183.507-4.418 1.382" />
+                    </svg>
+                  </button>
+                )}
+                <button
+                  onClick={() => removeFromQueue(item.id)}
+                  className="p-1 text-gray-400 hover:text-white transition-colors bg-zinc-800/80 rounded"
+                  title="Remover da fila"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
               </div>
-              <button
-                onClick={() => removeFromQueue(item.id)}
-                className="text-gray-400 hover:text-white transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-              {(item.status === 'downloading' || item.status === 'pending') && (
-                <button
-                  onClick={() => cancelDownload(item.id)}
-                  className="ml-2 text-yellow-400 hover:text-white transition-colors"
-                  title="Cancelar download"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 6L6 18" />
-                  </svg>
-                </button>
-              )}
-              {item.status === 'error' && (
-                <button
-                  onClick={() => retryDownload(item.id)}
-                  className="ml-2 text-blue-400 hover:text-white transition-colors"
-                  title="Tentar novamente"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582M20 20v-5h-.581M19.418 15A7.974 7.974 0 0012 8c-1.657 0-3.183.507-4.418 1.382" />
-                  </svg>
-                </button>
+
+              {/* Lista de faixas da playlist com controles individuais */}
+              {item.isPlaylist && item.playlistItems && item.playlistItems.length > 0 && (
+                <div className="mt-2 pl-6 space-y-1 max-h-32 overflow-y-auto border-l-2 border-zinc-700">
+                  {item.playlistItems.map((playlistItem: any, index: number) => (
+                    <div key={index} className="flex items-center gap-2 p-1 rounded bg-zinc-800/50">
+                      <div className={`w-2 h-2 rounded-full ${
+                        playlistItem.status === 'completed' ? 'bg-green-400' :
+                        playlistItem.status === 'downloading' ? 'bg-blue-400 animate-pulse' :
+                        playlistItem.status === 'error' ? 'bg-red-400' :
+                        'bg-zinc-600'
+                      }`} />
+                      
+                      <p className="text-xs text-gray-300 truncate flex-1">
+                        {playlistItem.title}
+                      </p>
+                      
+                      <div className="flex gap-1">
+                        {(playlistItem.status === 'downloading' || playlistItem.status === 'pending') && (
+                          <button
+                            onClick={() => cancelDownload(item.id, index)}
+                            className="text-yellow-400 hover:text-white transition-colors"
+                            title="Cancelar esta faixa"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        )}
+                        {playlistItem.status === 'error' && (
+                          <button
+                            onClick={() => retryDownload(item.id, index)}
+                            className="text-blue-400 hover:text-white transition-colors"
+                            title="Tentar novamente esta faixa"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582M20 20v-5h-.581M19.418 15A7.974 7.974 0 0012 8c-1.657 0-3.183.507-4.418 1.382" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
-            
-            {item.status === 'downloading' && (
-              <div className="space-y-1">
-                <div className="w-full bg-zinc-700 rounded-full h-1.5">
-                  <div
-                    className="bg-white h-full rounded-full transition-all duration-300"
-                    style={{ width: `${item.progress}%` }}
-                  />
-                </div>
-                <p className="text-xs text-gray-400 text-right">
-                  {item.progress}%
-                </p>
-              </div>
-            )}
-
-            {item.status === 'error' && (
-              <p className="text-xs text-red-400">{item.error}</p>
-            )}
-
-            {item.isPlaylist && item.playlistItems && (
-              <div className="mt-2 space-y-1">
-                {item.playlistItems.map((playlistItem: any, index: number) => (
-                  <div key={index} className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-zinc-700">
-                      {playlistItem.status === 'completed' && (
-                        <div className="w-full h-full rounded-full bg-green-400" />
-                      )}
-                      {playlistItem.status === 'downloading' && (
-                        <div className="w-full h-full rounded-full bg-white animate-pulse" />
-                      )}
-                      {playlistItem.status === 'error' && (
-                        <div className="w-full h-full rounded-full bg-red-400" />
-                      )}
-                    </div>
-                    <p className="text-xs text-gray-400 truncate flex-1">
-                      {playlistItem.title}
-                    </p>
-                    {(playlistItem.status === 'downloading' || playlistItem.status === 'pending') && (
-                      <button
-                        onClick={() => cancelDownload(item.id, index)}
-                        className="text-yellow-400 hover:text-white transition-colors"
-                        title="Cancelar download da faixa"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 6L6 18" />
-                        </svg>
-                      </button>
-                    )}
-                    {playlistItem.status === 'error' && (
-                      <button
-                        onClick={() => retryDownload(item.id, index)}
-                        className="text-blue-400 hover:text-white transition-colors"
-                        title="Tentar novamente esta faixa"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582M20 20v-5h-.581M19.418 15A7.974 7.974 0 0012 8c-1.657 0-3.183.507-4.418 1.382" />
-                        </svg>
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

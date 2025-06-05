@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug SSE - Legolas Downloader</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        .container {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        .log {
+            background: #000;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .status.connected {
+            background: #28a745;
+        }
+        .status.disconnected {
+            background: #dc3545;
+        }
+        .status.connecting {
+            background: #ffc107;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 Debug SSE - Legolas Downloader</h1>
+    
+    <div class="container">
+        <h2>Teste de Conexão SSE</h2>
+        <p>Este teste verifica se o endpoint <code>/api/download-progress</code> está funcionando corretamente no browser.</p>
+        
+        <div>
+            <button id="connectBtn" onclick="connectSSE()">🔌 Conectar SSE</button>
+            <button id="disconnectBtn" onclick="disconnectSSE()" disabled>🔌 Desconectar</button>
+            <button onclick="clearLog()">🧹 Limpar Log</button>
+        </div>
+        
+        <div id="status" class="status disconnected">
+            ❌ Desconectado
+        </div>
+        
+        <h3>Log de Eventos:</h3>
+        <div id="log" class="log">Clique em "Conectar SSE" para iniciar o teste...\n</div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let eventCount = 0;
+        
+        function log(message) {
+            const logElement = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logElement.textContent += `[${timestamp}] ${message}\n`;
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+        
+        function updateStatus(status, message) {
+            const statusElement = document.getElementById('status');
+            statusElement.className = `status ${status}`;
+            statusElement.textContent = message;
+        }
+        
+        function connectSSE() {
+            if (eventSource) {
+                log('❌ Já existe uma conexão ativa');
+                return;
+            }
+            
+            const downloadId = `debug-${Date.now()}`;
+            const url = `/api/download-progress?downloadId=${encodeURIComponent(downloadId)}&_t=${Date.now()}`;
+            
+            log(`🔌 Conectando ao SSE: ${url}`);
+            updateStatus('connecting', '🔄 Conectando...');
+            
+            eventSource = new EventSource(url);
+            eventCount = 0;
+            
+            eventSource.onopen = function(event) {
+                log('✅ Conexão SSE estabelecida com sucesso!');
+                updateStatus('connected', '✅ Conectado');
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+            };
+            
+            eventSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    eventCount++;
+                    
+                    if (data.type === 'heartbeat') {
+                        log(`💓 Heartbeat recebido`);
+                    } else {
+                        log(`📡 Evento ${eventCount}: [${data.type}] ${data.step} (${data.progress || 0}%)`);
+                    }
+                    
+                    if (data.type === 'init') {
+                        log('🎯 Evento inicial recebido - SSE funcionando perfeitamente!');
+                    }
+                    
+                } catch (err) {
+                    log(`❌ Erro ao parsear evento: ${err.message}`);
+                    log(`📄 Dados brutos: ${event.data}`);
+                }
+            };
+            
+            eventSource.onerror = function(event) {
+                log(`❌ Erro no EventSource:`);
+                log(`   - readyState: ${eventSource.readyState}`);
+                log(`   - url: ${eventSource.url}`);
+                
+                if (eventSource.readyState === EventSource.CLOSED) {
+                    log('🔌 Conexão fechada pelo servidor');
+                    updateStatus('disconnected', '❌ Conexão fechada');
+                } else if (eventSource.readyState === EventSource.CONNECTING) {
+                    log('🔄 Tentando reconectar...');
+                    updateStatus('connecting', '🔄 Reconectando...');
+                } else {
+                    log('❌ Erro desconhecido na conexão');
+                    updateStatus('disconnected', '❌ Erro na conexão');
+                }
+            };
+        }
+        
+        function disconnectSSE() {
+            if (eventSource) {
+                log('🔌 Fechando conexão SSE...');
+                eventSource.close();
+                eventSource = null;
+                updateStatus('disconnected', '❌ Desconectado');
+                document.getElementById('connectBtn').disabled = false;
+                document.getElementById('disconnectBtn').disabled = true;
+                log(`📊 Total de eventos recebidos: ${eventCount}`);
+            }
+        }
+        
+        function clearLog() {
+            document.getElementById('log').textContent = '';
+        }
+        
+        // Detectar se a página está sendo servida via HTTPS
+        if (location.protocol === 'https:') {
+            log('🔒 Página servida via HTTPS');
+        } else {
+            log('🔓 Página servida via HTTP');
+        }
+        
+        log('🚀 Debug SSE carregado. Pronto para testar!');
+    </script>
+</body>
+</html> 

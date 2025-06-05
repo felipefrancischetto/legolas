@@ -97,10 +97,10 @@ const FileRow = memo(({
       style={{ minHeight: 50 }}
       onClick={e => onContextMenu(e, file)}
     >
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[0], minWidth:40}}>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[0], minWidth:50}}>
         {index + 1}
       </div>
-      <div className="flex items-center justify-center" style={{width:colWidths[1], minWidth:40}}>
+      <div className="flex items-center justify-center" style={{width:colWidths[1], minWidth:50}}>
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -116,7 +116,7 @@ const FileRow = memo(({
           </div>
         </button>
       </div>
-      <div className="truncate text-gray-400 flex items-center gap-2 justify-start" style={{width:colWidths[2], minWidth:40}}>
+      <div className="truncate text-gray-400 flex items-center gap-2 justify-start" style={{width:colWidths[2], minWidth:50}}>
         {file.title || file.displayName}
         {file.isBeatportFormat && (
           <span className="text-xs text-green-500" title="Arquivo já está no formato Beatport">
@@ -124,15 +124,15 @@ const FileRow = memo(({
           </span>
         )}
       </div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[3], minWidth:40}}>{file.duration || '-'}</div>
-      <div className="truncate text-gray-400 flex items-center justify-start" style={{width:colWidths[4], minWidth:40}}>{file.artist || '-'}</div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[5], minWidth:40}}>{file.bpm || '-'}</div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[6], minWidth:40}}>{file.key || '-'}</div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[7], minWidth:40}}>{file.genre || '-'}</div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[8], minWidth:40}}>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[3], minWidth:50}}>{file.duration || '-'}</div>
+      <div className="truncate text-gray-400 flex items-center justify-start" style={{width:colWidths[4], minWidth:50}}>{file.artist || '-'}</div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[5], minWidth:50}}>{file.bpm || '-'}</div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[6], minWidth:50}}>{file.key || '-'}</div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[7], minWidth:50}}>{file.genre || '-'}</div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[8], minWidth:50}}>
         <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.album || ''}>{file.album || '-'}</span>
       </div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[9], minWidth:40}}>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[9], minWidth:50}}>
         <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.label || ''}>{file.label || '-'}</span>
       </div>
     </div>
@@ -430,10 +430,13 @@ export default function FileList() {
 
   // Função para iniciar o resize
   const handleResizeStart = (idx: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
     resizingCol.current = idx;
     startX.current = e.clientX;
     startWidth.current = colWidths[idx];
     document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
     window.addEventListener('mousemove', handleResizing);
     window.addEventListener('mouseup', handleResizeEnd);
   };
@@ -441,9 +444,10 @@ export default function FileList() {
   // Função para redimensionar
   const handleResizing = (e: MouseEvent) => {
     if (resizingCol.current === null) return;
+    e.preventDefault();
     const delta = e.clientX - startX.current;
     const newWidths = [...colWidths];
-    newWidths[resizingCol.current!] = Math.max(40, startWidth.current + delta);
+    newWidths[resizingCol.current!] = Math.max(50, startWidth.current + delta);
     setColWidths(newWidths);
   };
 
@@ -451,6 +455,7 @@ export default function FileList() {
   const handleResizeEnd = () => {
     resizingCol.current = null;
     document.body.style.cursor = '';
+    document.body.style.userSelect = '';
     window.removeEventListener('mousemove', handleResizing);
     window.removeEventListener('mouseup', handleResizeEnd);
   };
@@ -492,6 +497,12 @@ export default function FileList() {
     }
   }, [setActionMenu]);
 
+  // Função para resetar larguras das colunas
+  const resetColumnWidths = useCallback(() => {
+    const defaultWidths = [50, 50, 250, 80, 150, 70, 70, 120, 150, 120];
+    setColWidths(defaultWidths);
+  }, [setColWidths]);
+
   if (loading) {
     return (
       <div className="flex-1 flex justify-center items-center animate-fade-in">
@@ -512,8 +523,8 @@ export default function FileList() {
   const finalGroupedFiles = groupedFiles();
 
   return (
-    <>
-      <div className="flex justify-between items-center mb-4 gap-2">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex justify-between items-center mb-4 gap-2 flex-shrink-0">
         <h2 className="text-xl font-semibold text-white">Arquivos Baixados</h2>
         <div className="flex gap-2">
           <button
@@ -544,6 +555,20 @@ export default function FileList() {
           >
             Selecionar pasta de downloads
           </button>
+          
+          <button
+            onClick={resetColumnWidths}
+            className="px-4 py-2 rounded-md text-sm font-medium bg-zinc-700 text-white hover:bg-zinc-600 transition-all duration-200"
+            title="Resetar larguras das colunas para o padrão"
+          >
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Resetar Colunas
+            </div>
+          </button>
+          
           <button
             onClick={() => setGroupByAlbum(!groupByAlbum)}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
@@ -562,7 +587,7 @@ export default function FileList() {
         </div>
       </div>
       
-      <div className="flex justify-between items-center mb-2">
+      <div className="flex justify-between items-center mb-2 flex-shrink-0">
         <input
           type="text"
           value={search}
@@ -573,12 +598,9 @@ export default function FileList() {
       </div>
       
       <div 
-        className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden flex flex-col flex-1"
-        style={{ 
-          maxHeight: playerOpen ? '400px' : 'none'
-        }}
+        className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden flex flex-col flex-1 min-h-0"
       >
-        <div className="flex w-full px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10" style={{userSelect:'none'}}>
+        <div className="flex w-full px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10 flex-shrink-0" style={{userSelect:'none'}}>
           {[
             { label: '#', sortable: true, align: 'center' },
             { label: '', sortable: false, align: 'center' },
@@ -594,15 +616,16 @@ export default function FileList() {
             <div
               key={col.label}
               className={`flex items-center h-8 relative ${col.sortable ? 'cursor-pointer select-none' : ''} ${col.align === 'center' ? 'justify-center' : 'justify-start'}`}
-              style={{ width: colWidths[idx], minWidth: 40 }}
+              style={{ width: colWidths[idx], minWidth: 50 }}
               onClick={col.sortable ? () => handleSort(col.label.toLowerCase().replace('ações','label') === 'ações' ? 'label' : col.label.toLowerCase()) : undefined}
             >
               <span className="truncate">{col.label} {sortBy === col.label.toLowerCase() && (sortOrder === 'asc' ? '↑' : '↓')}</span>
-              {idx < colWidths.length - 2 && (
+              {idx < colWidths.length - 1 && (
                 <div
                   onMouseDown={e => handleResizeStart(idx, e)}
-                  className="absolute right-0 top-0 h-full w-2 cursor-col-resize z-20"
+                  className="absolute right-0 top-0 h-full w-1 cursor-col-resize z-20 bg-zinc-600 hover:bg-blue-500 transition-colors duration-200 opacity-50 hover:opacity-100"
                   style={{ userSelect: 'none' }}
+                  title="Arrastar para redimensionar coluna"
                 />
               )}
             </div>
@@ -668,6 +691,6 @@ export default function FileList() {
           </button>
         </div>
       )}
-    </>
+    </div>
   );
 }

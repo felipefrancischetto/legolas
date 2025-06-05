@@ -16,7 +16,7 @@ export default function Home() {
   const { playerOpen } = useUI();
   
   return (
-    <main className="flex flex-col min-h-screen bg-black text-white p-4 sm:p-8">
+    <main className="flex flex-col h-screen bg-black text-white p-4 sm:p-8 overflow-hidden">
       <div className="max-w-6xl mx-auto flex-1 flex flex-col min-h-0">
         <div className="text-center mb-8 animate-slide-up">
           <div className="flex items-center justify-center gap-4 mb-4">
@@ -69,7 +69,7 @@ export default function Home() {
           <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200">
             <DownloadForm />
           </div>
-          <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-3 animate-slide-up hover:border-zinc-700 transition-colors duration-200 flex-1 min-h-0 flex flex-col">
+          <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200 flex-1 min-h-0 flex flex-col">
             <FileList />
           </div>
         </div>

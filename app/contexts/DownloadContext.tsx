@@ -2,6 +2,15 @@
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 
+interface DownloadStep {
+  type: string;
+  step: string;
+  substep?: string;
+  detail?: string;
+  progress: number;
+  timestamp: number;
+}
+
 interface DownloadItem {
   id: string;
   url: string;
@@ -15,10 +24,16 @@ interface DownloadItem {
     status: 'pending' | 'downloading' | 'completed' | 'error';
     progress: number;
     error?: string;
+    steps?: DownloadStep[];
   }>;
   format?: string;
   enrichWithBeatport?: boolean;
   metadata?: any;
+  currentStep?: string;
+  currentSubstep?: string;
+  detail?: string;
+  startTime?: number;
+  steps?: DownloadStep[];
   [key: string]: any;
 }
 
@@ -31,34 +46,29 @@ interface DownloadContextType {
   clearHistory: () => void;
   activeDownloads: number;
   maxConcurrentDownloads: number;
-  startDownload: () => void;
-  finishDownload: () => void;
   retryDownload: (id: string, playlistIndex?: number) => void;
   cancelDownload: (id: string, playlistIndex?: number) => void;
-  fetchAndSyncPlaylistStatus: () => Promise<void>;
+  // Estados simplificados
   downloadStatus: {
     loading: boolean;
     error: string | null;
     success: boolean;
-    progress: number;
-    status: string;
-    downloadSteps: string[];
   };
-  setDownloadStatus: (status: Partial<DownloadContextType['downloadStatus']> | ((prev: DownloadContextType['downloadStatus']) => Partial<DownloadContextType['downloadStatus']>)) => void;
-  playlistStatus: {
-    videos: Array<{
-      title: string;
-      status: string;
-      progress: number;
-      error?: string;
-    }> | null;
-    status: string;
-  };
-  setPlaylistStatus: (status: Partial<DownloadContextType['playlistStatus']>) => void;
-  toasts: Array<{ title: string }>;
+  setDownloadStatus: (status: Partial<DownloadContextType['downloadStatus']>) => void;
+  toasts: Array<{ title: string; id: string }>;
   addToast: (toast: { title: string }) => void;
-  removeToast: (index: number) => void;
-  getPlaylistProgress: (title: string) => string | null;
+  removeToast: (id: string) => void;
+  // Funções para gerenciar progresso interno
+  updateProgress: (downloadId: string, progress: number, step?: string, substep?: string, detail?: string) => void;
+  addStep: (downloadId: string, step: DownloadStep) => void;
+  getCurrentDownload: (downloadId: string) => DownloadItem | undefined;
+  getPlaylistProgressData: (itemId: string) => {
+    current: number;
+    total: number;
+    completed: number;
+    errors: number;
+    downloading: number;
+  } | null;
 }
 
 const DownloadContext = createContext<DownloadContextType | undefined>(undefined);
@@ -69,51 +79,39 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   const maxConcurrentDownloads = 3;
   const activeDownloads = queue.filter(item => item.status === 'downloading').length;
 
-  // Novos estados compartilhados
-  const [downloadStatus, setDownloadStatus] = useState<DownloadContextType['downloadStatus']>({
+  // Estados simplificados
+  const [downloadStatus, setDownloadStatusState] = useState<DownloadContextType['downloadStatus']>({
     loading: false,
     error: null,
-    success: false,
-    progress: 0,
-    status: '',
-    downloadSteps: []
+    success: false
   });
 
-  const [playlistStatus, setPlaylistStatus] = useState<DownloadContextType['playlistStatus']>({
-    videos: null,
-    status: ''
-  });
-
-  const [toasts, setToasts] = useState<Array<{ title: string }>>([]);
+  const [toasts, setToasts] = useState<Array<{ title: string; id: string }>>([]);
 
   // Funções para gerenciar toasts
   const addToast = (toast: { title: string }) => {
-    setToasts(prev => [...prev, toast]);
+    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    setToasts(prev => [...prev, { ...toast, id }]);
+    
+    // Auto-remove após 4 segundos
+    setTimeout(() => {
+      removeToast(id);
+    }, 4000);
   };
 
-  const removeToast = (index: number) => {
-    setToasts(prev => prev.filter((_, i) => i !== index));
-  };
-
-  // Função para atualizar o status de download
-  const updateDownloadStatus = (status: Partial<DownloadContextType['downloadStatus']> | ((prev: DownloadContextType['downloadStatus']) => Partial<DownloadContextType['downloadStatus']>)) => {
-    if (typeof status === 'function') {
-      setDownloadStatus(prev => ({ ...prev, ...status(prev) }));
-    } else {
-      setDownloadStatus(prev => ({ ...prev, ...status }));
-    }
-  };
-
-  // Função para atualizar o status da playlist
-  const updatePlaylistStatus = (status: Partial<DownloadContextType['playlistStatus']>) => {
-    setPlaylistStatus(prev => ({ ...prev, ...status }));
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id));
   };
 
   // Carregar histórico do localStorage
   useEffect(() => {
     const savedHistory = localStorage.getItem('downloadHistory');
     if (savedHistory) {
-      setHistory(JSON.parse(savedHistory));
+      try {
+        setHistory(JSON.parse(savedHistory));
+      } catch (err) {
+        console.error('Erro ao carregar histórico:', err);
+      }
     }
   }, []);
 
@@ -123,39 +121,134 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   }, [history]);
 
   const addToQueue = (item: string | Omit<DownloadItem, 'id'>): DownloadItem => {
-    const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     let queueItem: DownloadItem;
+    
     if (typeof item === 'string') {
-      queueItem = { id, url: item, status: 'pending' };
+      queueItem = { 
+        id, 
+        url: item, 
+        status: 'pending',
+        startTime: Date.now(),
+        steps: []
+      };
     } else {
       queueItem = {
         id,
         url: item.url || '',
         status: item.status || 'pending',
+        startTime: Date.now(),
+        steps: [],
         ...item
       };
     }
+    
     setQueue(prev => [...prev, queueItem]);
+    console.log('📝 Item adicionado à fila:', queueItem);
     return queueItem;
   };
 
   const removeFromQueue = (id: string) => {
     setQueue(prev => prev.filter(item => item.id !== id));
+    console.log('🗑️ Item removido da fila:', id);
   };
 
   const updateQueueItem = (id: string, updates: Partial<DownloadItem>) => {
-    setQueue(prev => prev.map(item => 
-      item.id === id ? { ...item, ...updates } : item
-    ));
+    setQueue(prev => prev.map(item => {
+      if (item.id === id) {
+        const updatedItem = { ...item, ...updates };
+        console.log('🔄 Item atualizado na fila:', id, updates);
+        return updatedItem;
+      }
+      return item;
+    }));
 
     // Se o item foi concluído ou teve erro, movê-lo para o histórico
     if (updates.status === 'completed' || updates.status === 'error') {
       const item = queue.find(item => item.id === id);
       if (item) {
-        setHistory(prev => [...prev, { ...item, ...updates }]);
-        removeFromQueue(id);
+        const finalItem = { ...item, ...updates };
+        setHistory(prev => [finalItem, ...prev]);
+        addToast({ 
+          title: updates.status === 'completed' 
+            ? `✅ ${item.title || 'Download'} concluído!`
+            : `❌ Erro em ${item.title || 'Download'}`
+        });
+        
+        // Remover da fila após um delay para mostrar o status final
+        setTimeout(() => {
+          removeFromQueue(id);
+        }, 3000);
       }
     }
+  };
+
+  const updateProgress = (downloadId: string, progress: number, step?: string, substep?: string, detail?: string) => {
+    updateQueueItem(downloadId, {
+      progress,
+      currentStep: step,
+      currentSubstep: substep,
+      detail
+    });
+    
+    // Adicionar step ao histórico se fornecido
+    if (step) {
+      addStep(downloadId, {
+        type: getStepType(step),
+        step,
+        substep,
+        detail,
+        progress,
+        timestamp: Date.now()
+      });
+    }
+  };
+
+  const addStep = (downloadId: string, step: DownloadStep) => {
+    setQueue(prev => prev.map(item => {
+      if (item.id === downloadId) {
+        const steps = [...(item.steps || []), step];
+        console.log(`📋 Step adicionado para ${downloadId}:`, step);
+        return { ...item, steps };
+      }
+      return item;
+    }));
+  };
+
+  const getStepType = (step: string): string => {
+    if (step.includes('Preparando') || step.includes('Conectado')) return 'init';
+    if (step.includes('pasta') || step.includes('Verificando')) return 'setup';
+    if (step.includes('informações') || step.includes('Extraindo')) return 'info';
+    if (step.includes('Baixando') || step.includes('download')) return 'download';
+    if (step.includes('metadados') || step.includes('Beatport')) return 'metadata';
+    if (step.includes('Escrevendo') || step.includes('tags')) return 'tagging';
+    if (step.includes('Verificação') || step.includes('integridade')) return 'verification';
+    if (step.includes('concluído') || step.includes('finalizado')) return 'complete';
+    return 'unknown';
+  };
+
+  const getCurrentDownload = (downloadId: string) => {
+    return queue.find(item => item.id === downloadId);
+  };
+
+  const getPlaylistProgressData = (itemId: string) => {
+    const playlistItem = queue.find(item => item.id === itemId && item.isPlaylist);
+    if (playlistItem && playlistItem.playlistItems) {
+      const total = playlistItem.playlistItems.length;
+      const completed = playlistItem.playlistItems.filter(i => i.status === 'completed').length;
+      const errors = playlistItem.playlistItems.filter(i => i.status === 'error').length;
+      const downloading = playlistItem.playlistItems.filter(i => i.status === 'downloading').length;
+      const current = completed + errors + downloading;
+      
+      return {
+        current,
+        total,
+        completed,
+        errors,
+        downloading
+      };
+    }
+    return null;
   };
 
   const clearHistory = () => {
@@ -163,122 +256,187 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('downloadHistory');
   };
 
-  const startDownload = () => {};
-  const finishDownload = () => {};
-
-  // Retry download (playlistIndex opcional para item individual de playlist)
+  // Retry download
   const retryDownload = (id: string, playlistIndex?: number) => {
     setQueue(prev => prev.map(item => {
       if (item.id !== id) return item;
+      
       if (item.isPlaylist && typeof playlistIndex === 'number' && item.playlistItems) {
         // Retry apenas o item da playlist
         const updatedPlaylistItems = item.playlistItems.map((plItem: any, idx: number) =>
-          idx === playlistIndex ? { ...plItem, status: 'pending', progress: 0, error: undefined } : plItem
+          idx === playlistIndex ? { 
+            ...plItem, 
+            status: 'pending', 
+            progress: 0, 
+            error: undefined,
+            steps: []
+          } : plItem
         );
-        return { ...item, playlistItems: updatedPlaylistItems, status: 'pending', error: undefined };
+        return { 
+          ...item, 
+          playlistItems: updatedPlaylistItems, 
+          status: 'pending', 
+          error: undefined,
+          currentStep: 'Tentando novamente...',
+          steps: []
+        };
       } else {
         // Retry o item inteiro
-        return { ...item, status: 'pending', progress: 0, error: undefined };
+        return { 
+          ...item, 
+          status: 'pending', 
+          progress: 0, 
+          error: undefined,
+          currentStep: 'Tentando novamente...',
+          startTime: Date.now(),
+          steps: []
+        };
       }
     }));
+    
+    console.log('🔄 Tentando novamente:', id, playlistIndex);
   };
 
-  // Cancel download (playlistIndex opcional para item individual de playlist)
+  // Cancel download
   const cancelDownload = (id: string, playlistIndex?: number) => {
     setQueue(prev => prev.map(item => {
       if (item.id !== id) return item;
+      
       if (item.isPlaylist && typeof playlistIndex === 'number' && item.playlistItems) {
         // Cancelar apenas o item da playlist
         const updatedPlaylistItems = item.playlistItems.map((plItem: any, idx: number) =>
-          idx === playlistIndex ? { ...plItem, status: 'error', error: 'Cancelado pelo usuário' } : plItem
+          idx === playlistIndex ? { 
+            ...plItem, 
+            status: 'error', 
+            error: 'Cancelado pelo usuário' 
+          } : plItem
         );
         return { ...item, playlistItems: updatedPlaylistItems };
       } else {
         // Cancelar o item inteiro
-        return { ...item, status: 'error', error: 'Cancelado pelo usuário' };
+        return { 
+          ...item, 
+          status: 'error', 
+          error: 'Cancelado pelo usuário',
+          currentStep: 'Cancelado'
+        };
       }
     }));
+    
+    console.log('❌ Download cancelado:', id, playlistIndex);
   };
 
-  // Sincroniza status real da playlist com o backend
-  const fetchAndSyncPlaylistStatus = async () => {
-    try {
-      const res = await fetch('/api/playlist-status');
-      const data = await res.json();
-      if (data && Array.isArray(data.videos)) {
-        setQueue(prevQueue => prevQueue.map(item => {
-          if (!item.isPlaylist || !item.playlistItems) return item;
-          // Atualiza status das faixas
-          const updatedPlaylistItems = item.playlistItems.map((plItem: any, idx: number) => {
-            const backendStatus = data.videos[idx];
-            if (!backendStatus) return plItem;
-            let status: any = plItem.status;
-            if (backendStatus.status === 'success' || backendStatus.status === 'existing') status = 'completed';
-            else if (backendStatus.status === 'downloading') status = 'downloading';
-            else if (backendStatus.status === 'error') status = 'error';
-            else status = 'pending';
-            return {
-              ...plItem,
-              status,
-              error: backendStatus.status === 'error' ? backendStatus.message : undefined,
-              progress: status === 'completed' ? 100 : plItem.progress || 0,
-            };
-          });
-          // Atualiza status geral do item playlist
-          let overallStatus = 'pending';
-          if (updatedPlaylistItems.every((pl: any) => pl.status === 'completed')) overallStatus = 'completed';
-          else if (updatedPlaylistItems.some((pl: any) => pl.status === 'downloading')) overallStatus = 'downloading';
-          else if (updatedPlaylistItems.some((pl: any) => pl.status === 'error')) overallStatus = 'error';
-          // Calcula progresso individual da playlist
-          const total = updatedPlaylistItems.length;
-          const completed = updatedPlaylistItems.filter((pl: any) => pl.status === 'completed').length;
-          const errors = updatedPlaylistItems.filter((pl: any) => pl.status === 'error').length;
-          const remaining = total - completed - errors;
-          if (overallStatus !== 'completed') {
-            setDownloadStatus(prev => ({
-              ...prev,
-              status: `Baixando playlist: ${completed} concluídas, ${remaining} restantes, ${errors} erros`,
-              downloadSteps: [
-                ...prev.downloadSteps,
-                `Baixando playlist: ${completed} concluídas, ${remaining} restantes, ${errors} erros`
-              ]
-            }));
-          }
-          return {
-            ...item,
-            playlistItems: updatedPlaylistItems,
-            status: overallStatus as any,
-          };
-        }));
-      }
-    } catch (err) {
-      // Ignorar erros de polling
-    }
+  // Função para atualizar status geral
+  const setDownloadStatus = (status: Partial<DownloadContextType['downloadStatus']>) => {
+    setDownloadStatusState(prev => ({ ...prev, ...status }));
   };
 
-  // Função para obter progresso da playlist
-  const getPlaylistProgress = (title: string): string | null => {
-    const playlistItem = queue.find(item => item.isPlaylist && item.title === title);
-    if (playlistItem && playlistItem.playlistItems) {
-      const total = playlistItem.playlistItems.length;
-      const completed = playlistItem.playlistItems.filter(i => i.status === 'completed').length;
-      const errors = playlistItem.playlistItems.filter(i => i.status === 'error').length;
-      const remaining = total - completed - errors;
-      return `Baixando playlist: ${completed} concluídas, ${remaining} restantes, ${errors} erros`;
-    }
-    return null;
-  };
-
+  // Auto-processar fila quando há downloads pendentes
   useEffect(() => {
-    // Polling global para playlists em andamento
-    const interval = setInterval(() => {
-      const hasActivePlaylist = queue.some(item => item.isPlaylist && item.status !== 'completed');
-      if (hasActivePlaylist) {
-        fetchAndSyncPlaylistStatus();
+    const pendingDownloads = queue.filter(item => item.status === 'pending');
+    const activeCount = queue.filter(item => item.status === 'downloading').length;
+    
+    // Processar próximo download se há espaço
+    if (pendingDownloads.length > 0 && activeCount < maxConcurrentDownloads) {
+      const nextDownload = pendingDownloads[0];
+      console.log('🎯 Processando próximo download da fila:', nextDownload.id);
+      
+      // Processar download real
+      processRealDownload(nextDownload);
+    }
+  }, [queue, maxConcurrentDownloads]);
+
+  // 🔧 Função REAL de processamento de download - integrada com as APIs
+  const processRealDownload = async (item: DownloadItem) => {
+    try {
+      // Iniciar download
+      updateQueueItem(item.id, { 
+        status: 'downloading', 
+        progress: 0,
+        currentStep: 'Iniciando download...',
+        startTime: Date.now()
+      });
+
+      console.log(`🚀 Iniciando download real para: ${item.title} (${item.isPlaylist ? 'playlist' : 'individual'})`);
+
+      // Determinar endpoint baseado no tipo
+      const endpoint = item.isPlaylist ? 'playlist' : 'download';
+      const params = new URLSearchParams({
+        url: item.url,
+        format: item.format || 'mp3',
+        useBeatport: (item.enrichWithBeatport || false).toString(),
+        downloadId: item.id
+      });
+
+      // Configurar monitoramento de progresso em tempo real se for download individual
+      let progressInterval: NodeJS.Timeout | null = null;
+      
+      if (!item.isPlaylist) {
+        // Para downloads individuais, simular steps enquanto aguarda API
+        const individualSteps = [
+          { step: 'Preparando download...', progress: 5 },
+          { step: 'Verificando pasta de downloads...', progress: 10 },
+          { step: 'Extraindo informações do vídeo...', progress: 15 },
+          { step: 'Baixando áudio...', progress: 40 },
+          { step: 'Processando metadados...', progress: 70 },
+          { step: 'Escrevendo tags no arquivo...', progress: 85 },
+          { step: 'Verificando integridade...', progress: 95 }
+        ];
+
+        let stepIndex = 0;
+        progressInterval = setInterval(() => {
+          if (stepIndex < individualSteps.length) {
+            const currentStepInfo = individualSteps[stepIndex];
+            updateProgress(
+              item.id, 
+              currentStepInfo.progress, 
+              currentStepInfo.step,
+              `Processando: ${item.title}`
+            );
+            stepIndex++;
+          }
+        }, 2000); // Step a cada 2 segundos
       }
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [queue]);
+
+      // Chamar API real
+      const response = await fetch(`/api/${endpoint}?${params.toString()}`);
+      const data = await response.json();
+
+      // Limpar interval se existir
+      if (progressInterval) {
+        clearInterval(progressInterval);
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erro no download');
+      }
+
+      // Sucesso - finalizar download
+      updateProgress(item.id, 100, 'Download concluído com sucesso! 🎉');
+      updateQueueItem(item.id, { 
+        status: 'completed', 
+        progress: 100,
+        currentStep: 'Download concluído!',
+        metadata: data.info || data.details
+      });
+
+      console.log(`✅ Download concluído com sucesso: ${item.title}`);
+      
+      // Atualizar lista de arquivos
+      window.dispatchEvent(new CustomEvent('refresh-files'));
+      
+    } catch (error) {
+      console.error('❌ Erro no download real:', error);
+      
+      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+      updateProgress(item.id, 0, 'Erro no download', 'Falha no processamento', errorMessage);
+      updateQueueItem(item.id, {
+        status: 'error',
+        error: errorMessage,
+        currentStep: 'Erro no download'
+      });
+    }
+  };
 
   return (
     <DownloadContext.Provider value={{
@@ -290,19 +448,17 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       clearHistory,
       activeDownloads,
       maxConcurrentDownloads,
-      startDownload,
-      finishDownload,
       retryDownload,
       cancelDownload,
-      fetchAndSyncPlaylistStatus,
       downloadStatus,
-      setDownloadStatus: updateDownloadStatus,
-      playlistStatus,
-      setPlaylistStatus: updatePlaylistStatus,
+      setDownloadStatus,
       toasts,
       addToast,
       removeToast,
-      getPlaylistProgress
+      updateProgress,
+      addStep,
+      getCurrentDownload,
+      getPlaylistProgressData
     }}>
       {children}
     </DownloadContext.Provider>

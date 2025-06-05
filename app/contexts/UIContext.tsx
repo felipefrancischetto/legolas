@@ -34,8 +34,35 @@ export function UIProvider({ children }: { children: ReactNode }) {
   const [playerOpen, setPlayerOpen] = useState(false);
   const [playerReady, setPlayerReady] = useState(false);
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number; file: any | null } | null>(null);
-  const initialWidths = [32, 48, 200, 80, 120, 60, 60, 100, 100, 80, 120];
-  const [colWidths, setColWidths] = useState<number[]>(initialWidths);
+  
+  // 10 colunas: #, Thumbnail, Título, Duração, Artista, BPM, Key, Gênero, Álbum, Label
+  const defaultWidths = [50, 50, 250, 80, 150, 70, 70, 120, 150, 120];
+  
+  const [colWidths, setColWidths] = useState<number[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('columnWidths');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          // Verificar se o array tem o tamanho correto
+          if (Array.isArray(parsed) && parsed.length === defaultWidths.length) {
+            return parsed;
+          }
+        } catch (e) {
+          console.warn('Erro ao carregar larguras das colunas salvas:', e);
+        }
+      }
+    }
+    return defaultWidths;
+  });
+
+  // Salvar larguras no localStorage quando alteradas
+  const handleSetColWidths = (widths: number[]) => {
+    setColWidths(widths);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('columnWidths', JSON.stringify(widths));
+    }
+  };
 
   return (
     <UIContext.Provider value={{
@@ -56,7 +83,7 @@ export function UIProvider({ children }: { children: ReactNode }) {
       actionMenu,
       setActionMenu,
       colWidths,
-      setColWidths
+      setColWidths: handleSetColWidths
     }}>
       {children}
     </UIContext.Provider>

@@ -254,7 +254,7 @@ export default function AudioPlayer() {
       </div>
       {/* Mini player flutuante, renderizado fora do player principal */}
       {minimized && (
-        <div className="fixed bottom-4 right-4 z-[100] bg-zinc-900 rounded-xl shadow-lg flex items-center gap-3 px-3 py-2 min-w-[220px] max-w-[320px] border border-zinc-800">
+        <div className="fixed bottom-8 right-8 z-[100] bg-zinc-900 rounded-xl shadow-lg flex items-center gap-3 px-3 py-2 min-w-[220px] max-w-[320px] border border-zinc-800">
           <Image
             src={getThumbnailUrl(playerState.currentFile.name)}
             alt={playerState.currentFile.title || playerState.currentFile.displayName}

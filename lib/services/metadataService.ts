@@ -928,9 +928,23 @@ class BeatportProviderV2 implements MetadataProvider {
   }
 
   async search(title: string, artist: string): Promise<Partial<EnhancedMetadata> | null> {
+    // ⚡ Timeout global de 90 segundos para todo o processo Beatport
+    const timeoutMs = 90000;
+    
+    return Promise.race([
+      this.performBeatportSearch(title, artist),
+      new Promise<null>((_, reject) => 
+        setTimeout(() => reject(new Error('Beatport timeout - operação cancelada após 90s')), timeoutMs)
+      )
+    ]);
+  }
+
+  private async performBeatportSearch(title: string, artist: string): Promise<Partial<EnhancedMetadata> | null> {
     const puppeteer = await import('puppeteer');
     const browser = await puppeteer.default.launch({ 
       headless: true,
+      timeout: 30000, // ⚡ Aumentado para 30s para lançar o browser
+      protocolTimeout: 60000, // ⚡ Aumentado para 60s para o protocolo
       args: [
         '--no-sandbox', 
         '--disable-setuid-sandbox',
@@ -966,8 +980,8 @@ class BeatportProviderV2 implements MetadataProvider {
       });
       // Buscar na página de search
       const searchUrl = `https://www.beatport.com/search?q=${encodeURIComponent(`${artist} ${title}`)}`;
-      await page.goto(searchUrl, { waitUntil: 'networkidle0', timeout: 45000 });
-      await new Promise(resolve => setTimeout(resolve, 4000));
+      await page.goto(searchUrl, { waitUntil: 'networkidle0', timeout: 45000 }); // ⚡ Aumentado para 45s
+      await new Promise(resolve => setTimeout(resolve, 3000)); // ⚡ Aumentado para 3s
       
       // Tratar cookies se aparecerem
       try {
@@ -1090,8 +1104,8 @@ class BeatportProviderV2 implements MetadataProvider {
       console.log(`   📋 Copie esta URL para validar manualmente no browser`);
       console.log(`   ======================================================\n`);
       
-      await page.goto(trackUrl, { waitUntil: 'networkidle0', timeout: 45000 });
-      await new Promise(resolve => setTimeout(resolve, 4000));
+      await page.goto(trackUrl, { waitUntil: 'networkidle0', timeout: 45000 }); // ⚡ Aumentado para 45s
+      await new Promise(resolve => setTimeout(resolve, 3000)); // ⚡ Aumentado para 3s
       
       // Tratar cookies novamente na página da track
       try {

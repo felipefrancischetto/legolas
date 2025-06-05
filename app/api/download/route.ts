@@ -5,6 +5,7 @@ import { mkdir, access, unlink, readdir, readFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { constants } from 'fs';
 import NodeID3 from 'node-id3';
+import { sendProgressEvent } from '../download-progress/route';
 
 const execAsync = promisify(exec);
 
@@ -33,11 +34,15 @@ async function getDownloadsPath() {
 }
 
 export async function GET(request: NextRequest) {
+  // 🔧 Declarar downloadId fora do try para estar disponível no catch
+  let downloadId: string | null = null;
+  
   try {
     const searchParams = request.nextUrl.searchParams;
     const url = searchParams.get('url');
     const format = searchParams.get('format') || 'flac';
     const useBeatport = searchParams.get('useBeatport') === 'true';
+    downloadId = searchParams.get('downloadId');
     
     if (!url) {
       return NextResponse.json(
@@ -46,7 +51,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log('Iniciando download para URL:', url, 'Formato:', format, 'Beatport:', useBeatport);
+    console.log('Iniciando download para URL:', url, 'Formato:', format, 'Beatport:', useBeatport, 'DownloadID:', downloadId);
+
+    // Enviar evento inicial
+    if (downloadId) {
+      console.log(`🎯 Enviando evento inicial para downloadId: ${downloadId}`);
+      sendProgressEvent(downloadId, {
+        type: 'init',
+        step: 'Preparando download...',
+        progress: 5,
+        detail: `Formato: ${format.toUpperCase()}, Beatport: ${useBeatport ? 'Ativado' : 'Desativado'}`
+      });
+    } else {
+      console.warn('⚠️  Download iniciado sem downloadId - eventos de progresso não serão enviados');
+    }
 
     // Obter o caminho de downloads
     const downloadsFolder = await getDownloadsPath();
@@ -54,6 +72,26 @@ export async function GET(request: NextRequest) {
     // Criar pasta de downloads se não existir
     await mkdir(downloadsFolder, { recursive: true });
     console.log('Pasta de downloads criada/verificada:', downloadsFolder);
+
+    // Evento: Verificando pasta
+    if (downloadId) {
+      sendProgressEvent(downloadId, {
+        type: 'setup',
+        step: 'Verificando pasta de downloads...',
+        progress: 10,
+        detail: downloadsFolder
+      });
+    }
+
+    // Evento: Extraindo informações
+    if (downloadId) {
+      sendProgressEvent(downloadId, {
+        type: 'info',
+        step: 'Extraindo informações do vídeo...',
+        progress: 15,
+        substep: 'Conectando com YouTube'
+      });
+    }
 
     // Obter informações do vídeo
     const { stdout: infoJson } = await execAsync(
@@ -66,8 +104,44 @@ export async function GET(request: NextRequest) {
     );
     const videoInfo = JSON.parse(infoJson);
 
+    // Evento: Informações extraídas
+    if (downloadId) {
+      sendProgressEvent(downloadId, {
+        type: 'info',
+        step: 'Informações extraídas com sucesso',
+        progress: 20,
+        detail: `Título: ${videoInfo.title}`,
+        metadata: {
+          title: videoInfo.title,
+          duration: videoInfo.duration,
+          uploader: videoInfo.uploader
+        }
+      });
+    }
+
+    // Evento: Iniciando download do áudio
+    if (downloadId) {
+      sendProgressEvent(downloadId, {
+        type: 'download',
+        step: 'Iniciando download do áudio...',
+        progress: 25,
+        substep: 'Preparando extração de áudio'
+      });
+    }
+
     // Baixar o vídeo no formato selecionado com metadados
     console.log('Iniciando download do áudio...');
+    
+    // Evento: Download em progresso
+    if (downloadId) {
+      sendProgressEvent(downloadId, {
+        type: 'download',
+        step: 'Baixando áudio...',
+        progress: 30,
+        substep: 'Conectando com servidor de mídia'
+      });
+    }
+
     const { stdout } = await execAsync(
       `yt-dlp -x --audio-format ${format} --audio-quality 10 ` +
       `--embed-thumbnail --convert-thumbnails jpg ` +
@@ -81,9 +155,41 @@ export async function GET(request: NextRequest) {
     );
     console.log('Download concluído:', stdout);
 
+    // Evento: Download do áudio concluído
+    if (downloadId) {
+      sendProgressEvent(downloadId, {
+        type: 'download',
+        step: 'Download do áudio concluído',
+        progress: 50,
+        substep: 'Processando arquivo de áudio'
+      });
+    }
+
     // Aguardar um pouco para evitar conflito de arquivo em uso
     console.log('⏳ Aguardando finalização completa do download...');
+    
+    // Evento: Finalizando processo
+    if (downloadId) {
+      sendProgressEvent(downloadId, {
+        type: 'processing',
+        step: 'Finalizando processo de download...',
+        progress: 55,
+        substep: 'Aguardando liberação do arquivo'
+      });
+    }
+    
     await new Promise(resolve => setTimeout(resolve, 2000)); // 2 segundos de delay
+
+    // Evento: Iniciando busca de metadados
+    if (downloadId) {
+      sendProgressEvent(downloadId, {
+        type: 'metadata',
+        step: 'Iniciando busca de metadados...',
+        progress: 60,
+        substep: useBeatport ? 'Consultando Beatport' : 'Consultando base de dados',
+        detail: `Título: ${videoInfo.title} | Artista: ${videoInfo.uploader}`
+      });
+    }
 
     // Buscar metadados usando o serviço agregador melhorado
     let metadata = null;
@@ -121,6 +227,25 @@ export async function GET(request: NextRequest) {
         console.log(`      • Year: ${metadata.year || 'N/A'}`);
         console.log(`      • Album: ${metadata.album || 'N/A'}`);
         
+        // Evento: Metadados encontrados
+        if (downloadId) {
+          const beatportUsed = useBeatport && metadata.sources?.includes('Beatport');
+          sendProgressEvent(downloadId, {
+            type: 'metadata',
+            step: 'Metadados encontrados com sucesso!',
+            progress: 70,
+            substep: beatportUsed ? 'Dados do Beatport obtidos' : 'Dados da base geral obtidos',
+            detail: `BPM: ${metadata.bpm || 'N/A'} | Key: ${metadata.key || 'N/A'} | Genre: ${metadata.genre || 'N/A'}`,
+            metadata: {
+              bpm: metadata.bpm,
+              key: metadata.key,
+              genre: metadata.genre,
+              label: metadata.label,
+              sources: metadata.sources
+            }
+          });
+        }
+        
         if (useBeatport && metadata.sources?.includes('Beatport')) {
           console.log('🎉 [Download] DADOS DO BEATPORT UTILIZADOS! ✨');
         } else if (useBeatport) {
@@ -128,6 +253,17 @@ export async function GET(request: NextRequest) {
         }
       } else {
         console.error('❌ [Download] Erro na resposta do serviço de metadados:', metadataRes.status);
+        
+        // Evento: Erro na busca de metadados
+        if (downloadId) {
+          sendProgressEvent(downloadId, {
+            type: 'metadata',
+            step: 'Erro na busca de metadados',
+            progress: 65,
+            substep: 'Tentando fonte alternativa...',
+            detail: `Status: ${metadataRes.status}`
+          });
+        }
       }
     } catch (err) {
       console.error('❌ [Download] Erro ao buscar metadados melhorados:', err);
@@ -145,6 +281,17 @@ export async function GET(request: NextRequest) {
       } catch (fallbackErr) {
         console.error('❌ [Download] Erro também no fallback MusicBrainz:', fallbackErr);
       }
+    }
+
+    // Evento: Iniciando escrita de metadados
+    if (downloadId) {
+      sendProgressEvent(downloadId, {
+        type: 'tagging',
+        step: 'Escrevendo metadados no arquivo...',
+        progress: 75,
+        substep: `Preparando tags ${format.toUpperCase()}`,
+        detail: `Arquivo: ${videoInfo.title}.${format}`
+      });
     }
 
     // Escrever metadados no arquivo
@@ -285,6 +432,17 @@ export async function GET(request: NextRequest) {
         if (success) {
           console.log('✅ [Download] Metadados escritos com sucesso no arquivo!');
           
+          // Evento: Tags escritas com sucesso
+          if (downloadId) {
+            sendProgressEvent(downloadId, {
+              type: 'tagging',
+              step: 'Metadados escritos com sucesso!',
+              progress: 85,
+              substep: 'Verificando integridade das tags',
+              detail: `Tags ${format.toUpperCase()} aplicadas no arquivo`
+            });
+          }
+          
           // Verificar se os metadados foram realmente escritos usando FFprobe
           try {
             console.log(`\n🔍 [Download] Verificação com FFprobe...`);
@@ -304,8 +462,38 @@ export async function GET(request: NextRequest) {
             const hasBeatportData = fileTags.bpm || fileTags.BPM || fileTags.initialkey || fileTags.INITIALKEY || fileTags.label || fileTags.LABEL;
             console.log(`      🎯 Dados Beatport salvos: ${hasBeatportData ? '✅ SIM' : '❌ NÃO'}`);
             
+            // Evento: Verificação concluída
+            if (downloadId) {
+              sendProgressEvent(downloadId, {
+                type: 'verification',
+                step: 'Verificação de integridade concluída',
+                progress: 90,
+                substep: 'Tags verificadas no arquivo',
+                detail: `BPM: ${fileTags.bpm || fileTags.BPM || 'N/A'} | Key: ${fileTags.initialkey || fileTags.INITIALKEY || 'N/A'}`,
+                metadata: {
+                  title: fileTags.title || fileTags.TITLE,
+                  artist: fileTags.artist || fileTags.ARTIST,
+                  bpm: fileTags.bpm || fileTags.BPM,
+                  key: fileTags.initialkey || fileTags.INITIALKEY,
+                  genre: fileTags.genre || fileTags.GENRE,
+                  hasBeatportData
+                }
+              });
+            }
+            
           } catch (probeErr) {
             console.error('⚠️  [Download] Erro na verificação com FFprobe:', probeErr);
+            
+            // Evento: Erro na verificação
+            if (downloadId) {
+              sendProgressEvent(downloadId, {
+                type: 'verification',
+                step: 'Erro na verificação de integridade',
+                progress: 88,
+                substep: 'Problema ao verificar tags',
+                detail: `Erro: ${probeErr instanceof Error ? probeErr.message : 'Desconhecido'}`
+              });
+            }
           }
           
         } else {
@@ -327,6 +515,33 @@ export async function GET(request: NextRequest) {
     console.log('📋 [Download] Processo concluído!');
     console.log('═══════════════════════════════════════════════════\n');
 
+    // Evento final: Processo concluído - SEMPRE enviar
+    if (downloadId) {
+      const finalMetadata = {
+        title: videoInfo.title,
+        artist: videoInfo.uploader,
+        duration: videoInfo.duration,
+        format: format,
+        hasBeatportData: useBeatport && metadata?.sources?.includes('Beatport'),
+        finalMetadata: metadata
+      };
+
+      console.log(`🎯 Enviando evento COMPLETE final para downloadId: ${downloadId}`);
+      sendProgressEvent(downloadId, {
+        type: 'complete',
+        step: 'Download concluído com sucesso! 🎉',
+        progress: 100,
+        substep: 'Processo finalizado',
+        detail: `Arquivo: ${videoInfo.title}.${format}`,
+        metadata: finalMetadata
+      });
+
+      // 🔧 Aguardar um pouco para garantir que o evento seja processado
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      console.log(`✅ Evento COMPLETE enviado com sucesso para: ${downloadId}`);
+    }
+
     return NextResponse.json({
       status: 'concluído',
       message: 'Download concluído com sucesso',
@@ -334,14 +549,30 @@ export async function GET(request: NextRequest) {
         title: videoInfo.title,
         artist: videoInfo.uploader,
         duration: videoInfo.duration,
-        thumbnail: videoInfo.thumbnail
+        thumbnail: videoInfo.thumbnail,
+        format: format,
+        metadata: metadata
       }
     });
 
   } catch (error) {
     console.error('Erro detalhado ao processar vídeo:', error);
+    
+    // 🔧 Enviar evento de erro via SSE se downloadId estiver disponível
+    const errorMessage = error instanceof Error ? error.message : 'Erro ao processar o vídeo';
+    
+    if (downloadId) {
+      console.log(`❌ Enviando evento ERROR para downloadId: ${downloadId}`);
+      sendProgressEvent(downloadId, {
+        type: 'error',
+        step: 'Erro no download',
+        progress: 0,
+        detail: errorMessage
+      });
+    }
+    
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Erro ao processar o vídeo' },
+      { error: errorMessage },
       { status: 500 }
     );
   }

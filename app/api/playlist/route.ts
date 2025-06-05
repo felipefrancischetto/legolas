@@ -12,6 +12,7 @@ export async function GET(request: NextRequest) {
     const enhanceMetadata = searchParams.get('enhanceMetadata') !== 'false'; // Default to true
     const maxConcurrent = parseInt(searchParams.get('maxConcurrent') || '3');
     const useBeatport = searchParams.get('useBeatport') === 'true'; // Toggle para Beatport
+    const downloadId = searchParams.get('downloadId'); // Para SSE
     
     if (!url) {
       return NextResponse.json(
@@ -24,7 +25,8 @@ export async function GET(request: NextRequest) {
       format,
       enhanceMetadata,
       maxConcurrent,
-      useBeatport
+      useBeatport,
+      downloadId
     });
 
     // Use the enhanced playlist download service
@@ -32,7 +34,8 @@ export async function GET(request: NextRequest) {
       format: format as 'mp3' | 'flac' | 'wav',
       enhanceMetadata,
       maxConcurrent,
-      useBeatport // Passar o toggle para o serviço
+      useBeatport, // Passar o toggle para o serviço
+      downloadId // Passar downloadId para SSE
     });
 
     if (result.success) {

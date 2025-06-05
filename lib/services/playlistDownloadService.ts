@@ -7,6 +7,7 @@ import NodeID3 from 'node-id3';
 import { metadataAggregator } from './metadataService';
 import { logger } from '../utils/logger';
 import { scrapeTracklist } from '../tracklistScraper';
+import { sendProgressEvent } from '../../app/api/download-progress/route';
 
 const execAsync = promisify(exec);
 
@@ -16,6 +17,7 @@ export interface PlaylistDownloadOptions {
   enhanceMetadata?: boolean;
   maxConcurrent?: number;
   useBeatport?: boolean;
+  downloadId?: string; // Para eventos SSE
 }
 
 export interface PlaylistDownloadResult {
@@ -74,7 +76,8 @@ export class PlaylistDownloadService {
       quality = '0',
       enhanceMetadata = true,
       maxConcurrent = 3,
-      useBeatport = false
+      useBeatport = false,
+      downloadId
     } = options;
 
     const downloadsFolder = await getDownloadsPath();
@@ -94,15 +97,44 @@ export class PlaylistDownloadService {
     let scrapedTracklist: any[] = [];
 
     try {
-      logger.info(`Starting playlist download: ${url} (Beatport mode: ${useBeatport})`);
+      logger.info(`Starting playlist download: ${url} (Beatport mode: ${useBeatport}, downloadId: ${downloadId})`);
+
+      // Enviar evento inicial para playlists
+      if (downloadId) {
+        sendProgressEvent(downloadId, {
+          type: 'init',
+          step: 'Iniciando download da playlist...',
+          progress: 5,
+          detail: `Formato: ${format.toUpperCase()}, Beatport: ${useBeatport ? 'Ativado' : 'Desativado'}`
+        });
+      }
 
       // 1. Scraping da tracklist antes de baixar
       try {
         logger.info('Iniciando scraping da tracklist...');
+        
+        if (downloadId) {
+          sendProgressEvent(downloadId, {
+            type: 'scraping',
+            step: 'Analisando tracklist da playlist...',
+            progress: 10,
+            substep: 'Extraindo informações das faixas'
+          });
+        }
+        
         const scrapingResult = await scrapeTracklist(url);
         if (scrapingResult && scrapingResult.tracks) {
           scrapedTracklist = scrapingResult.tracks;
           logger.info(`Tracklist scraping: ${scrapedTracklist.length} faixas encontradas.`);
+          
+          if (downloadId) {
+            sendProgressEvent(downloadId, {
+              type: 'scraping',
+              step: 'Tracklist analisada com sucesso',
+              progress: 15,
+              detail: `${scrapedTracklist.length} faixas identificadas`
+            });
+          }
         } else {
           logger.warn('Tracklist scraping não retornou faixas.');
         }
@@ -110,10 +142,29 @@ export class PlaylistDownloadService {
         logger.error('Erro ao fazer scraping da tracklist:', err);
         // Manter scrapedTracklist como array vazio em caso de erro
         scrapedTracklist = [];
+        
+        if (downloadId) {
+          sendProgressEvent(downloadId, {
+            type: 'scraping',
+            step: 'Erro na análise da tracklist',
+            progress: 12,
+            detail: 'Continuando sem informações extras'
+          });
+        }
       }
 
       // Get playlist info to determine number of tracks
       logger.info('🔍 Getting playlist information...');
+      
+      if (downloadId) {
+        sendProgressEvent(downloadId, {
+          type: 'info',
+          step: 'Extraindo informações da playlist...',
+          progress: 20,
+          substep: 'Conectando com YouTube'
+        });
+      }
+      
       const { stdout: playlistInfo } = await execAsync(
         `yt-dlp --dump-json --flat-playlist "${url}"`,
         { maxBuffer: 1024 * 1024 * 50 } // 50MB buffer for large playlists
@@ -133,6 +184,19 @@ export class PlaylistDownloadService {
 
       result.totalTracks = playlistEntries.length;
       logger.info(`📊 Found ${result.totalTracks} tracks in playlist`);
+      
+      if (downloadId) {
+        sendProgressEvent(downloadId, {
+          type: 'info',
+          step: 'Informações da playlist extraídas',
+          progress: 25,
+          detail: `${result.totalTracks} faixas encontradas`,
+          metadata: {
+            totalTracks: result.totalTracks,
+            format: format
+          }
+        });
+      }
 
       // Associate scraping data with playlist entries
       playlistEntries.forEach((entry, idx) => {
@@ -148,6 +212,16 @@ export class PlaylistDownloadService {
 
       // **NOVO FLUXO: Download + Metadata por música individual**
       logger.info('🎵 Starting sequential download with real-time metadata enhancement...');
+      
+      if (downloadId) {
+        sendProgressEvent(downloadId, {
+          type: 'download',
+          step: 'Iniciando downloads sequenciais...',
+          progress: 30,
+          substep: 'Preparando processamento das faixas'
+        });
+      }
+      
       await this.downloadAndProcessTracksSequentially(
         url,
         playlistEntries,
@@ -156,16 +230,63 @@ export class PlaylistDownloadService {
         quality,
         enhanceMetadata,
         useBeatport,
-        result
+        result,
+        downloadId // Passar downloadId
       );
 
       result.success = true;
       logger.info(`Playlist download completed. Enhanced ${result.enhancedTracks}/${result.totalTracks} tracks (Beatport: ${result.beatportTracksFound})`);
 
+      // Evento final de conclusão - SEMPRE enviar
+      if (downloadId) {
+        const finalMetadata = {
+          totalTracks: result.totalTracks,
+          downloadedTracks: result.processedTracks,
+          processedTracks: result.enhancedTracks, // Faixas totalmente concluídas
+          enhancedTracks: result.enhancedTracks,
+          beatportTracksFound: result.beatportTracksFound,
+          errors: result.errors.length,
+          currentTrack: result.totalTracks,
+          isProcessingMetadata: false,
+          isCompleted: true
+        };
+
+        console.log(`🎯 Enviando evento COMPLETE final da playlist para downloadId: ${downloadId}`);
+        sendProgressEvent(downloadId, {
+          type: 'complete',
+          step: 'Playlist concluída com sucesso! 🎉',
+          progress: 100,
+          substep: 'Download finalizado',
+          detail: `${result.processedTracks}/${result.totalTracks} faixas baixadas, ${result.enhancedTracks} com metadados`,
+          metadata: finalMetadata
+        });
+
+        // 🔧 Aguardar um pouco para garantir que o evento seja processado
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        console.log(`✅ Evento COMPLETE da playlist enviado com sucesso para: ${downloadId}`);
+      }
+
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       result.errors.push(errorMessage);
       logger.error('Playlist download failed:', error);
+      
+      // 🔧 Evento de erro com informações mais detalhadas
+      if (downloadId) {
+        console.log(`❌ Enviando evento ERROR da playlist para downloadId: ${downloadId}`);
+        sendProgressEvent(downloadId, {
+          type: 'error',
+          step: 'Erro no download da playlist',
+          progress: 0,
+          detail: errorMessage,
+          metadata: {
+            totalTracks: result.totalTracks,
+            processedTracks: result.processedTracks,
+            errors: result.errors.length
+          }
+        });
+      }
     }
 
     // Retorna também o scraping da tracklist junto do resultado
@@ -180,7 +301,8 @@ export class PlaylistDownloadService {
     quality: string,
     enhanceMetadata: boolean,
     useBeatport: boolean,
-    result: PlaylistDownloadResult
+    result: PlaylistDownloadResult,
+    downloadId?: string
   ): Promise<void> {
     logger.info(`🚀 Processing ${playlistEntries.length} tracks sequentially...`);
 
@@ -190,6 +312,29 @@ export class PlaylistDownloadService {
       const totalTracks = playlistEntries.length;
       
       logger.info(`\n🎵 [${trackNumber}/${totalTracks}] Processing: "${entry.title}"`);
+
+      // Calcular progresso baseado na faixa atual (30-90%)
+      const trackProgress = 30 + Math.round((trackNumber / totalTracks) * 60);
+      
+      if (downloadId) {
+        sendProgressEvent(downloadId, {
+          type: 'download',
+          step: `Iniciando faixa ${trackNumber}/${totalTracks}`,
+          progress: trackProgress,
+          substep: `"${entry.title}"`,
+          detail: `Preparando download`,
+          metadata: {
+            totalTracks: totalTracks,
+            downloadedTracks: result.processedTracks,
+            processedTracks: result.enhancedTracks,
+            enhancedTracks: result.enhancedTracks,
+            beatportTracksFound: result.beatportTracksFound || 0,
+            errors: result.errors.length,
+            currentTrack: trackNumber,
+            isProcessingMetadata: false
+          }
+        });
+      }
 
       try {
         // 1. Download individual track
@@ -260,6 +405,28 @@ export class PlaylistDownloadService {
         // 2. Enhance metadata immediately after download
         if (enhanceMetadata) {
           logger.info(`   🔍 Enhancing metadata for track ${trackNumber}...`);
+          
+          // Enviar evento indicando processamento de metadados
+          if (downloadId) {
+            sendProgressEvent(downloadId, {
+              type: 'download',
+              step: `Processando metadados ${trackNumber}/${totalTracks}`,
+              progress: Math.min(30 + Math.round((result.processedTracks / totalTracks) * 35) + Math.round((result.enhancedTracks / totalTracks) * 35), 95),
+              substep: `"${entry.title}" - Buscando informações musicais`,
+              detail: `${result.processedTracks} baixadas, ${result.enhancedTracks} processadas`,
+              metadata: {
+                totalTracks: totalTracks,
+                downloadedTracks: result.processedTracks,
+                processedTracks: result.enhancedTracks,
+                enhancedTracks: result.enhancedTracks,
+                beatportTracksFound: result.beatportTracksFound || 0,
+                errors: result.errors.length,
+                currentTrack: trackNumber,
+                isProcessingMetadata: true
+              }
+            });
+          }
+          
           const enhanced = await this.enhanceFileMetadata(
             finalFilePath, 
             `${filename}.${format}`, 
@@ -280,6 +447,31 @@ export class PlaylistDownloadService {
 
         result.processedTracks++;
         logger.info(`   ✅ Track ${trackNumber} completed! Progress: ${result.processedTracks}/${totalTracks}`);
+
+        // ⚡ Calcular progresso real baseado em downloads + metadados concluídos
+        const downloadProgress = Math.round((result.processedTracks / totalTracks) * 50); // 50% para downloads
+        const metadataProgress = Math.round((result.enhancedTracks / totalTracks) * 50); // 50% para metadados
+        const totalProgress = 30 + downloadProgress + metadataProgress; // 30% inicial + 70% real
+        
+        if (downloadId) {
+          sendProgressEvent(downloadId, {
+            type: 'download',
+            step: `Download ${trackNumber}/${totalTracks}: "${entry.title}"`,
+            progress: Math.min(totalProgress, 95), // Máximo 95% até finalizar tudo
+            substep: enhanceMetadata ? 'Baixado, processando metadados...' : 'Download concluído',
+            detail: `${result.processedTracks} baixadas, ${result.enhancedTracks} com metadados`,
+            metadata: {
+              totalTracks: totalTracks,
+              downloadedTracks: result.processedTracks, // Faixas baixadas
+              processedTracks: result.enhancedTracks, // Faixas totalmente processadas (download + metadata)
+              enhancedTracks: result.enhancedTracks, // Para compatibilidade
+              beatportTracksFound: result.beatportTracksFound || 0,
+              errors: result.errors.length,
+              currentTrack: trackNumber,
+              isProcessingMetadata: enhanceMetadata
+            }
+          });
+        }
 
         // Progress report every 5 tracks
         if (trackNumber % 5 === 0) {
