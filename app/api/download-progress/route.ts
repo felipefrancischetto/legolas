@@ -111,6 +111,9 @@ export async function GET(request: NextRequest) {
   });
 }
 
+// Cache para evitar logs repetitivos de streams não encontrados
+const notFoundCache = new Set<string>();
+
 // Função para enviar eventos de progresso
 export function sendProgressEvent(downloadId: string, data: {
   type: string;
@@ -130,6 +133,9 @@ export function sendProgressEvent(downloadId: string, data: {
   
   const controller = activeStreams.get(cleanDownloadId);
   if (controller) {
+    // Remover do cache de não encontrados se estava lá
+    notFoundCache.delete(cleanDownloadId);
+    
     const eventData = `data: ${JSON.stringify({
       ...data,
       timestamp: new Date().toISOString()
@@ -137,39 +143,52 @@ export function sendProgressEvent(downloadId: string, data: {
     
     try {
       controller.enqueue(new TextEncoder().encode(eventData));
-      console.log(`📡 Evento enviado para ${cleanDownloadId}: ${data.type} - ${data.step} (${data.progress || 0}%)`);
+      
+      // Log apenas para eventos importantes (não heartbeat)
+      if (data.type !== 'heartbeat') {
+        console.log(`📡 Evento enviado para ${cleanDownloadId}: ${data.type} - ${data.step} (${data.progress || 0}%)`);
+      }
     } catch (error) {
       // Stream foi fechado, remover da lista
       console.error(`❌ Erro ao enviar evento para ${cleanDownloadId}:`, error);
       activeStreams.delete(cleanDownloadId);
+      notFoundCache.add(cleanDownloadId);
     }
   } else {
-    // Tentar encontrar um downloadId similar (caso haja corrupção)
-    const allKeys = Array.from(activeStreams.keys());
-    const similarKey = allKeys.find(key => key.includes(cleanDownloadId) || cleanDownloadId.includes(key));
-    
-    if (similarKey) {
-      console.warn(`🔄 Encontrado downloadId similar: "${similarKey}" para "${cleanDownloadId}"`);
-      const similarController = activeStreams.get(similarKey);
-      if (similarController) {
-        const eventData = `data: ${JSON.stringify({
-          ...data,
-          timestamp: new Date().toISOString()
-        })}\n\n`;
-        
-        try {
-          similarController.enqueue(new TextEncoder().encode(eventData));
-          console.log(`📡 Evento enviado para ID similar ${similarKey}: ${data.type} - ${data.step} (${data.progress || 0}%)`);
-          return;
-        } catch (error) {
-          console.error(`❌ Erro ao enviar evento para ID similar ${similarKey}:`, error);
-          activeStreams.delete(similarKey);
+    // Só tentar busca por ID similar e logar se não estiver no cache
+    if (!notFoundCache.has(cleanDownloadId)) {
+      const allKeys = Array.from(activeStreams.keys());
+      const similarKey = allKeys.find(key => key.includes(cleanDownloadId) || cleanDownloadId.includes(key));
+      
+      if (similarKey) {
+        console.warn(`🔄 Encontrado downloadId similar: "${similarKey}" para "${cleanDownloadId}"`);
+        const similarController = activeStreams.get(similarKey);
+        if (similarController) {
+          const eventData = `data: ${JSON.stringify({
+            ...data,
+            timestamp: new Date().toISOString()
+          })}\n\n`;
+          
+          try {
+            similarController.enqueue(new TextEncoder().encode(eventData));
+            console.log(`📡 Evento enviado para ID similar ${similarKey}: ${data.type} - ${data.step}`);
+            return;
+          } catch (error) {
+            console.error(`❌ Erro ao enviar evento para ID similar ${similarKey}:`, error);
+            activeStreams.delete(similarKey);
+          }
         }
       }
+      
+      // Log apenas uma vez por downloadId não encontrado
+      console.warn(`⚠️  Stream não encontrado para downloadId: "${cleanDownloadId}"`);
+      if (allKeys.length > 0) {
+        console.warn(`📋 Streams ativos: [${allKeys.join(', ')}]`);
+      }
+      
+      // Adicionar ao cache para evitar logs futuros
+      notFoundCache.add(cleanDownloadId);
     }
-    
-    console.warn(`⚠️  Stream não encontrado para downloadId: "${cleanDownloadId}"`);
-    console.warn(`📋 Streams ativos: [${allKeys.join(', ')}]`);
   }
 }
 

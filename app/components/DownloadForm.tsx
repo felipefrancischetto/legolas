@@ -57,17 +57,30 @@ export default function DownloadForm() {
         mode: 'readwrite',
         startIn: 'downloads'
       });
-      localStorage.setItem('customDownloadsPath', directoryHandle.name);
-      await fetch('/api/set-downloads-path', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ path: directoryHandle.name }),
-      });
-      window.dispatchEvent(new CustomEvent('refresh-files'));
+      
+      const newPath = directoryHandle.name;
+      const currentPath = localStorage.getItem('customDownloadsPath');
+      
+      // Só atualizar se a pasta realmente mudou
+      if (newPath !== currentPath) {
+        localStorage.setItem('customDownloadsPath', newPath);
+        await fetch('/api/set-downloads-path', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ path: newPath }),
+        });
+        
+        console.log('📂 Pasta de downloads alterada, disparando refresh-files');
+        window.dispatchEvent(new CustomEvent('refresh-files'));
+      } else {
+        console.log('📂 Pasta selecionada é a mesma atual, sem refresh necessário');
+      }
     } catch (error) {
-      console.error('Erro ao selecionar pasta:', error);
+      if (error.name !== 'AbortError') {
+        console.error('❌ Erro ao selecionar pasta:', error);
+      }
     }
   };
 
@@ -133,14 +146,8 @@ export default function DownloadForm() {
     };
 
     if (url) {
-      console.log(`⏳ Agendando busca de info em 500ms para: ${url}`);
-      const timer = setTimeout(() => {
-        fetchVideoInfo();
-      }, 500);
-      return () => {
-        console.log(`🚫 Cancelando busca anterior para: ${url}`);
-        clearTimeout(timer);
-      };
+      console.log(`⏳ Buscando info imediatamente para: ${url}`);
+      fetchVideoInfo();
     } else {
       setVideoInfo(null);
     }

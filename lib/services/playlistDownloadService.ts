@@ -31,15 +31,6 @@ export interface PlaylistDownloadResult {
   tracklistScraping?: any[];
 }
 
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await access(path, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function getDownloadsPath() {
   try {
     const configPath = join(process.cwd(), 'downloads.config.json');
@@ -72,8 +63,8 @@ export class PlaylistDownloadService {
     options: PlaylistDownloadOptions = {}
   ): Promise<PlaylistDownloadResult & { tracklistScraping?: any[] }> {
     const {
-      format = 'mp3',
-      quality = '0',
+      format = 'flac',
+      quality = '10',
       enhanceMetadata = true,
       maxConcurrent = 3,
       useBeatport = false,
@@ -93,66 +84,9 @@ export class PlaylistDownloadService {
       beatportTracksFound: 0
     };
 
-    // Declarar scrapedTracklist fora do try block para evitar ReferenceError
     let scrapedTracklist: any[] = [];
 
     try {
-      logger.info(`Starting playlist download: ${url} (Beatport mode: ${useBeatport}, downloadId: ${downloadId})`);
-
-      // Enviar evento inicial para playlists
-      if (downloadId) {
-        sendProgressEvent(downloadId, {
-          type: 'init',
-          step: 'Iniciando download da playlist...',
-          progress: 5,
-          detail: `Formato: ${format.toUpperCase()}, Beatport: ${useBeatport ? 'Ativado' : 'Desativado'}`
-        });
-      }
-
-      // 1. Scraping da tracklist antes de baixar
-      try {
-        logger.info('Iniciando scraping da tracklist...');
-        
-        if (downloadId) {
-          sendProgressEvent(downloadId, {
-            type: 'scraping',
-            step: 'Analisando tracklist da playlist...',
-            progress: 10,
-            substep: 'Extraindo informações das faixas'
-          });
-        }
-        
-        const scrapingResult = await scrapeTracklist(url);
-        if (scrapingResult && scrapingResult.tracks) {
-          scrapedTracklist = scrapingResult.tracks;
-          logger.info(`Tracklist scraping: ${scrapedTracklist.length} faixas encontradas.`);
-          
-          if (downloadId) {
-            sendProgressEvent(downloadId, {
-              type: 'scraping',
-              step: 'Tracklist analisada com sucesso',
-              progress: 15,
-              detail: `${scrapedTracklist.length} faixas identificadas`
-            });
-          }
-        } else {
-          logger.warn('Tracklist scraping não retornou faixas.');
-        }
-      } catch (err) {
-        logger.error('Erro ao fazer scraping da tracklist:', err);
-        // Manter scrapedTracklist como array vazio em caso de erro
-        scrapedTracklist = [];
-        
-        if (downloadId) {
-          sendProgressEvent(downloadId, {
-            type: 'scraping',
-            step: 'Erro na análise da tracklist',
-            progress: 12,
-            detail: 'Continuando sem informações extras'
-          });
-        }
-      }
-
       // Get playlist info to determine number of tracks
       logger.info('🔍 Getting playlist information...');
       
@@ -197,19 +131,6 @@ export class PlaylistDownloadService {
           }
         });
       }
-
-      // Associate scraping data with playlist entries
-      playlistEntries.forEach((entry, idx) => {
-        // Try to associate by position (idx)
-        if (scrapedTracklist[idx]) {
-          entry.scraping = scrapedTracklist[idx];
-        } else {
-          // fallback: try by title
-          const found = scrapedTracklist.find(t => t.title && entry.title && t.title.toLowerCase().includes(entry.title.toLowerCase()));
-          if (found) entry.scraping = found;
-        }
-      });
-
       // **NOVO FLUXO: Download + Metadata por música individual**
       logger.info('🎵 Starting sequential download with real-time metadata enhancement...');
       

@@ -35,7 +35,6 @@ export async function GET(request: NextRequest) {
       enhanceMetadata,
       maxConcurrent,
       useBeatport, // Passar o toggle para o serviço
-      downloadId // Passar downloadId para SSE
     });
 
     if (result.success) {

@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import DetailedProgressDisplay from './DetailedProgressDisplay';
 
 interface DownloadStatusIndicatorProps {

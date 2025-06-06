@@ -184,16 +184,37 @@ export default function FileList() {
   const audioPlayerRef = useRef<any>(null);
   const lastPlayedFile = useRef<string | null>(null);
 
-  const fetchFiles = useCallback(async () => {
-    try {
-      const response = await fetch('/api/files');
-      const data = await response.json();
-      setFiles(data.files);
-    } catch (error) {
-      console.error('Erro ao carregar arquivos:', error);
-    } finally {
-      setLoading(false);
+  // Debounce para evitar múltiplas chamadas consecutivas
+  const fetchFilesDebounced = useRef<NodeJS.Timeout | null>(null);
+  const isCurrentlyFetching = useRef(false);
+
+  const fetchFiles = useCallback(async (force = false) => {
+    // Evitar múltiplas chamadas simultâneas
+    if (isCurrentlyFetching.current && !force) {
+      console.log('📂 Fetch já em andamento, ignorando nova chamada');
+      return;
     }
+
+    // Debounce - aguardar 500ms antes de executar
+    if (fetchFilesDebounced.current) {
+      clearTimeout(fetchFilesDebounced.current);
+    }
+
+    fetchFilesDebounced.current = setTimeout(async () => {
+      isCurrentlyFetching.current = true;
+      try {
+        console.log('📂 Buscando lista de arquivos...');
+        const response = await fetch('/api/files');
+        const data = await response.json();
+        setFiles(data.files);
+        console.log(`📂 Lista de arquivos atualizada: ${data.files.length} arquivos`);
+      } catch (error) {
+        console.error('❌ Erro ao carregar arquivos:', error);
+      } finally {
+        setLoading(false);
+        isCurrentlyFetching.current = false;
+      }
+    }, force ? 0 : 500);
   }, [setFiles, setLoading]);
 
   useEffect(() => {
@@ -203,13 +224,17 @@ export default function FileList() {
       setCustomDownloadsPath(savedPath);
     }
     
-    fetchFiles();
+    // Carregar arquivos inicialmente (força execução imediata)
+    fetchFiles(true);
 
-    // Atualizar a cada 30 segundos (reduzido de 15s para diminuir re-renders)
-    const interval = setInterval(fetchFiles, 30000);
+    // Atualizar a cada 60 segundos (reduzido frequência para evitar calls desnecessários)
+    const interval = setInterval(() => fetchFiles(), 60000);
 
-    // Atualizar quando um novo download for concluído
-    const handleRefresh = () => fetchFiles();
+    // Atualizar quando um novo download for concluído (com debounce)
+    const handleRefresh = () => {
+      console.log('🔄 Evento refresh-files recebido, atualizando lista...');
+      fetchFiles();
+    };
     window.addEventListener('refresh-files', handleRefresh);
 
     // Ouvir evento customizado para abrir a fila de downloads
@@ -220,6 +245,11 @@ export default function FileList() {
       clearInterval(interval);
       window.removeEventListener('refresh-files', handleRefresh);
       window.removeEventListener('open-download-queue', openQueue);
+      
+      // Limpar timeout pendente
+      if (fetchFilesDebounced.current) {
+        clearTimeout(fetchFilesDebounced.current);
+      }
     };
   }, [fetchFiles, setCustomDownloadsPath, setShowQueue]);
 
