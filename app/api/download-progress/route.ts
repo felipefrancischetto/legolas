@@ -122,6 +122,7 @@ export function sendProgressEvent(downloadId: string, data: {
   substep?: string;
   detail?: string;
   metadata?: any;
+  playlistIndex?: number;
 }) {
   // Garantir que downloadId seja uma string limpa
   const cleanDownloadId = downloadId?.toString().trim();
@@ -222,4 +223,4 @@ export function closeProgressStream(downloadId: string) {
   } else {
     console.warn(`⚠️  Tentativa de fechar stream inexistente: ${downloadId}`);
   }
-} 
+}

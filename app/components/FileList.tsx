@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, memo, useCallback } from 'react';
+import { useEffect, useState, useRef, memo, useCallback, useMemo } from 'react';
 import Image from 'next/image';
 import DownloadQueue from './DownloadQueue';
 import { useDownload } from '../contexts/DownloadContext';
@@ -83,7 +83,9 @@ const FileRow = memo(({
   onContextMenu,
   metadataStatus,
   updateMetadataForFile,
-  setEditModalFile
+  setEditModalFile,
+  isPlaying = false,
+  fetchFiles
 }: {
   file: FileInfo;
   index: number;
@@ -94,13 +96,15 @@ const FileRow = memo(({
   metadataStatus: any;
   updateMetadataForFile: (fileName: string) => void;
   setEditModalFile: (file: FileInfo) => void;
+  isPlaying?: boolean;
+  fetchFiles: (force?: boolean) => void;
 }) => {
   const fileExists = files.some(f => f.name === file.name);
   
   return (
     <div
       key={file.path}
-      className="flex items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs cursor-pointer"
+      className={`flex items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs cursor-pointer ${isPlaying ? 'ring-2 ring-blue-400 bg-blue-900/20' : ''}`}
       style={{ minHeight: 50 }}
       onClick={e => onContextMenu(e, file)}
     >
@@ -131,8 +135,8 @@ const FileRow = memo(({
           </span>
         )}
       </div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[3], minWidth:50}}>{file.duration || '-'}</div>
-      <div className="truncate text-gray-400 flex items-center justify-start" style={{width:colWidths[4], minWidth:50}}>{file.artist || '-'}</div>
+      <div className="truncate text-gray-400 flex items-center justify-start" style={{width:colWidths[3], minWidth:50}}>{file.artist || '-'}</div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[4], minWidth:50}}>{file.duration || '-'}</div>
       <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[5], minWidth:50}}>{file.bpm || '-'}</div>
       <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[6], minWidth:50}}>{file.key || '-'}</div>
       <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[7], minWidth:50}}>{file.genre || '-'}</div>
@@ -156,6 +160,8 @@ const FileRow = memo(({
               window.open(`/api/downloads/${encodeURIComponent(file.name)}`, '_blank');
             } else if (value === 'editar') {
               setEditModalFile(file);
+            } else if (value === 'remover') {
+              await removeFile(file.name, fetchFiles);
             }
             e.target.value = '';
           }}
@@ -165,6 +171,7 @@ const FileRow = memo(({
           <option value="atualizar">Atualizar</option>
           <option value="baixar">Baixar</option>
           <option value="editar">Editar</option>
+          <option value="remover">Remover</option>
         </select>
       </div>
     </div>
@@ -172,6 +179,20 @@ const FileRow = memo(({
 });
 
 FileRow.displayName = 'FileRow';
+
+// Função global para remover arquivo
+async function removeFile(fileName: string, fetchFiles: (force?: boolean) => void) {
+  if (!window.confirm('Tem certeza que deseja mover este arquivo para a lixeira?')) return;
+  try {
+    const response = await fetch(`/api/delete-file?fileName=${encodeURIComponent(fileName)}`, { method: 'DELETE' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Erro ao mover arquivo para lixeira');
+    fetchFiles(true);
+  } catch (err: any) {
+    alert(err.message || 'Erro ao mover arquivo para lixeira.');
+    fetchFiles(true); // Atualiza a lista mesmo em caso de erro
+  }
+}
 
 export default function FileList() {
   const {
@@ -208,7 +229,7 @@ export default function FileList() {
     setColWidths,
   } = useUI();
 
-  const { play } = usePlayer();
+  const { play, playerState } = usePlayer();
   const { queue, updateQueueItem } = useDownload();
   const resizingCol = useRef<number | null>(null);
   const startX = useRef<number>(0);
@@ -365,8 +386,8 @@ export default function FileList() {
             valB = b.label;
             break;
           case 'ano':
-            valA = a.ano;
-            valB = b.ano;
+            valA = (a as any)['ano'];
+            valB = (b as any)['ano'];
             break;
           default:
             const fileInfoMap: Record<string, any> = a;
@@ -382,18 +403,39 @@ export default function FileList() {
     return filtered;
   }, [files, search, sortBy, sortOrder]);
 
+  const [groupByField, setGroupByField] = useState<string>('album');
+
+  // Lista de campos possíveis para agrupar
+  const groupableFields = [
+    { value: '', label: 'Nenhum' },
+    { value: 'album', label: 'Álbum' },
+    { value: 'artist', label: 'Artista' },
+    { value: 'genre', label: 'Gênero' },
+    { value: 'ano', label: 'Ano' },
+    { value: 'label', label: 'Label' },
+    { value: 'key', label: 'Key' },
+    { value: 'bpm', label: 'BPM' },
+  ];
+
   // Memoizando o agrupamento
-  const groupedFiles = useCallback(() => {
+  const groupedFiles = useMemo(() => {
     const sorted = sortedFiles();
-    return groupByAlbum ? sorted.reduce((groups, file) => {
-      const album = file.album || 'Sem Álbum';
-      if (!groups[album]) {
-        groups[album] = [];
+    if (!groupByField) return { '': sorted };
+    return sorted.reduce((groups, file) => {
+      // Acessar campo de forma segura
+      let groupValue: string = '';
+      if (groupByField in file) {
+        // @ts-ignore
+        groupValue = file[groupByField] ?? '';
       }
-      groups[album].push(file);
+      if (!groupValue) groupValue = 'Sem valor';
+      if (!groups[groupValue]) {
+        groups[groupValue] = [];
+      }
+      groups[groupValue].push(file);
       return groups;
-    }, {} as Record<string, FileInfo[]>) : { '': sorted };
-  }, [sortedFiles, groupByAlbum]);
+    }, {} as Record<string, FileInfo[]>);
+  }, [sortedFiles, groupByField]);
 
   const openDownloadsFolder = () => {
     // Caminho padrão do Windows (ajuste conforme necessário)
@@ -583,7 +625,7 @@ export default function FileList() {
 
   // Função para resetar larguras das colunas
   const resetColumnWidths = useCallback(() => {
-    const defaultWidths = [40, 48, 320, 70, 160, 55, 60, 140, 180, 90, 70, 90];
+    const defaultWidths = [36, 44, 200, 140, 56, 44, 52, 120, 120, 90, 52, 70];
     setColWidths(defaultWidths);
   }, [setColWidths]);
 
@@ -647,13 +689,22 @@ export default function FileList() {
     );
   }
 
-  const finalGroupedFiles = groupedFiles();
-
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex justify-between items-center mb-4 gap-2 flex-shrink-0">
         <h2 className="text-xl font-semibold text-white">Arquivos Baixados</h2>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {/* Novo select de agrupamento */}
+          <label className="text-sm text-zinc-300 mr-1">Agrupar por:</label>
+          <select
+            value={groupByField}
+            onChange={e => setGroupByField(e.target.value)}
+            className="px-2 py-1 rounded bg-zinc-700 text-white text-sm focus:outline-none"
+          >
+            {groupableFields.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
           <button
             onClick={updateAllMetadata}
             disabled={isUpdatingAll || files.every(f => f.isBeatportFormat)}
@@ -695,22 +746,6 @@ export default function FileList() {
               Resetar Colunas
             </div>
           </button>
-          
-          <button
-            onClick={() => setGroupByAlbum(!groupByAlbum)}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-              groupByAlbum
-                ? 'bg-blue-600 text-white hover:bg-blue-700'
-                : 'bg-zinc-700 text-white hover:bg-zinc-600'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-              </svg>
-              {groupByAlbum ? 'Desagrupar' : 'Agrupar por Álbum'}
-            </div>
-          </button>
         </div>
       </div>
       
@@ -732,8 +767,8 @@ export default function FileList() {
             { label: '#', sortable: true, align: 'center' },
             { label: '', sortable: false, align: 'center' },
             { label: 'Título', sortable: true, align: 'left' },
-            { label: 'Duração', sortable: true, align: 'center' },
             { label: 'Artista', sortable: true, align: 'left' },
+            { label: 'Duração', sortable: true, align: 'center' },
             { label: 'BPM', sortable: true, align: 'center' },
             { label: 'Key', sortable: true, align: 'center' },
             { label: 'Gênero', sortable: true, align: 'center' },
@@ -743,9 +778,9 @@ export default function FileList() {
             { label: 'Ações', sortable: false, align: 'center' },
           ].map((col, idx) => (
             <div
-              key={col.label}
+              key={col.label + idx}
               className={`flex items-center h-8 relative ${col.sortable ? 'cursor-pointer select-none' : ''} ${col.align === 'center' ? 'justify-center' : 'justify-start'}`}
-              style={{ width: colWidths[idx], minWidth: 50 }}
+              style={{ width: colWidths[idx], minWidth: 40 }}
               onClick={col.sortable ? () => handleSort(col.label.toLowerCase().replace('ações','label') === 'ações' ? 'label' : col.label.toLowerCase()) : undefined}
             >
               <span className="truncate">{col.label} {sortBy === col.label.toLowerCase() && (sortOrder === 'asc' ? '↑' : '↓')}</span>
@@ -763,11 +798,11 @@ export default function FileList() {
         <div 
           className="flex-1 min-h-0 overflow-y-auto custom-scroll"
         >
-          {Object.entries(finalGroupedFiles).map(([album, files]) => (
-            <div key={album} className="animate-fade-in">
-              {groupByAlbum && album !== '' && (
+          {Object.entries(groupedFiles).map(([group, files]) => (
+            <div key={group} className="animate-fade-in">
+              {groupByField && group !== '' && (
                 <div className="sticky top-0 bg-zinc-900 z-10 px-2 py-2 border-b border-zinc-700">
-                  <h3 className="text-sm font-medium text-white">{album}</h3>
+                  <h3 className="text-sm font-medium text-white">{group}</h3>
                 </div>
               )}
               {files.map((file, index) => (
@@ -782,6 +817,8 @@ export default function FileList() {
                   metadataStatus={metadataStatus}
                   updateMetadataForFile={updateMetadataForFile}
                   setEditModalFile={setEditModalFile}
+                  isPlaying={!!(playerState.currentFile && playerState.currentFile.name === file.name)}
+                  fetchFiles={fetchFiles}
                 />
               ))}
             </div>
@@ -820,19 +857,33 @@ function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () 
     ano: file.ano || '',
   });
   const [saving, setSaving] = useState(false);
+  const [anoError, setAnoError] = useState<string | null>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    setForm(f => ({ ...f, [name]: value }));
+    if (name === 'ano') {
+      // Permitir apenas números e no máximo 4 dígitos
+      if (!/^\d{0,4}$/.test(value)) return;
+      setForm(f => ({ ...f, [name]: value.slice(0, 4) }));
+      setAnoError(null);
+    } else {
+      setForm(f => ({ ...f, [name]: value }));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
+    setAnoError(null);
+    if (form.ano && form.ano.length !== 4) {
+      setAnoError('O ano deve ter 4 dígitos.');
+      setSaving(false);
+      return;
+    }
     await onSave({
       ...form,
       bpm: form.bpm ? parseInt(form.bpm) : undefined,
-      ano: form.ano ? String(form.ano).slice(0, 4) : '',
+      ano: form.ano ? form.ano : '',
     });
     setSaving(false);
     onClose();
@@ -859,7 +910,8 @@ function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () 
           <input name="genre" value={form.genre} onChange={handleChange} placeholder="Gênero" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
           <input name="album" value={form.album} onChange={handleChange} placeholder="Álbum" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
           <input name="label" value={form.label} onChange={handleChange} placeholder="Label" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="ano" value={form.ano} onChange={handleChange} placeholder="Ano" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          <input name="ano" value={form.ano} onChange={handleChange} placeholder="Ano" maxLength={4} className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          {anoError && <div className="text-red-400 text-xs">{anoError}</div>}
           <button type="submit" disabled={saving} className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all font-medium shadow disabled:opacity-50 disabled:cursor-not-allowed">
             {saving ? 'Salvando...' : 'Salvar'}
           </button>

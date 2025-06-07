@@ -25,6 +25,7 @@ interface DownloadStatusIndicatorProps {
   defaultMinimized?: boolean;
   autoMinimizeAfter?: number; // segundos para minimizar automaticamente
   allowMinimize?: boolean; // se permite minimizar
+  steps?: any[]; // DownloadStep[]
 }
 
 export default function DownloadStatusIndicator({
@@ -42,7 +43,8 @@ export default function DownloadStatusIndicator({
   isConnected = false,
   defaultMinimized = false,
   autoMinimizeAfter = 0, // 0 = desabilitado
-  allowMinimize = true
+  allowMinimize = true,
+  steps
 }: DownloadStatusIndicatorProps) {
   const [isMinimized, setIsMinimized] = useState(defaultMinimized);
   const [userInteracted, setUserInteracted] = useState(false);
@@ -477,8 +479,8 @@ export default function DownloadStatusIndicator({
         </div>
       )}
 
-      {/* Progresso detalhado - só para downloads individuais em andamento */}
-      {type === 'individual' && status === 'downloading' && (
+      {/* Progresso detalhado - para downloads individuais ou playlist em andamento */}
+      {type === 'playlist' && steps && steps.length > 0 && (
         <DetailedProgressDisplay
           currentStep={currentStep || ''}
           currentSubstep={currentSubstep}
@@ -486,6 +488,18 @@ export default function DownloadStatusIndicator({
           detail={detail}
           isConnected={isConnected}
           type={type}
+          steps={steps}
+        />
+      )}
+      {type !== 'playlist' && steps && steps.length > 0 && (
+        <DetailedProgressDisplay
+          currentStep={currentStep || ''}
+          currentSubstep={currentSubstep}
+          progress={progress}
+          detail={detail}
+          isConnected={isConnected}
+          type={type}
+          steps={steps}
         />
       )}
     </div>

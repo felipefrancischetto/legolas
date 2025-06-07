@@ -38,6 +38,21 @@ export default function DownloadQueue({ onClose }: { onClose: () => void }) {
             downloading: progressData.downloading || 0
           } : undefined;
 
+          let playlistCurrentStep = undefined;
+          let playlistCurrentSubstep = undefined;
+          let playlistCurrentDetail = undefined;
+          let playlistCurrentSteps = undefined;
+          if (item.isPlaylist && item.playlistItems && item.playlistItems.length > 0) {
+            const currentTrack = item.playlistItems.find((track: any) => track.status === 'downloading')
+              || item.playlistItems.find((track: any) => track.status === 'pending');
+            if (currentTrack) {
+              playlistCurrentStep = currentTrack.currentStep;
+              playlistCurrentSubstep = currentTrack.currentSubstep;
+              playlistCurrentDetail = currentTrack.detail;
+              playlistCurrentSteps = currentTrack.steps;
+            }
+          }
+
           return (
             <div key={item.id} className="relative">
               <DownloadStatusIndicator
@@ -51,6 +66,10 @@ export default function DownloadQueue({ onClose }: { onClose: () => void }) {
                 allowMinimize={true}
                 defaultMinimized={item.status === 'completed'} // Minimizar downloads concluídos por padrão
                 autoMinimizeAfter={item.isPlaylist ? 8 : 3} // Menos tempo na fila
+                currentStep={item.isPlaylist ? playlistCurrentStep : item.currentStep}
+                currentSubstep={item.isPlaylist ? playlistCurrentSubstep : item.currentSubstep}
+                detail={item.isPlaylist ? playlistCurrentDetail : item.detail}
+                steps={item.isPlaylist ? playlistCurrentSteps : item.steps}
               />
               
               {/* Botões de ação */}

@@ -244,6 +244,7 @@ export class PlaylistDownloadService {
           progress: trackProgress,
           substep: `"${entry.title}"`,
           detail: `Preparando download`,
+          playlistIndex: i,
           metadata: {
             totalTracks: totalTracks,
             downloadedTracks: result.processedTracks,
@@ -337,6 +338,7 @@ export class PlaylistDownloadService {
               progress: Math.min(30 + Math.round((result.processedTracks / totalTracks) * 35) + Math.round((result.enhancedTracks / totalTracks) * 35), 95),
               substep: `"${entry.title}" - Buscando informações musicais`,
               detail: `${result.processedTracks} baixadas, ${result.enhancedTracks} processadas`,
+              playlistIndex: i,
               metadata: {
                 totalTracks: totalTracks,
                 downloadedTracks: result.processedTracks,
@@ -383,6 +385,7 @@ export class PlaylistDownloadService {
             progress: Math.min(totalProgress, 95), // Máximo 95% até finalizar tudo
             substep: enhanceMetadata ? 'Baixado, processando metadados...' : 'Download concluído',
             detail: `${result.processedTracks} baixadas, ${result.enhancedTracks} com metadados`,
+            playlistIndex: i,
             metadata: {
               totalTracks: totalTracks,
               downloadedTracks: result.processedTracks, // Faixas baixadas

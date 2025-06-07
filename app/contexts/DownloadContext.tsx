@@ -59,8 +59,8 @@ interface DownloadContextType {
   addToast: (toast: { title: string }) => void;
   removeToast: (id: string) => void;
   // Funções para gerenciar progresso interno
-  updateProgress: (downloadId: string, progress: number, step?: string, substep?: string, detail?: string) => void;
-  addStep: (downloadId: string, step: DownloadStep) => void;
+  updateProgress: (downloadId: string, progress: number, step?: string, substep?: string, detail?: string, playlistIndex?: number) => void;
+  addStep: (downloadId: string, step: DownloadStep & { playlistIndex?: number }) => void;
   getCurrentDownload: (downloadId: string) => DownloadItem | undefined;
   getPlaylistProgressData: (itemId: string) => {
     current: number;
@@ -133,13 +133,35 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         steps: []
       };
     } else {
+      // Se for playlist, garantir que playlistItems está inicializado corretamente
+      let playlistItems = item.playlistItems;
+      if (item.isPlaylist) {
+        if (!playlistItems || !Array.isArray(playlistItems) || playlistItems.length === 0) {
+          // Inicializa com 3 faixas "placeholder" se não houver info (ajuste conforme necessário)
+          playlistItems = Array(3).fill(0).map((_, idx) => ({
+            title: `Faixa ${idx + 1}`,
+            status: 'pending',
+            progress: 0,
+            steps: []
+          }));
+        } else {
+          // Garante que cada faixa tem os campos necessários
+          playlistItems = playlistItems.map((track, idx) => ({
+            title: track.title || `Faixa ${idx + 1}`,
+            status: track.status || 'pending',
+            progress: track.progress ?? 0,
+            steps: track.steps || []
+          }));
+        }
+      }
       queueItem = {
         id,
         url: item.url || '',
         status: item.status || 'pending',
         startTime: Date.now(),
         steps: [],
-        ...item
+        ...item,
+        playlistItems: item.isPlaylist ? playlistItems : undefined
       };
     }
     
@@ -163,10 +185,10 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       return item;
     }));
 
-    // Se o item foi concluído ou teve erro, movê-lo para o histórico
+    // Só dispare toast se o status do item principal mudar para completed ou error
     if (updates.status === 'completed' || updates.status === 'error') {
       const item = queue.find(item => item.id === id);
-      if (item) {
+      if (item && item.status !== updates.status) {
         const finalItem = { ...item, ...updates };
         setHistory(prev => [finalItem, ...prev]);
         addToast({ 
@@ -174,8 +196,6 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
             ? `✅ ${item.title || 'Download'} concluído!`
             : `❌ Erro em ${item.title || 'Download'}`
         });
-        
-        // Remover da fila após um delay para mostrar o status final
         setTimeout(() => {
           removeFromQueue(id);
         }, 3000);
@@ -183,14 +203,45 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const updateProgress = (downloadId: string, progress: number, step?: string, substep?: string, detail?: string) => {
-    updateQueueItem(downloadId, {
-      progress,
-      currentStep: step,
-      currentSubstep: substep,
-      detail
-    });
-    
+  const updateProgress = (downloadId: string, progress: number, step?: string, substep?: string, detail?: string, playlistIndex?: number) => {
+    setQueue(prev => prev.map(item => {
+      if (item.id === downloadId) {
+        // Se for playlist e playlistIndex está definido, atualizar a faixa específica
+        if (item.isPlaylist && typeof playlistIndex === 'number' && item.playlistItems && item.playlistItems[playlistIndex]) {
+          const playlistItems = item.playlistItems.map((track, idx) => {
+            if (idx === playlistIndex) {
+              let newStatus: 'pending' | 'downloading' | 'completed' | 'error' = track.status;
+              if (progress === 100) {
+                newStatus = 'completed';
+              } else if (track.status !== 'completed' && track.status !== 'error') {
+                newStatus = 'downloading';
+              }
+              return {
+                ...track,
+                progress,
+                status: newStatus,
+                currentStep: step,
+                currentSubstep: substep,
+                detail,
+              };
+            }
+            return track;
+          });
+          return { ...item, playlistItems };
+        } else {
+          // Individual
+          return {
+            ...item,
+            progress,
+            currentStep: step,
+            currentSubstep: substep,
+            detail,
+          };
+        }
+      }
+      return item;
+    }));
+
     // Adicionar step ao histórico se fornecido
     if (step) {
       addStep(downloadId, {
@@ -199,17 +250,30 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         substep,
         detail,
         progress,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        playlistIndex,
       });
     }
   };
 
-  const addStep = (downloadId: string, step: DownloadStep) => {
+  const addStep = (downloadId: string, step: DownloadStep & { playlistIndex?: number }) => {
     setQueue(prev => prev.map(item => {
       if (item.id === downloadId) {
-        const steps = [...(item.steps || []), step];
-        console.log(`📋 Step adicionado para ${downloadId}:`, step);
-        return { ...item, steps };
+        // Playlist: adicionar step na faixa correta
+        if (item.isPlaylist && typeof step.playlistIndex === 'number' && item.playlistItems && item.playlistItems[step.playlistIndex]) {
+          const playlistItems = item.playlistItems.map((track, idx) => {
+            if (idx === step.playlistIndex) {
+              const steps = [...(track.steps || []), step];
+              return { ...track, steps };
+            }
+            return track;
+          });
+          return { ...item, playlistItems };
+        } else {
+          // Individual
+          const steps = [...(item.steps || []), step];
+          return { ...item, steps };
+        }
       }
       return item;
     }));

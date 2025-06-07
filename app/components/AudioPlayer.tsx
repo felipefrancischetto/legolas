@@ -17,6 +17,25 @@ export default function AudioPlayer() {
   const [minimized, setMinimized] = useState(false);
   const { files } = useFile();
 
+  // Funções para avançar e voltar
+  const handleNext = useCallback(() => {
+    if (!playerState.currentFile) return;
+    const idx = files.findIndex(f => f.name === playerState.currentFile?.name);
+    if (idx !== -1 && idx < files.length - 1) {
+      const nextFile = files[idx + 1];
+      play(nextFile);
+    }
+  }, [files, playerState.currentFile, play]);
+
+  const handlePrev = useCallback(() => {
+    if (!playerState.currentFile) return;
+    const idx = files.findIndex(f => f.name === playerState.currentFile?.name);
+    if (idx > 0) {
+      const prevFile = files[idx - 1];
+      play(prevFile);
+    }
+  }, [files, playerState.currentFile, play]);
+
   // Abre o player quando houver uma música carregada
   useEffect(() => {
     if (playerState.currentFile) {
@@ -90,7 +109,7 @@ export default function AudioPlayer() {
     });
 
     wavesurfer.on('finish', () => {
-      stop();
+      handleNext();
     });
 
     wavesurfer.on('error', (err) => {
@@ -110,7 +129,7 @@ export default function AudioPlayer() {
     });
 
     wavesurferRef.current = wavesurfer;
-  }, [stop, setPlayerState, playerState.currentTime]);
+  }, [stop, setPlayerState, playerState.currentTime, handleNext]);
 
   // Troca de música
   useEffect(() => {
@@ -172,25 +191,6 @@ export default function AudioPlayer() {
     const seconds = Math.floor(time % 60);
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
-
-  // Funções para avançar e voltar
-  const handlePrev = useCallback(() => {
-    if (!playerState.currentFile) return;
-    const idx = files.findIndex(f => f.name === playerState.currentFile?.name);
-    if (idx > 0) {
-      const prevFile = files[idx - 1];
-      play(prevFile);
-    }
-  }, [files, playerState.currentFile, play]);
-
-  const handleNext = useCallback(() => {
-    if (!playerState.currentFile) return;
-    const idx = files.findIndex(f => f.name === playerState.currentFile?.name);
-    if (idx !== -1 && idx < files.length - 1) {
-      const nextFile = files[idx + 1];
-      play(nextFile);
-    }
-  }, [files, playerState.currentFile, play]);
 
   if (!playerState.currentFile) return null;
 

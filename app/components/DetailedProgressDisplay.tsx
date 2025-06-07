@@ -19,6 +19,7 @@ interface DetailedProgressDisplayProps {
   detail?: string;
   isConnected: boolean;
   type: 'individual' | 'playlist';
+  steps?: ProgressStep[];
 }
 
 export default function DetailedProgressDisplay({
@@ -27,12 +28,14 @@ export default function DetailedProgressDisplay({
   progress,
   detail,
   isConnected,
-  type
+  type,
+  steps: externalSteps
 }: DetailedProgressDisplayProps) {
   const [steps, setSteps] = useState<ProgressStep[]>([]);
 
   // Adicionar novo passo quando mudar
   useEffect(() => {
+    if (externalSteps) return; // Não atualizar estado interno se steps externos forem fornecidos
     if (currentStep && currentStep !== 'Conectando...') {
       setSteps(prev => {
         const lastStep = prev[prev.length - 1];
@@ -63,7 +66,7 @@ export default function DetailedProgressDisplay({
         return [...updatedPrev, newStep];
       });
     }
-  }, [currentStep, currentSubstep, progress, detail]);
+  }, [currentStep, currentSubstep, progress, detail, externalSteps]);
 
   const getStepType = (step: string): string => {
     if (step.includes('Conectado') || step.includes('Preparando')) return 'init';
@@ -132,12 +135,14 @@ export default function DetailedProgressDisplay({
 
   // Limpar passos quando não há download ativo
   useEffect(() => {
+    if (externalSteps) return;
     if (!currentStep || currentStep === 'Conectando...') {
       setSteps([]);
     }
-  }, [currentStep]);
+  }, [currentStep, externalSteps]);
 
-  if (steps.length === 0) {
+  const stepsToShow = externalSteps || steps;
+  if (!stepsToShow || stepsToShow.length === 0) {
     return null;
   }
 
@@ -162,7 +167,7 @@ export default function DetailedProgressDisplay({
 
       {/* Lista de passos */}
       <div className="space-y-2 max-h-40 overflow-y-auto custom-scroll">
-        {steps.map((step, index) => (
+        {stepsToShow.map((step, index) => (
           <div key={index} className="flex items-start gap-3 p-2 rounded bg-zinc-800/30">
             {/* Ícone do passo */}
             <div className="flex-shrink-0 mt-0.5">
