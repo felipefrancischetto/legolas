@@ -31,7 +31,13 @@ export function UIProvider({ children }: { children: ReactNode }) {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [groupByAlbum, setGroupByAlbum] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
-  const [playerOpen, setPlayerOpen] = useState(false);
+  const [playerOpen, setPlayerOpen] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('playerOpen');
+      return saved === 'true';
+    }
+    return false;
+  });
   const [playerReady, setPlayerReady] = useState(false);
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number; file: any | null } | null>(null);
   
@@ -64,6 +70,14 @@ export function UIProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Salvar estado do player no localStorage
+  const handleSetPlayerOpen = (open: boolean) => {
+    setPlayerOpen(open);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('playerOpen', open.toString());
+    }
+  };
+
   return (
     <UIContext.Provider value={{
       search,
@@ -77,7 +91,7 @@ export function UIProvider({ children }: { children: ReactNode }) {
       showQueue,
       setShowQueue,
       playerOpen,
-      setPlayerOpen,
+      setPlayerOpen: handleSetPlayerOpen,
       playerReady,
       setPlayerReady,
       actionMenu,

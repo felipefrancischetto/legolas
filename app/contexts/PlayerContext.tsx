@@ -50,23 +50,96 @@ interface PlayerContextType {
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
-  const [playerState, setPlayerState] = useState<PlayerState>({
-    isPlaying: false,
-    currentTime: 0,
-    duration: 0,
-    isReady: false,
-    isLoading: false,
-    error: null,
-    currentFile: null,
-    volume: 1,
-    isMuted: false
+  const [playerState, setPlayerState] = useState<PlayerState>(() => {
+    let initialVolume = 1;
+    let initialCurrentFile = null;
+    let initialCurrentTime = 0;
+
+    if (typeof window !== 'undefined') {
+      const savedVolume = localStorage.getItem('audioPlayerVolume');
+      if (savedVolume !== null) {
+        const parsedVolume = parseFloat(savedVolume);
+        if (!isNaN(parsedVolume) && parsedVolume >= 0 && parsedVolume <= 1) {
+          initialVolume = parsedVolume;
+        }
+      }
+
+      const savedCurrentFile = localStorage.getItem('audioPlayerCurrentFile');
+      if (savedCurrentFile) {
+        try {
+          initialCurrentFile = JSON.parse(savedCurrentFile);
+        } catch (error) {
+          console.error('Erro ao carregar música atual do localStorage:', error);
+        }
+      }
+
+      // Progresso por música
+      if (initialCurrentFile && initialCurrentFile.name) {
+        const savedCurrentTime = localStorage.getItem('audioPlayerCurrentTime_' + initialCurrentFile.name);
+        if (savedCurrentTime) {
+          const parsedTime = parseFloat(savedCurrentTime);
+          if (!isNaN(parsedTime) && parsedTime >= 0) {
+            initialCurrentTime = parsedTime;
+          }
+        }
+      }
+    }
+
+    return {
+      isPlaying: false,
+      currentTime: initialCurrentTime,
+      duration: 0,
+      isReady: false,
+      isLoading: false,
+      error: null,
+      currentFile: initialCurrentFile,
+      volume: initialVolume,
+      isMuted: false
+    };
   });
 
   const updatePlayerState = (state: Partial<PlayerState> | ((prev: PlayerState) => Partial<PlayerState>)) => {
     if (typeof state === 'function') {
-      setPlayerState(prev => ({ ...prev, ...state(prev) }));
+      setPlayerState(prev => {
+        const partial = state(prev);
+        let newState = { ...prev, ...partial };
+
+        // Se mudou de música, zera o progresso
+        if (partial.currentFile && partial.currentFile !== prev.currentFile) {
+          newState.currentTime = 0;
+        }
+
+        // Salva no localStorage
+        if (typeof window !== 'undefined') {
+          if (newState.currentFile) {
+            localStorage.setItem('audioPlayerCurrentFile', JSON.stringify(newState.currentFile));
+            // Salva progresso por música
+            localStorage.setItem('audioPlayerCurrentTime_' + newState.currentFile.name, newState.currentTime.toString());
+          } else {
+            localStorage.removeItem('audioPlayerCurrentFile');
+          }
+        }
+        return newState;
+      });
     } else {
-      setPlayerState(prev => ({ ...prev, ...state }));
+      setPlayerState(prev => {
+        let newState = { ...prev, ...state };
+        // Se mudou de música, zera o progresso
+        if (state.currentFile && state.currentFile !== prev.currentFile) {
+          newState.currentTime = 0;
+        }
+        // Salva no localStorage
+        if (typeof window !== 'undefined') {
+          if (newState.currentFile) {
+            localStorage.setItem('audioPlayerCurrentFile', JSON.stringify(newState.currentFile));
+            // Salva progresso por música
+            localStorage.setItem('audioPlayerCurrentTime_' + newState.currentFile.name, newState.currentTime.toString());
+          } else {
+            localStorage.removeItem('audioPlayerCurrentFile');
+          }
+        }
+        return newState;
+      });
     }
   };
 
@@ -79,7 +152,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   };
 
   const play = useCallback((file: FileInfo) => {
-    // Evita re-render se for o mesmo arquivo
+    // Sempre zera o progresso ao tocar uma nova música
     updatePlayerState(prev => {
       if (prev.currentFile?.name === file.name && prev.isPlaying) {
         return {}; // Não atualiza se já está tocando o mesmo arquivo
@@ -89,7 +162,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         isPlaying: true,
         isLoading: true,
         isReady: false,
-        error: null
+        error: null,
+        currentTime: 0 // Zera o progresso
       };
     });
   }, []);

@@ -4,14 +4,36 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import Image from 'next/image';
 import WaveSurfer from 'wavesurfer.js';
 import { usePlayer } from '../contexts/PlayerContext';
+import { useUI } from '../contexts/UIContext';
 import { getThumbnailUrl } from '../utils/thumbnailCache';
+import { useFile } from '../contexts/FileContext';
 
 export default function AudioPlayer() {
   const waveformRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
-  const { playerState, setPlayerState, pause, resume, stop, setVolume, setIsMuted } = usePlayer();
+  const { playerState, setPlayerState, pause, resume, stop, setVolume, setIsMuted, play } = usePlayer();
+  const { setPlayerOpen } = useUI();
   const { volume, isMuted } = playerState;
   const [minimized, setMinimized] = useState(false);
+  const { files } = useFile();
+
+  // Abre o player quando houver uma música carregada
+  useEffect(() => {
+    if (playerState.currentFile) {
+      setPlayerOpen(true);
+    }
+  }, [playerState.currentFile, setPlayerOpen]);
+
+  // Salva as mudanças de volume no localStorage
+  useEffect(() => {
+    try {
+      if (typeof volume === 'number' && !isNaN(volume)) {
+        localStorage.setItem('audioPlayerVolume', volume.toString());
+      }
+    } catch (error) {
+      console.error('Erro ao salvar volume no localStorage:', error);
+    }
+  }, [volume]);
 
   // Criação única do WaveSurfer
   useEffect(() => {
@@ -38,14 +60,32 @@ export default function AudioPlayer() {
         isLoading: false,
         duration
       }));
-      if (playerState.isPlaying) {
-        wavesurfer.play();
+      // Só restaura o progresso salvo se for a mesma música do último refresh
+      const lastFile = localStorage.getItem('audioPlayerCurrentFile');
+      let lastFileName = null;
+      if (lastFile) {
+        try {
+          lastFileName = JSON.parse(lastFile).name;
+        } catch {}
+      }
+      if (
+        playerState.currentFile &&
+        playerState.currentFile.name &&
+        lastFileName === playerState.currentFile.name &&
+        playerState.currentTime > 0
+      ) {
+        // Só restaura se for a mesma música do último refresh
+        wavesurfer.setTime(playerState.currentTime);
+      } else {
+        // Nova música: sempre começa do início
+        wavesurfer.setTime(0);
       }
     });
 
     wavesurfer.on('audioprocess', () => {
       if (wavesurferRef.current) {
-        setPlayerState(prev => ({ ...prev, currentTime: wavesurferRef.current!.getCurrentTime() }));
+        const currentTime = wavesurferRef.current.getCurrentTime();
+        setPlayerState(prev => ({ ...prev, currentTime }));
       }
     });
 
@@ -70,15 +110,13 @@ export default function AudioPlayer() {
     });
 
     wavesurferRef.current = wavesurfer;
-  }, [stop, setPlayerState, playerState.isPlaying]);
+  }, [stop, setPlayerState, playerState.currentTime]);
 
   // Troca de música
   useEffect(() => {
     if (playerState.currentFile && wavesurferRef.current) {
       const audioUrl = `/api/downloads/${encodeURIComponent(playerState.currentFile.name)}`;
       wavesurferRef.current.load(audioUrl);
-      wavesurferRef.current.setTime(0)
-      setPlayerState(prev => ({ ...prev, currentTime: 0 }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playerState.currentFile]);
@@ -89,6 +127,7 @@ export default function AudioPlayer() {
     }
   }, [volume, isMuted]);
 
+  // Atualiza o estado de playing quando o wavesurfer estiver pronto
   useEffect(() => {
     if (wavesurferRef.current && playerState.isReady) {
       if (playerState.isPlaying) {
@@ -133,6 +172,25 @@ export default function AudioPlayer() {
     const seconds = Math.floor(time % 60);
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
+
+  // Funções para avançar e voltar
+  const handlePrev = useCallback(() => {
+    if (!playerState.currentFile) return;
+    const idx = files.findIndex(f => f.name === playerState.currentFile?.name);
+    if (idx > 0) {
+      const prevFile = files[idx - 1];
+      play(prevFile);
+    }
+  }, [files, playerState.currentFile, play]);
+
+  const handleNext = useCallback(() => {
+    if (!playerState.currentFile) return;
+    const idx = files.findIndex(f => f.name === playerState.currentFile?.name);
+    if (idx !== -1 && idx < files.length - 1) {
+      const nextFile = files[idx + 1];
+      play(nextFile);
+    }
+  }, [files, playerState.currentFile, play]);
 
   if (!playerState.currentFile) return null;
 
@@ -192,6 +250,18 @@ export default function AudioPlayer() {
 
         {/* Controles */}
         <div className="flex items-center gap-4 min-w-[200px] h-full" style={{ alignItems: 'center' }}>
+          {/* Botão voltar */}
+          <button
+            onClick={handlePrev}
+            disabled={!playerState.isReady || playerState.isLoading}
+            className="w-8 h-8 flex items-center justify-center rounded-full bg-zinc-800 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Anterior"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <polygon points="16,6 8,12 16,18" fill="currentColor" />
+            </svg>
+          </button>
+          {/* Botão play/pause */}
           <button
             onClick={togglePlay}
             disabled={!playerState.isReady || playerState.isLoading}
@@ -209,6 +279,17 @@ export default function AudioPlayer() {
                 <polygon points="8,5 19,12 8,19" />
               </svg>
             )}
+          </button>
+          {/* Botão avançar */}
+          <button
+            onClick={handleNext}
+            disabled={!playerState.isReady || playerState.isLoading}
+            className="w-8 h-8 flex items-center justify-center rounded-full bg-zinc-800 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Próxima"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <polygon points="8,6 16,12 8,18" fill="currentColor" />
+            </svg>
           </button>
 
           <div className="flex items-center gap-2">
@@ -293,6 +374,17 @@ export default function AudioPlayer() {
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <rect x="5" y="5" width="14" height="14" rx="2" strokeWidth="2" />
+            </svg>
+          </button>
+          {/* Botão de fechar */}
+          <button
+            onClick={() => setPlayerState({ currentFile: null, isPlaying: false, currentTime: 0, isReady: false, isLoading: false })}
+            className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
+            title="Fechar"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <line x1="6" y1="6" x2="18" y2="18" strokeWidth="2" strokeLinecap="round" />
+              <line x1="6" y1="18" x2="18" y2="6" strokeWidth="2" strokeLinecap="round" />
             </svg>
           </button>
         </div>
