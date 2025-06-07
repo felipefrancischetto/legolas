@@ -78,7 +78,8 @@ async function extractAudioMetadata(filePath: string) {
       genre: genre,
       album: tags.album || tags.Album || tags.ALBUM || null,
       label: tags.publisher || tags.Publisher || tags.label || tags.Label || tags.LABEL || null,
-      thumbnail: thumbnailUrl
+      thumbnail: thumbnailUrl,
+      ano: tags.year || tags.date || tags.YEAR || tags.DATE || null
     };
   } catch (error) {
     console.error('Erro ao extrair metadados:', error);

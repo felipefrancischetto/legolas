@@ -4,6 +4,9 @@ import { readFile } from 'fs/promises';
 import { constants } from 'fs';
 import { access } from 'fs/promises';
 import NodeID3 from 'node-id3';
+import { spawn } from 'child_process';
+import { mkdtempSync, existsSync, renameSync } from 'fs';
+import os from 'os';
 
 async function fileExists(path: string): Promise<boolean> {
   try {
@@ -27,29 +30,113 @@ async function getDownloadsPath() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { fileName } = await req.json();
+    const body = await req.json();
+    const { fileName, title, artist, album, year, genre, label, bpm, key, duration, comment, newFileName } = body;
     if (!fileName) {
       return NextResponse.json({ error: 'Nome do arquivo é obrigatório.' }, { status: 400 });
     }
     const downloadsFolder = await getDownloadsPath();
-    const filePath = join(downloadsFolder, fileName);
+    let filePath = join(downloadsFolder, fileName);
     if (!(await fileExists(filePath))) {
       return NextResponse.json({ error: 'Arquivo não encontrado.' }, { status: 404 });
     }
+
+    // Renomear arquivo se necessário
+    if (newFileName && newFileName !== fileName) {
+      const newFilePath = join(downloadsFolder, newFileName);
+      if (await fileExists(newFilePath)) {
+        return NextResponse.json({ error: 'Já existe um arquivo com o novo nome.' }, { status: 400 });
+      }
+      try {
+        renameSync(filePath, newFilePath);
+        filePath = newFilePath;
+      } catch (err) {
+        return NextResponse.json({ error: 'Erro ao renomear o arquivo.' }, { status: 500 });
+      }
+    }
+
+    // Se vierem campos manuais, use-os para atualizar o arquivo
+    if (title || artist || album || year || genre || label || bpm || key || duration || comment) {
+      const ext = filePath.split('.').pop()?.toLowerCase();
+      // Corrigir o campo year para garantir apenas 4 dígitos
+      let safeYear = year;
+      if (typeof year === 'string' && year.length > 4) {
+        const match = year.match(/\d{4}/);
+        safeYear = match ? match[0] : '';
+      }
+      if (ext === 'mp3') {
+        const tags: any = {};
+        if (title) tags.title = title;
+        if (artist) tags.artist = artist;
+        if (album) tags.album = album;
+        if (safeYear) tags.year = safeYear;
+        if (genre) tags.genre = genre;
+        if (label) tags.publisher = label;
+        if (bpm) tags.TBPM = bpm.toString();
+        if (key) tags.initialKey = key;
+        if (duration) tags.length = duration.toString();
+        if (comment) tags.comment = { language: 'por', text: comment };
+
+        const success = NodeID3.write(tags, filePath);
+        if (!success) {
+          return NextResponse.json({ error: 'Falha ao gravar metadados.' }, { status: 500 });
+        }
+        return NextResponse.json({ status: 'ok', message: 'Metadados MP3 atualizados com sucesso.' });
+      } else if (ext === 'flac') {
+        // Montar argumentos do ffmpeg
+        const args = ['-y', '-i', filePath];
+        if (title) args.push('-metadata', `title=${title}`);
+        if (artist) args.push('-metadata', `artist=${artist}`);
+        if (album) args.push('-metadata', `album=${album}`);
+        if (safeYear) args.push('-metadata', `date=${safeYear}`);
+        if (genre) args.push('-metadata', `genre=${genre}`);
+        if (label) args.push('-metadata', `publisher=${label}`);
+        if (bpm) args.push('-metadata', `bpm=${bpm}`);
+        if (key) args.push('-metadata', `key=${key}`);
+        if (duration) args.push('-metadata', `duration=${duration}`);
+        if (comment) args.push('-metadata', `comment=${comment}`);
+        // Arquivo temporário de saída
+        const tmpDir = mkdtempSync(os.tmpdir() + '/flacmeta-');
+        const outPath = `${tmpDir}/out.flac`;
+        args.push('-c', 'copy', outPath);
+        // Executar ffmpeg
+        await new Promise((resolve, reject) => {
+          const ffmpeg = spawn('ffmpeg', args);
+          let stderr = '';
+          ffmpeg.stderr.on('data', (data) => { stderr += data.toString(); });
+          ffmpeg.on('close', (code) => {
+            if (code === 0 && existsSync(outPath)) {
+              try {
+                renameSync(outPath, filePath);
+                resolve(true);
+              } catch (e) {
+                reject(e);
+              }
+            } else {
+              reject(new Error('ffmpeg error: ' + stderr));
+            }
+          });
+        });
+        return NextResponse.json({ status: 'ok', message: 'Metadados FLAC atualizados com sucesso.' });
+      } else {
+        return NextResponse.json({ error: 'Formato de arquivo não suportado para edição de metadados.' }, { status: 400 });
+      }
+    }
+
+    // Se não vierem campos manuais, seguir fluxo antigo (buscar metadados externos)
     // Ler tags atuais para obter título/artista
     const tags = NodeID3.read(filePath);
-    const title = tags.title || fileName.replace(/\.mp3$/i, '');
-    const artist = tags.artist || '';
+    const fallbackTitle = tags.title || fileName.replace(/\.flac$/i, '');
+    const fallbackArtist = tags.artist || '';
     // Buscar metadados no MusicBrainz
     let metadata = null;
     try {
-      // Montar URL absoluta usando o host do request
       const host = req.headers.get('host');
       const protocol = host?.startsWith('localhost') || host?.startsWith('127.0.0.1') ? 'http' : 'https';
       const mbRes = await fetch(`${protocol}://${host}/api/musicbrainz-metadata`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, artist })
+        body: JSON.stringify({ title: fallbackTitle, artist: fallbackArtist })
       });
       metadata = await mbRes.json();
     } catch (err) {
@@ -58,10 +145,9 @@ export async function POST(req: NextRequest) {
     if (!metadata || metadata.error) {
       return NextResponse.json({ error: 'Metadados não encontrados.' }, { status: 404 });
     }
-    // Gravar metadados no arquivo MP3
     const success = NodeID3.write({
-      title: metadata.titulo || title,
-      artist: metadata.artista || artist,
+      title: metadata.titulo || fallbackTitle,
+      artist: metadata.artista || fallbackArtist,
       album: metadata.album || '',
       year: metadata.ano || '',
       genre: metadata.genero || '',

@@ -32,6 +32,7 @@ interface FileInfo {
   fileCreatedAt?: string;
   isBeatportFormat?: boolean;
   label?: string;
+  ano?: string;
 }
 
 const MusicIcon = () => (
@@ -79,7 +80,10 @@ const FileRow = memo(({
   files,
   colWidths, 
   onPlay, 
-  onContextMenu 
+  onContextMenu,
+  metadataStatus,
+  updateMetadataForFile,
+  setEditModalFile
 }: {
   file: FileInfo;
   index: number;
@@ -87,6 +91,9 @@ const FileRow = memo(({
   colWidths: number[];
   onPlay: (file: FileInfo) => void;
   onContextMenu: (e: React.MouseEvent, file: FileInfo) => void;
+  metadataStatus: any;
+  updateMetadataForFile: (fileName: string) => void;
+  setEditModalFile: (file: FileInfo) => void;
 }) => {
   const fileExists = files.some(f => f.name === file.name);
   
@@ -134,6 +141,31 @@ const FileRow = memo(({
       </div>
       <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[9], minWidth:50}}>
         <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.label || ''}>{file.label || '-'}</span>
+      </div>
+      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[10], minWidth:50}}>{file.ano ? String(file.ano).slice(0, 4) : '-'}</div>
+      <div className="flex justify-center items-center" style={{width:colWidths[11], minWidth:120}}>
+        <select
+          className="px-2 py-1 rounded bg-zinc-700 text-white text-xs focus:outline-none"
+          defaultValue=""
+          onClick={e => e.stopPropagation()}
+          onChange={async (e) => {
+            const value = e.target.value;
+            if (value === 'atualizar') {
+              updateMetadataForFile(file.name);
+            } else if (value === 'baixar') {
+              window.open(`/api/downloads/${encodeURIComponent(file.name)}`, '_blank');
+            } else if (value === 'editar') {
+              setEditModalFile(file);
+            }
+            e.target.value = '';
+          }}
+          disabled={metadataStatus[file.name] === 'loading' || file.isBeatportFormat}
+        >
+          <option value="" disabled hidden>Ações</option>
+          <option value="atualizar">Atualizar</option>
+          <option value="baixar">Baixar</option>
+          <option value="editar">Editar</option>
+        </select>
       </div>
     </div>
   );
@@ -332,6 +364,10 @@ export default function FileList() {
             valA = a.label;
             valB = b.label;
             break;
+          case 'ano':
+            valA = a.ano;
+            valB = b.ano;
+            break;
           default:
             const fileInfoMap: Record<string, any> = a;
             const fileInfoMapB: Record<string, any> = b;
@@ -374,16 +410,44 @@ export default function FileList() {
   async function updateMetadataForFile(fileName: string) {
     setMetadataStatus({ ...metadataStatus, [fileName]: 'loading' });
     try {
-      const response = await fetch('/api/update-metadata', {
+      const file = files.find(f => f.name === fileName);
+      if (!file) {
+        throw new Error('Arquivo não encontrado');
+      }
+
+      const response = await fetch('/api/update-individual-metadata', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileName }),
+        body: JSON.stringify({ 
+          fileName,
+          title: file.title || file.displayName,
+          artist: file.artist || ''
+        }),
       });
       const result = await response.json();
       if (!response.ok || result.error) {
         setMetadataStatus({ ...metadataStatus, [fileName]: result.error || 'error' });
         return;
       }
+
+      // Atualizar os metadados do arquivo com os novos dados
+      const updatedFile = {
+        ...file,
+        ...result.metadata,
+        isBeatportFormat: true
+      };
+
+      // Atualizar o arquivo no backend
+      const updateResponse = await fetch('/api/update-metadata', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedFile),
+      });
+
+      if (!updateResponse.ok) {
+        throw new Error('Erro ao atualizar arquivo');
+      }
+
       setMetadataStatus({ ...metadataStatus, [fileName]: 'success' });
       fetchFiles();
     } catch (err: any) {
@@ -500,16 +564,6 @@ export default function FileList() {
     });
   }, [files, queue, updateQueueItem]);
 
-  // Fecha o menu de ações ao clicar fora
-  useEffect(() => {
-    if (!actionMenu) return;
-    const handleClick = (e: MouseEvent) => {
-      setActionMenu(null);
-    };
-    window.addEventListener('mousedown', handleClick);
-    return () => window.removeEventListener('mousedown', handleClick);
-  }, [actionMenu, setActionMenu]);
-
   // Handlers memoizados
   const handlePlay = useCallback((file: FileInfo) => {
     play(file);
@@ -529,9 +583,52 @@ export default function FileList() {
 
   // Função para resetar larguras das colunas
   const resetColumnWidths = useCallback(() => {
-    const defaultWidths = [50, 50, 250, 80, 150, 70, 70, 120, 150, 120];
+    const defaultWidths = [40, 48, 320, 70, 160, 55, 60, 140, 180, 90, 70, 90];
     setColWidths(defaultWidths);
   }, [setColWidths]);
+
+  const [editModalFile, setEditModalFile] = useState<FileInfo | null>(null);
+
+  const handleEditFileSave = async (data: Partial<FileInfo>) => {
+    if (editModalFile) {
+      try {
+        // Montar novo nome de arquivo no padrão: Artista(s) - Título (Versão) [Label].extensão
+        const ext = editModalFile.name.split('.').pop();
+        let artista = (data.artist || editModalFile.artist || '').trim();
+        let titulo = (data.title || editModalFile.title || editModalFile.displayName || '').trim();
+        let label = (data.label || editModalFile.label || '').trim();
+        // Extrair versão do título se houver entre parênteses
+        let versao = '';
+        const matchVersao = titulo.match(/\(([^)]+)\)/);
+        if (matchVersao) {
+          versao = matchVersao[1];
+          // Remover a versão do título para não duplicar
+          titulo = titulo.replace(/\s*\([^)]*\)/, '').trim();
+        }
+        // Montar nome
+        let newFileName = `${artista} - ${titulo}`;
+        if (versao) newFileName += ` (${versao})`;
+        if (label) newFileName += ` [${label}]`;
+        newFileName = newFileName.replace(/\s+/g, ' ').replace(/[\\/:*?"<>|]/g, '').trim();
+        newFileName += `.${ext}`;
+        const response = await fetch('/api/update-metadata', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileName: editModalFile.name, ...data, year: data.ano ? String(data.ano).slice(0, 4) : '', newFileName }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error) {
+          setMetadataStatus({ ...metadataStatus, [editModalFile.name]: result.error || 'error' });
+        } else {
+          setMetadataStatus({ ...metadataStatus, [editModalFile.name]: 'success' });
+          fetchFiles();
+        }
+      } catch (err: any) {
+        setMetadataStatus({ ...metadataStatus, [editModalFile.name]: err.message || 'error' });
+      }
+      setEditModalFile(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -642,6 +739,8 @@ export default function FileList() {
             { label: 'Gênero', sortable: true, align: 'center' },
             { label: 'Álbum', sortable: true, align: 'center' },
             { label: 'Label', sortable: true, align: 'center' },
+            { label: 'Ano', sortable: true, align: 'center' },
+            { label: 'Ações', sortable: false, align: 'center' },
           ].map((col, idx) => (
             <div
               key={col.label}
@@ -680,6 +779,9 @@ export default function FileList() {
                   colWidths={colWidths}
                   onPlay={handlePlay}
                   onContextMenu={handleContextMenu}
+                  metadataStatus={metadataStatus}
+                  updateMetadataForFile={updateMetadataForFile}
+                  setEditModalFile={setEditModalFile}
                 />
               ))}
             </div>
@@ -693,34 +795,76 @@ export default function FileList() {
         </div>
       )}
 
-      {/* Menu flutuante de ações */}
-      {actionMenu && actionMenu.file && (
-        <div
-          className="fixed z-50 bg-zinc-800 border border-zinc-700 rounded shadow-lg p-2 flex flex-col min-w-[180px] animate-fade-in"
-          style={{ left: actionMenu.x, top: actionMenu.y }}
-          onClick={e => e.stopPropagation()}
-        >
-          <button
-            className="w-full text-left px-3 py-2 hover:bg-zinc-700 text-white rounded"
-            disabled={metadataStatus[actionMenu.file.name] === 'loading' || actionMenu.file.isBeatportFormat}
-            onClick={() => {
-              updateMetadataForFile(actionMenu.file!.name);
-              setActionMenu(null);
-            }}
-          >
-            Atualizar metadados
-          </button>
-          <button
-            className="w-full text-left px-3 py-2 hover:bg-zinc-700 text-white rounded"
-            onClick={() => {
-              window.open(`/api/downloads/${encodeURIComponent(actionMenu.file!.name)}`, '_blank');
-              setActionMenu(null);
-            }}
-          >
-            Baixar arquivo
-          </button>
-        </div>
+      {/* Modal de edição manual de informações */}
+      {editModalFile && (
+        <EditFileModal
+          file={editModalFile}
+          onClose={() => setEditModalFile(null)}
+          onSave={handleEditFileSave}
+        />
       )}
+    </div>
+  );
+}
+
+function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () => void, onSave: (data: Partial<FileInfo>) => void }) {
+  const [form, setForm] = useState({
+    title: file.title || '',
+    artist: file.artist || '',
+    duration: file.duration || '',
+    bpm: file.bpm?.toString() || '',
+    key: file.key || '',
+    genre: file.genre || '',
+    album: file.album || '',
+    label: file.label || '',
+    ano: file.ano || '',
+  });
+  const [saving, setSaving] = useState(false);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setForm(f => ({ ...f, [name]: value }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    await onSave({
+      ...form,
+      bpm: form.bpm ? parseInt(form.bpm) : undefined,
+      ano: form.ano ? String(form.ano).slice(0, 4) : '',
+    });
+    setSaving(false);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+      <div className="bg-zinc-900 rounded-lg p-6 w-full max-w-md shadow-lg relative animate-fade-in">
+        <button
+          onClick={onClose}
+          className="absolute top-2 right-2 text-gray-400 hover:text-white"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+        <h2 className="text-xl font-semibold text-white mb-4">Editar informações</h2>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <input name="title" value={form.title} onChange={handleChange} placeholder="Título" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          <input name="artist" value={form.artist} onChange={handleChange} placeholder="Artista" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          <input name="duration" value={form.duration} onChange={handleChange} placeholder="Duração" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          <input name="bpm" value={form.bpm} onChange={handleChange} placeholder="BPM" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          <input name="key" value={form.key} onChange={handleChange} placeholder="Key" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          <input name="genre" value={form.genre} onChange={handleChange} placeholder="Gênero" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          <input name="album" value={form.album} onChange={handleChange} placeholder="Álbum" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          <input name="label" value={form.label} onChange={handleChange} placeholder="Label" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          <input name="ano" value={form.ano} onChange={handleChange} placeholder="Ano" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          <button type="submit" disabled={saving} className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all font-medium shadow disabled:opacity-50 disabled:cursor-not-allowed">
+            {saving ? 'Salvando...' : 'Salvar'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

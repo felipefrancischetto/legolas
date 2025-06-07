@@ -412,8 +412,14 @@ export class MetadataAggregator {
         console.log(`   ✨ Metadados úteis encontrados: ${hasUsefulData ? 'SIM' : 'NÃO'}`);
         if (hasUsefulData) {
           console.log('🎉 [MetadataAggregator] BEATPORT FUNCIONOU! Dados obtidos com sucesso!');
+          return aggregated;
+        } else {
+          // Se não encontrou metadados úteis, adiciona (Unreleased) ao título
+          return {
+            ...aggregated,
+            title: `${aggregated.title} (Unreleased)`
+          };
         }
-        return aggregated;
       } else {
         console.log(`\n❌ [Beatport] NENHUM METADADO ÚTIL EXTRAÍDO:`);
         console.log(`   ⚠️ Verifique se a URL está correta e contém os dados esperados`);

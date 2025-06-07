@@ -557,12 +557,30 @@ export class PlaylistDownloadService {
     cleanArtist = cleanArtistName(cleanArtist);
     logger.info(`[DEBUG] cleanTitle: ${cleanTitle}, cleanArtist: ${cleanArtist}`);
 
-    logger.info(`🔍 Searching metadata for: "${cleanTitle}" by "${cleanArtist}" (Beatport: ${useBeatport})`);
+    // NOVO: Normalizar para padrão 'Artista - Título' antes de buscar metadados
+    function extractArtistAndTitle(str: string) {
+      const match = str.match(/^(.+?)\s*-\s*(.+)$/);
+      if (match) {
+        return { artist: match[1].trim(), title: match[2].trim() };
+      }
+      return { artist: '', title: str };
+    }
 
-    // Get enhanced metadata with Beatport option
+    // Extrair artista/título do padrão se possível
+    let normArtist = cleanArtist;
+    let normTitle = cleanTitle;
+    const extracted = extractArtistAndTitle(cleanTitle);
+    if (extracted.artist && extracted.title) {
+      normArtist = extracted.artist;
+      normTitle = extracted.title;
+    }
+
+    logger.info(`[DEBUG] Normalized for metadata search: artist='${normArtist}', title='${normTitle}'`);
+
+    // Buscar metadados usando padrão normalizado
     const metadata = await metadataAggregator.searchMetadata(
-      cleanTitle, 
-      cleanArtist
+      normTitle,
+      normArtist
     );
     logger.info(`[DEBUG] metadataAggregator.searchMetadata retornou: ${JSON.stringify(metadata)}`);
 
@@ -571,33 +589,46 @@ export class PlaylistDownloadService {
                            metadata.genre || metadata.album || metadata.artist;
 
     if (!hasEnhancedData) {
-      logger.warn(`[DEBUG] No enhanced metadata found for: ${cleanTitle} - ${cleanArtist}`);
+      logger.warn(`[DEBUG] No enhanced metadata found for: ${normTitle} - ${normArtist}`);
       return { success: false, fromBeatport: false };
     }
 
     const fromBeatport = metadata.sources?.includes('Beatport') || false;
 
-    // **MELHORADO: Usar artista do Beatport se disponível, senão manter o extraído**
-    let finalArtist = metadata.artist || cleanArtist || artist;
+    // Usar artista/título do Beatport se disponíveis
+    let finalArtist = metadata.artist || normArtist || artist;
+    let finalTitle = metadata.title || normTitle;
     finalArtist = cleanArtistName(finalArtist);
+    finalTitle = finalTitle.trim();
     logger.info(`[DEBUG] Final artist determined: "${finalArtist}" (from Beatport: ${!!metadata.artist})`);
+    logger.info(`[DEBUG] Final title determined: "${finalTitle}" (from Beatport: ${!!metadata.title})`);
+
+    // Evitar duplicidade de sufixos/remix/version
+    function removeDuplicateSuffix(title: string) {
+      // Remove duplicidade de (Remix), (Edit), etc.
+      return title.replace(/(\([^)]*\))(?=.*\1)/gi, '').replace(/\s+/g, ' ').trim();
+    }
+    finalTitle = removeDuplicateSuffix(finalTitle);
 
     // Extrair versão se existir
     let version = '';
-    const versionMatch = cleanTitle.match(/\((.*?)\)/);
+    const versionMatch = finalTitle.match(/\((.*?)\)/);
     if (versionMatch) {
       version = versionMatch[1];
     }
 
-    // Formatar o nome do arquivo com todas as informações dos metadados
-    const newFilename = `${finalArtist} - ${cleanTitle}${version ? ` (${version})` : ''}${metadata.label ? ` [${metadata.label}]` : ''}`;
-    const sanitizedNewFilename = sanitizeTitle(newFilename);
+    // Montar nome do arquivo sem duplicidade de versão
+    let fileBase = `${finalArtist} - ${finalTitle}`;
+    if (version && !finalTitle.endsWith(`(${version})`)) {
+      fileBase += ` (${version})`;
+    }
+    if (metadata.label) fileBase += ` [${metadata.label}]`;
+    const sanitizedNewFilename = sanitizeTitle(fileBase);
 
     // Renomear o arquivo com o novo nome formatado
     const fileDir = filePath.substring(0, filePath.lastIndexOf('/'));
     const fileExt = filePath.split('.').pop();
     const newFilePath = `${fileDir}/${sanitizedNewFilename}.${fileExt}`;
-    
     try {
       const { rename } = require('fs/promises');
       await rename(filePath, newFilePath);
@@ -613,9 +644,9 @@ export class PlaylistDownloadService {
     if (fileExtension === 'mp3') {
       // Use NodeID3 for MP3 files
       const enhancedTags = {
-        title: metadata.title || cleanTitle,
-        artist: finalArtist,  // **CORRIGIDO: usar finalArtist**
-        album: existingTags.album || '', // Sempre usar a tag existente
+        title: metadata.title || finalTitle,
+        artist: finalArtist,
+        album: existingTags.album || '',
         year: metadata.year?.toString() || existingTags.year || '',
         genre: metadata.genre || existingTags.genre || '',
         publisher: metadata.label || existingTags.publisher || '',
@@ -634,7 +665,7 @@ export class PlaylistDownloadService {
     } else if (fileExtension === 'flac') {
       // Use ffmpeg for FLAC files  
       logger.info(`[DEBUG] Chamando writeFlacMetadata para FLAC: ${filePath}`);
-      success = await this.writeFlacMetadata(filePath, metadata, cleanTitle, finalArtist, useBeatport, existingTags);
+      success = await this.writeFlacMetadata(filePath, metadata, finalTitle, finalArtist, useBeatport, existingTags);
       logger.info(`[DEBUG] Resultado writeFlacMetadata: ${success}`);
     } else {
       logger.warn(`[DEBUG] Unsupported file format for metadata writing: ${fileExtension}`);

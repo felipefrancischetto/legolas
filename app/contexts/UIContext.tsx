@@ -36,7 +36,7 @@ export function UIProvider({ children }: { children: ReactNode }) {
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number; file: any | null } | null>(null);
   
   // 10 colunas: #, Thumbnail, Título, Duração, Artista, BPM, Key, Gênero, Álbum, Label
-  const defaultWidths = [50, 50, 250, 80, 150, 70, 70, 120, 150, 120];
+  const defaultWidths = [50, 50, 250, 80, 150, 70, 70, 120, 150, 120, 180];
   
   const [colWidths, setColWidths] = useState<number[]>(() => {
     if (typeof window !== 'undefined') {
