@@ -6,6 +6,11 @@ import { useDownload } from '../contexts/DownloadContext';
 import DownloadQueue from './DownloadQueue';
 import DownloadStatusIndicator from './DownloadStatusIndicator';
 
+interface DownloadFormProps {
+  minimized: boolean;
+  setMinimized: (minimized: boolean) => void;
+}
+
 interface VideoInfo {
   title: string;
   thumbnail: string;
@@ -22,13 +27,12 @@ interface VideoInfo {
   }>;
 }
 
-export default function DownloadForm() {
+export default function DownloadForm({ minimized, setMinimized }: DownloadFormProps) {
   const [url, setUrl] = useState('');
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [selectedTracks, setSelectedTracks] = useState<number[]>([]);
   const [format, setFormat] = useState('flac');
   const [enrichWithBeatport, setEnrichWithBeatport] = useState(false);
-  const [minimized, setMinimized] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   const [currentDownloadId, setCurrentDownloadId] = useState<string | null>(null);
   const [isPasting, setIsPasting] = useState(false);
@@ -271,7 +275,7 @@ export default function DownloadForm() {
         </div>
       )}
 
-      <div className="flex flex-row gap-2 items-start justify-between">
+      <div className={`flex flex-row gap-2 items-start justify-between${minimized ? ' hidden' : ''}`}>
         <div className="flex-1 min-w-0"></div>
         <div className="flex gap-2 items-center flex-shrink-0">
           <button
@@ -284,7 +288,7 @@ export default function DownloadForm() {
           </button>
           <button
             className="bg-zinc-800 rounded-full p-2 hover:bg-zinc-700 transition"
-            onClick={() => setMinimized((m) => !m)}
+            onClick={() => setMinimized(!minimized)}
             aria-label={minimized ? 'Expandir' : 'Minimizar'}
             type="button"
           >
@@ -297,8 +301,8 @@ export default function DownloadForm() {
         </div>
       </div>
       
-      {/* Formulário principal */}
-      {!minimized && (
+      {/* Formulário principal OU header compacto minimizado */}
+      {!minimized ? (
         <form onSubmit={handleSubmit} className="flex flex-row gap-1 items-stretch mt-2 w-full">
           <div className="flex-[3] flex flex-col justify-end">
             <label className="block text-xs font-medium text-gray-300 mb-1">URL do YouTube</label>
@@ -391,6 +395,73 @@ export default function DownloadForm() {
             </button>
           </div>
         </form>
+      ) : (
+        <div className="fixed top-0 left-0 w-full z-50 bg-black pointer-events-none border-b border-zinc-800" style={{ boxShadow: 'none' }}>
+          <div className="w-full flex justify-center">
+            <form
+              onSubmit={handleSubmit}
+              className="flex flex-row items-center gap-3 w-full max-w-6xl px-4 py-2 pointer-events-auto animate-slide-down"
+              style={{ minHeight: 75 }}
+            >
+              <div className="flex items-center gap-2 mr-2">
+                <img src="/legolas_thumb.png" alt="Legolas" className="w-8 h-8 object-contain" />
+                <span className="text-lg font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent select-none">Legolas</span>
+              </div>
+              <div className="flex-1">
+                <input
+                  type="url"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  onPaste={handlePaste}
+                  className="w-full h-10 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white"
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={downloadStatus.loading || !videoInfo}
+                className="h-9 px-4 flex flex-row items-center justify-center gap-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label="Baixar"
+              >
+                {downloadStatus.loading ? (
+                  <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
+                  </svg>
+                )}
+              </button>
+              <div className="flex gap-2 items-center flex-shrink-0 ml-2">
+                <button
+                  className="bg-zinc-800 rounded-full p-2 hover:bg-zinc-700 transition"
+                  onClick={() => setShowQueue((q) => !q)}
+                  aria-label={showQueue ? 'Fechar fila de downloads' : 'Abrir fila de downloads'}
+                  type="button"
+                  tabIndex={0}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" /></svg>
+                </button>
+                <button
+                  className="bg-zinc-800 rounded-full p-2 hover:bg-zinc-700 transition"
+                  onClick={() => setMinimized(!minimized)}
+                  aria-label={minimized ? 'Expandir' : 'Minimizar'}
+                  type="button"
+                  tabIndex={0}
+                >
+                  {minimized ? (
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  ) : (
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* Preview do vídeo/playlist */}

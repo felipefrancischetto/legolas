@@ -33,6 +33,8 @@ interface FileInfo {
   isBeatportFormat?: boolean;
   label?: string;
   ano?: string;
+  status?: string;
+  remixer?: string;
 }
 
 const MusicIcon = () => (
@@ -48,7 +50,7 @@ const ThumbnailImage = memo(({ file, fileExists }: { file: FileInfo, fileExists:
   if (!fileExists || error) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-zinc-800 rounded">
-        <svg className="w-6 h-6 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-8 h-8 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
         </svg>
       </div>
@@ -61,8 +63,8 @@ const ThumbnailImage = memo(({ file, fileExists }: { file: FileInfo, fileExists:
       <Image
         src={thumbnailUrl}
         alt={file.title || file.displayName}
-        width={32}
-        height={32}
+        width={48}
+        height={48}
         className="object-cover w-full h-full rounded"
         onError={() => setError(true)}
         loading="lazy"
@@ -73,12 +75,25 @@ const ThumbnailImage = memo(({ file, fileExists }: { file: FileInfo, fileExists:
 
 ThumbnailImage.displayName = 'ThumbnailImage';
 
+// Definição centralizada das colunas
+const columns = [
+  { label: 'Título', key: 'title', width: 260 },
+  { label: 'Artistas', key: 'artist', width: 180 },
+  { label: 'Gravadora', key: 'label', width: 100 },
+  { label: 'Albúm', key: 'album', width: 120 },
+  { label: 'Gênero', key: 'genre', width: 100 },
+  { label: 'BPM', key: 'bpm', width: 60 },
+  { label: 'Tom', key: 'key', width: 70 },
+  { label: 'Lançamento', key: 'ano', width: 70 },
+  { label: 'Ações', key: 'acoes', width: 50 },
+];
+
 // Memoizando o FileRow para evitar re-renders desnecessários
 const FileRow = memo(({ 
   file, 
   index, 
   files,
-  colWidths, 
+  columns, 
   onPlay, 
   onContextMenu,
   metadataStatus,
@@ -90,90 +105,103 @@ const FileRow = memo(({
   file: FileInfo;
   index: number;
   files: FileInfo[];
-  colWidths: number[];
+  columns: { label: string, key: string, width: number }[];
   onPlay: (file: FileInfo) => void;
   onContextMenu: (e: React.MouseEvent, file: FileInfo) => void;
   metadataStatus: any;
-  updateMetadataForFile: (fileName: string) => void;
+  updateMetadataForFile: (fileName: string, status: string) => void;
   setEditModalFile: (file: FileInfo) => void;
   isPlaying?: boolean;
   fetchFiles: (force?: boolean) => void;
 }) => {
   const fileExists = files.some(f => f.name === file.name);
-  
+  // Checar se todos os campos principais estão preenchidos
+  const isComplete = Boolean(
+    (file.title || file.displayName) &&
+    file.artist &&
+    file.label &&
+    file.album &&
+    file.genre &&
+    file.bpm &&
+    file.key &&
+    file.ano
+  );
   return (
     <div
       key={file.path}
       className={`flex items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs cursor-pointer ${isPlaying ? 'ring-2 ring-blue-400 bg-blue-900/20' : ''}`}
-      style={{ minHeight: 50 }}
+      style={{ minHeight: 50, margin: '5px 0px' }}
       onClick={e => onContextMenu(e, file)}
     >
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[0], minWidth:50}}>
-        {index + 1}
-      </div>
-      <div className="flex items-center justify-center" style={{width:colWidths[1], minWidth:50}}>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onPlay(file);
-          }}
-          className="w-10 h-10 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110"
-        >
-          <ThumbnailImage file={file} fileExists={fileExists} />
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
-            <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          </div>
-        </button>
-      </div>
-      <div className="truncate text-gray-400 flex items-center gap-2 justify-start" style={{width:colWidths[2], minWidth:50}}>
-        {file.title || file.displayName}
-        {file.isBeatportFormat && (
-          <span className="text-xs text-green-500" title="Arquivo já está no formato Beatport">
-            ✓
-          </span>
+      {/* Primeira coluna: check sutil se completo */}
+      <div style={{ width: 18, minWidth: 18 }} className="flex items-center justify-center h-12 px-0">
+        {isComplete && (
+          <svg className="w-4 h-4 text-green-400 opacity-60" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
         )}
       </div>
-      <div className="truncate text-gray-400 flex items-center justify-start" style={{width:colWidths[3], minWidth:50}}>{file.artist || '-'}</div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[4], minWidth:50}}>{file.duration || '-'}</div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[5], minWidth:50}}>{file.bpm || '-'}</div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[6], minWidth:50}}>{file.key || '-'}</div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[7], minWidth:50}}>{file.genre || '-'}</div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[8], minWidth:50}}>
-        <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.album || ''}>{file.album || '-'}</span>
-      </div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[9], minWidth:50}}>
-        <span className="truncate block max-w-[180px] whitespace-nowrap" title={file.label || ''}>{file.label || '-'}</span>
-      </div>
-      <div className="flex justify-center text-center text-gray-400" style={{width:colWidths[10], minWidth:50}}>{file.ano ? String(file.ano).slice(0, 4) : '-'}</div>
-      <div className="flex justify-center items-center" style={{width:colWidths[11], minWidth:120}}>
-        <select
-          className="px-2 py-1 rounded bg-zinc-700 text-white text-xs focus:outline-none"
-          defaultValue=""
-          onClick={e => e.stopPropagation()}
-          onChange={async (e) => {
-            const value = e.target.value;
-            if (value === 'atualizar') {
-              updateMetadataForFile(file.name);
-            } else if (value === 'baixar') {
-              window.open(`/api/downloads/${encodeURIComponent(file.name)}`, '_blank');
-            } else if (value === 'editar') {
-              setEditModalFile(file);
-            } else if (value === 'remover') {
-              await removeFile(file.name, fetchFiles);
-            }
-            e.target.value = '';
-          }}
-          disabled={metadataStatus[file.name] === 'loading' || file.isBeatportFormat}
-        >
-          <option value="" disabled hidden>Ações</option>
-          <option value="atualizar">Atualizar</option>
-          <option value="baixar">Baixar</option>
-          <option value="editar">Editar</option>
-          <option value="remover">Remover</option>
-        </select>
-      </div>
+      {columns.map((col, idx) => {
+        let content = null;
+        switch (col.key) {
+          case 'title':
+            content = (
+              <div className="flex items-center overflow-hidden">
+                <button
+                  onClick={(e) => { e.stopPropagation(); onPlay(file); }}
+                  className="w-12 h-12 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110 mr-2"
+                >
+                  <ThumbnailImage file={file} fileExists={fileExists} />
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  </div>
+                </button>
+                <span className="font-bold text-white truncate block max-w-full" title={file.title || file.displayName}>{file.title || file.displayName}</span>
+              </div>
+            );
+            break;
+          case 'artist':
+            content = <span className="text-xs text-blue-400 truncate block max-w-full" title={file.artist || ''}>{file.artist || '-'}</span>;
+            break;
+          case 'label':
+            content = <span className="truncate block max-w-full" title={file.label || ''}>{file.label || '-'}</span>;
+            break;
+          case 'album':
+            content = <span className="text-xs text-gray-400 truncate block max-w-full" title={ file.album || ''}>{file.album || file.album || ''}</span>;
+            break;
+          case 'genre':
+            content = <span className="truncate block max-w-full" title={file.genre || ''}>{file.genre || '-'}</span>;
+            break;
+          case 'bpm':
+            content = <span className="text-xs text-gray-400 truncate block max-w-full">{file.bpm ? `${file.bpm}` : '-'}</span>;
+            break;
+          case 'key':
+            content = <span className="text-xs text-gray-400 truncate block max-w-full">{file.key || '-'}</span>;
+            break;
+          case 'ano':
+            content = <span className="truncate block max-w-full">{file.ano ? String(file.ano).slice(0, 4) : '-'}</span>;
+            break;
+          case 'acoes':
+            content = (
+              <ActionMenu 
+                file={file} 
+                onUpdate={(fileName) => updateMetadataForFile(fileName, 'loading')} 
+                onEdit={setEditModalFile} 
+                fetchFiles={fetchFiles} 
+              />
+            );
+            break;
+          default:
+            content = null;
+        }
+        return (
+          <div key={col.key} style={{ width: col.width, minWidth: col.width }} className="px-2 flex items-center h-12 justify-start text-left overflow-hidden whitespace-nowrap text-ellipsis">
+            {content}
+          </div>
+        );
+      })}
     </div>
   );
 });
@@ -403,7 +431,7 @@ export default function FileList() {
     return filtered;
   }, [files, search, sortBy, sortOrder]);
 
-  const [groupByField, setGroupByField] = useState<string>('album');
+  const [groupByField, setGroupByField] = useState<string>('');
 
   // Lista de campos possíveis para agrupar
   const groupableFields = [
@@ -449,8 +477,8 @@ export default function FileList() {
     }
   };
 
-  async function updateMetadataForFile(fileName: string) {
-    setMetadataStatus({ ...metadataStatus, [fileName]: 'loading' });
+  async function updateMetadataForFile(fileName: string, status: string) {
+    setMetadataStatus({ ...metadataStatus, [fileName]: status });
     try {
       const file = files.find(f => f.name === fileName);
       if (!file) {
@@ -691,112 +719,51 @@ export default function FileList() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex justify-between items-center mb-4 gap-2 flex-shrink-0">
-        <h2 className="text-xl font-semibold text-white">Arquivos Baixados</h2>
-        <div className="flex gap-2 items-center">
-          {/* Novo select de agrupamento */}
-          <label className="text-sm text-zinc-300 mr-1">Agrupar por:</label>
-          <select
-            value={groupByField}
-            onChange={e => setGroupByField(e.target.value)}
-            className="px-2 py-1 rounded bg-zinc-700 text-white text-sm focus:outline-none"
-          >
-            {groupableFields.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-          <button
-            onClick={updateAllMetadata}
-            disabled={isUpdatingAll || files.every(f => f.isBeatportFormat)}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-              isUpdatingAll || files.every(f => f.isBeatportFormat)
-                ? 'bg-zinc-700 text-gray-400 cursor-not-allowed'
-                : 'bg-blue-600 text-white hover:bg-blue-700'
-            }`}
-          >
-            {isUpdatingAll ? (
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                </svg>
-                <span>Atualizando... ({updateProgress.current}/{updateProgress.total})</span>
-              </div>
-            ) : (
-              'Atualizar Todos'
-            )}
-          </button>
-
-          <button
-            onClick={handleSelectDownloadsFolder}
-            className="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-all duration-200 shadow"
-            title={customDownloadsPath ? `Pasta atual: ${customDownloadsPath}` : 'Selecionar pasta de downloads'}
-          >
-            Selecionar pasta de downloads
-          </button>
-          
-          <button
-            onClick={resetColumnWidths}
-            className="px-4 py-2 rounded-md text-sm font-medium bg-zinc-700 text-white hover:bg-zinc-600 transition-all duration-200"
-            title="Resetar larguras das colunas para o padrão"
-          >
-            <div className="flex items-center gap-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Resetar Colunas
-            </div>
-          </button>
+      <div className="flex items-center mb-4 gap-2 flex-shrink-0">
+        {/* <h2 className="text-xl font-semibold text-white">Arquivos Baixados</h2> */}
+        <div className="flex items-center justify-between w-full gap-2">
+          {/* Campo de busca à esquerda */}
+          <input
+            type="text"
+            placeholder="Buscar por título ou artista..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="flex-1 px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white text-sm focus:outline-none"
+            style={{ minWidth: 200 }}
+          />
+          {/* Agrupar por à direita */}
+          <div className="flex gap-2 items-center ml-4">
+            <label className="text-sm text-zinc-300 mr-1">Agrupar por:</label>
+            <select
+              value={groupByField}
+              onChange={e => setGroupByField(e.target.value)}
+              className="px-2 py-1 rounded bg-zinc-700 text-white text-sm focus:outline-none"
+            >
+              {groupableFields.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
-      </div>
-      
-      <div className="flex justify-between items-center mb-2 flex-shrink-0">
-        <input
-          type="text"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Buscar por título ou artista..."
-          className="w-full max-w-md px-4 py-2 rounded-md bg-zinc-800 border border-zinc-700 text-white placeholder-gray-400 focus:border-zinc-600 focus:ring-zinc-600 transition-all duration-200 shadow"
-        />
       </div>
       
       <div 
         className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden flex flex-col flex-1 min-h-0"
       >
         <div className="flex w-full px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10 flex-shrink-0" style={{userSelect:'none'}}>
-          {[
-            { label: '#', sortable: true, align: 'center' },
-            { label: '', sortable: false, align: 'center' },
-            { label: 'Título', sortable: true, align: 'left' },
-            { label: 'Artista', sortable: true, align: 'left' },
-            { label: 'Duração', sortable: true, align: 'center' },
-            { label: 'BPM', sortable: true, align: 'center' },
-            { label: 'Key', sortable: true, align: 'center' },
-            { label: 'Gênero', sortable: true, align: 'center' },
-            { label: 'Álbum', sortable: true, align: 'center' },
-            { label: 'Label', sortable: true, align: 'center' },
-            { label: 'Ano', sortable: true, align: 'center' },
-            { label: 'Ações', sortable: false, align: 'center' },
-          ].map((col, idx) => (
+          {columns.map((col, idx) => (
             <div
-              key={col.label + idx}
-              className={`flex items-center h-8 relative ${col.sortable ? 'cursor-pointer select-none' : ''} ${col.align === 'center' ? 'justify-center' : 'justify-start'}`}
-              style={{ width: colWidths[idx], minWidth: 40 }}
-              onClick={col.sortable ? () => handleSort(col.label.toLowerCase().replace('ações','label') === 'ações' ? 'label' : col.label.toLowerCase()) : undefined}
+              key={col.key}
+              style={{ width: col.width, minWidth: col.width }}
+              className="flex items-center h-12 px-2 overflow-hidden whitespace-nowrap text-ellipsis"
             >
-              <span className="truncate">{col.label} {sortBy === col.label.toLowerCase() && (sortOrder === 'asc' ? '↑' : '↓')}</span>
-              {idx < colWidths.length - 1 && (
-                <div
-                  onMouseDown={e => handleResizeStart(idx, e)}
-                  className="absolute right-0 top-0 h-full w-1 cursor-col-resize z-20 bg-zinc-600 hover:bg-blue-500 transition-colors duration-200 opacity-50 hover:opacity-100"
-                  style={{ userSelect: 'none' }}
-                  title="Arrastar para redimensionar coluna"
-                />
-              )}
+              <span className="truncate uppercase tracking-wide text-xs font-semibold">{col.label}{sortBy === col.key && (sortOrder === 'asc' ? '↑' : '↓')}</span>
             </div>
           ))}
         </div>
         <div 
           className="flex-1 min-h-0 overflow-y-auto custom-scroll"
+          style={{ maxHeight: '100%' }}
         >
           {Object.entries(groupedFiles).map(([group, files]) => (
             <div key={group} className="animate-fade-in">
@@ -811,7 +778,7 @@ export default function FileList() {
                   file={file}
                   index={files.length - index - 1}
                   files={files}
-                  colWidths={colWidths}
+                  columns={columns}
                   onPlay={handlePlay}
                   onContextMenu={handleContextMenu}
                   metadataStatus={metadataStatus}
@@ -917,6 +884,70 @@ function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () 
           </button>
         </form>
       </div>
+    </div>
+  );
+}
+
+// Menu de ações para cada linha
+function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: { 
+  file: any, 
+  onUpdate: (fileName: string, status: string) => void, 
+  onEdit: (file: any) => void,
+  fetchFiles: (force?: boolean) => void 
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Fechar menu ao clicar fora
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside);
+    } else {
+      document.removeEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={menuRef}>
+      <button
+        className="p-2 rounded-full hover:bg-zinc-700 transition-colors text-zinc-300 flex items-center justify-center"
+        onClick={() => setOpen((v) => !v)}
+        title="Ações"
+        type="button"
+      >
+        {/* Vertical Dots (Heroicons style) */}
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <circle cx="12" cy="6" r="1.5" />
+          <circle cx="12" cy="12" r="1.5" />
+          <circle cx="12" cy="18" r="1.5" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-10 z-20 bg-zinc-900 border border-zinc-700 rounded shadow-lg min-w-[140px] py-1 animate-fade-in">
+          <button
+            className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-blue-400"
+            onClick={() => { onUpdate(file.name, 'loading'); setOpen(false); }}
+          >Atualizar</button>
+          <button
+            className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-green-400"
+            onClick={() => { onEdit(file); setOpen(false); }}
+          >Editar</button>
+          <button
+            className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-purple-400"
+            onClick={() => { window.open(`/api/downloads/${encodeURIComponent(file.name)}`, '_blank'); setOpen(false); }}
+          >Baixar</button>
+          <button
+            className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-red-400"
+            onClick={async () => { if (window.confirm('Remover este arquivo?')) { await removeFile(file.name, fetchFiles); setOpen(false); } }}
+          >Remover</button>
+        </div>
+      )}
     </div>
   );
 }

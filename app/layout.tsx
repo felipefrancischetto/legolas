@@ -9,8 +9,8 @@ import { PlayerProvider } from './contexts/PlayerContext';
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Legolas Downloader",
-  description: "Baixe suas músicas favoritas",
+  title: "Legolas",
+  description: "",
 };
 
 export default function RootLayout({
