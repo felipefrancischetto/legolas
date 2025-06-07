@@ -675,7 +675,7 @@ export default function FileList() {
                 <FileRow
                   key={file.path}
                   file={file}
-                  index={index}
+                  index={files.length - index - 1}
                   files={files}
                   colWidths={colWidths}
                   onPlay={handlePlay}

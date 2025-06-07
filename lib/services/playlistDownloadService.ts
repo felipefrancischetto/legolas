@@ -260,8 +260,10 @@ export class PlaylistDownloadService {
       try {
         // 1. Download individual track
         const trackUrl = `https://www.youtube.com/watch?v=${entry.id}`;
-        const filename = sanitizeTitle(entry.title || 'Unknown');
-        const outputPath = `${downloadsFolder}/${filename}.%(ext)s`;
+        
+        // Nome temporário para o download inicial
+        const tempFilename = sanitizeTitle(entry.title || 'Unknown');
+        const outputPath = `${downloadsFolder}/${tempFilename}.%(ext)s`;
 
         logger.info(`   ⬇️ Downloading track ${trackNumber}...`);
         
@@ -321,7 +323,7 @@ export class PlaylistDownloadService {
           }
         }
 
-        const finalFilePath = `${downloadsFolder}/${filename}.${format}`;
+        const finalFilePath = `${downloadsFolder}/${tempFilename}.${format}`;
         
         // 2. Enhance metadata immediately after download
         if (enhanceMetadata) {
@@ -350,7 +352,7 @@ export class PlaylistDownloadService {
           
           const enhanced = await this.enhanceFileMetadata(
             finalFilePath, 
-            `${filename}.${format}`, 
+            tempFilename, 
             useBeatport, 
             entry
           );
@@ -526,7 +528,7 @@ export class PlaylistDownloadService {
     filePath: string, 
     filename: string, 
     useBeatport: boolean = false,
-    playlistEntry?: any  // NOVO: informações da entrada original da playlist
+    playlistEntry?: any
   ): Promise<{ success: boolean; fromBeatport: boolean }> {
     logger.info(`[DEBUG] Iniciando enhanceFileMetadata para: ${filename}`);
     // Read existing metadata
@@ -560,8 +562,7 @@ export class PlaylistDownloadService {
     // Get enhanced metadata with Beatport option
     const metadata = await metadataAggregator.searchMetadata(
       cleanTitle, 
-      cleanArtist,
-      { useBeatport }
+      cleanArtist
     );
     logger.info(`[DEBUG] metadataAggregator.searchMetadata retornou: ${JSON.stringify(metadata)}`);
 
@@ -581,6 +582,30 @@ export class PlaylistDownloadService {
     finalArtist = cleanArtistName(finalArtist);
     logger.info(`[DEBUG] Final artist determined: "${finalArtist}" (from Beatport: ${!!metadata.artist})`);
 
+    // Extrair versão se existir
+    let version = '';
+    const versionMatch = cleanTitle.match(/\((.*?)\)/);
+    if (versionMatch) {
+      version = versionMatch[1];
+    }
+
+    // Formatar o nome do arquivo com todas as informações dos metadados
+    const newFilename = `${finalArtist} - ${cleanTitle}${version ? ` (${version})` : ''}${metadata.label ? ` [${metadata.label}]` : ''}`;
+    const sanitizedNewFilename = sanitizeTitle(newFilename);
+
+    // Renomear o arquivo com o novo nome formatado
+    const fileDir = filePath.substring(0, filePath.lastIndexOf('/'));
+    const fileExt = filePath.split('.').pop();
+    const newFilePath = `${fileDir}/${sanitizedNewFilename}.${fileExt}`;
+    
+    try {
+      const { rename } = require('fs/promises');
+      await rename(filePath, newFilePath);
+      filePath = newFilePath; // Atualizar o caminho do arquivo para as operações subsequentes
+    } catch (error) {
+      logger.warn(`Failed to rename file with new format: ${error}`);
+    }
+
     // Detect file format
     const fileExtension = filePath.split('.').pop()?.toLowerCase();
     let success = false;
@@ -590,7 +615,7 @@ export class PlaylistDownloadService {
       const enhancedTags = {
         title: metadata.title || cleanTitle,
         artist: finalArtist,  // **CORRIGIDO: usar finalArtist**
-        album: metadata.album || existingTags.album || '',
+        album: existingTags.album || '', // Sempre usar a tag existente
         year: metadata.year?.toString() || existingTags.year || '',
         genre: metadata.genre || existingTags.genre || '',
         publisher: metadata.label || existingTags.publisher || '',
@@ -598,7 +623,7 @@ export class PlaylistDownloadService {
         initialkey: metadata.key || '',
         comment: {
           language: 'por',
-          text: `Enhanced metadata${useBeatport ? ' (Beatport mode)' : ''} | Artist: ${finalArtist} | BPM: ${metadata.bpm || 'N/A'} | Key: ${metadata.key || 'N/A'} | Genre: ${metadata.genre || 'N/A'} | Album: ${metadata.album || 'N/A'} | Label: ${metadata.label || 'N/A'} | Sources: ${metadata.sources?.join(', ') || 'None'}`
+          text: `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${metadata.label || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`
         }
       };
       logger.info(`[DEBUG] enhancedTags a serem escritos: ${JSON.stringify(enhancedTags)}`);
@@ -609,7 +634,7 @@ export class PlaylistDownloadService {
     } else if (fileExtension === 'flac') {
       // Use ffmpeg for FLAC files  
       logger.info(`[DEBUG] Chamando writeFlacMetadata para FLAC: ${filePath}`);
-      success = await this.writeFlacMetadata(filePath, metadata, cleanTitle, finalArtist, useBeatport);
+      success = await this.writeFlacMetadata(filePath, metadata, cleanTitle, finalArtist, useBeatport, existingTags);
       logger.info(`[DEBUG] Resultado writeFlacMetadata: ${success}`);
     } else {
       logger.warn(`[DEBUG] Unsupported file format for metadata writing: ${fileExtension}`);
@@ -624,7 +649,8 @@ export class PlaylistDownloadService {
     metadata: any, 
     cleanTitle: string, 
     cleanArtist: string, 
-    useBeatport: boolean
+    useBeatport: boolean,
+    existingTags: any
   ): Promise<boolean> {
     try {
       // Create temporary file for ffmpeg output with correct .flac extension
@@ -633,14 +659,14 @@ export class PlaylistDownloadService {
       // Helper function to escape metadata values for ffmpeg in PowerShell
       const escapeMetadataValue = (value: string): string => {
         if (!value) return '';
-        // PowerShell-safe escaping
+        // PowerShell-safe escaping (NÃO normalizar & nem | para genre, apenas remover chars perigosos)
         return value
-          .replace(/\|/g, '-')        // Replace pipes with hyphens (PowerShell interprets | as pipe)
+          // .replace(/\|/g, '-')        // REMOVIDO: Não substituir pipes
           .replace(/:/g, ' -')        // Replace colons (PowerShell interprets : as command separator)
           .replace(/"/g, "'")         // Replace double quotes with single quotes
           .replace(/\$/g, '')         // Remove $ signs (PowerShell variables)
           .replace(/`/g, "'")         // Replace backticks (PowerShell escape char)
-          .replace(/&/g, 'and')       // Replace & (PowerShell background operator)
+          // .replace(/&/g, 'and')       // REMOVIDO: Não substituir &
           .replace(/<|>/g, '')        // Remove redirects
           .replace(/;/g, ',')         // Replace semicolons
           .trim();
@@ -655,8 +681,8 @@ export class PlaylistDownloadService {
       ];
 
       // Add optional metadata fields if they exist
-      if (metadata.album) {
-        ffmpegArgs.push('-metadata', `"album=${escapeMetadataValue(metadata.album)}"`);
+      if (existingTags.album) {
+        ffmpegArgs.push('-metadata', `"album=${escapeMetadataValue(existingTags.album)}"`);
       }
       if (metadata.year) {
         ffmpegArgs.push('-metadata', `"date=${metadata.year}"`);
@@ -688,7 +714,7 @@ export class PlaylistDownloadService {
       }
 
       // Add comment with source info (escape pipes to avoid shell interpretation)
-      const commentText = `Enhanced metadata${useBeatport ? ' (Beatport mode)' : ''} -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${metadata.album || 'N/A'} -- Label: ${metadata.label || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`;
+      const commentText = `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${metadata.label || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`;
       ffmpegArgs.push('-metadata', `"comment=${escapeMetadataValue(commentText)}"`);
 
       // Specify FLAC format explicitly and output to temp file
