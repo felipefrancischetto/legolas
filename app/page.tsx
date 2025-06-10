@@ -13,7 +13,7 @@ export default function Home() {
   const [modalOpen, setModalOpen] = useState(false);
   const [beatportModalOpen, setBeatportModalOpen] = useState(false);
   const [beatportDownloaderModalOpen, setBeatportDownloaderModalOpen] = useState(false);
-  const { playerOpen } = useUI();
+  const { playerOpen, playerMinimized } = useUI();
   const [downloadFormMinimized, setDownloadFormMinimized] = useState(true);
   
   return (
@@ -40,9 +40,10 @@ export default function Home() {
           )}
           <div
             className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200 flex-1 min-h-0 flex flex-col"
-            style={downloadFormMinimized
-              ? { marginTop: 60, marginBottom: 105, height: 'calc(100vh - 220px)' }
-              : {}}
+            style={{
+              ...(downloadFormMinimized ? { marginTop: 70 } : {}),
+              ...(playerOpen && !playerMinimized ? { marginBottom: 115 } : {})
+            }}
           >
             <FileList />
           </div>

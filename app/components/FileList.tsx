@@ -8,6 +8,7 @@ import { useFile } from '../contexts/FileContext';
 import { useUI } from '../contexts/UIContext';
 import { usePlayer } from '../contexts/PlayerContext';
 import { getThumbnailUrl } from '../utils/thumbnailCache';
+import ReactDOM from 'react-dom';
 
 interface FileInfo {
   name: string;
@@ -500,11 +501,25 @@ export default function FileList() {
         return;
       }
 
+      // Extrair o ano (YYYY) do metadata.year ou metadata.ano ou metadata.releaseDate
+      let year = '';
+      if (result.metadata) {
+        if (result.metadata.year && /^\d{4}/.test(result.metadata.year.toString())) {
+          year = result.metadata.year.toString().slice(0, 4);
+        } else if (result.metadata.ano && /^\d{4}/.test(result.metadata.ano.toString())) {
+          year = result.metadata.ano.toString().slice(0, 4);
+        } else if (result.metadata.releaseDate && /^\d{4}/.test(result.metadata.releaseDate.toString())) {
+          year = result.metadata.releaseDate.toString().slice(0, 4);
+        }
+      }
+
       // Atualizar os metadados do arquivo com os novos dados
       const updatedFile = {
         ...file,
         ...result.metadata,
-        isBeatportFormat: true
+        isBeatportFormat: true,
+        year, // garantir que o campo year seja só 4 dígitos
+        fileName: file.name // garantir que fileName sempre vai para o backend
       };
 
       // Atualizar o arquivo no backend
@@ -702,8 +717,26 @@ export default function FileList() {
 
   if (loading) {
     return (
-      <div className="flex-1 flex justify-center items-center animate-fade-in">
-        <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+      <div className="flex flex-col h-full min-h-0">
+        <div 
+          className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden flex flex-col flex-1 min-h-0"
+          style={{ minHeight: 300 }}
+        >
+          <div className="flex w-full px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10 flex-shrink-0" style={{userSelect:'none'}}>
+            {columns.map((col, idx) => (
+              <div
+                key={col.key}
+                style={{ width: col.width, minWidth: col.width }}
+                className="flex items-center h-12 px-2 overflow-hidden whitespace-nowrap text-ellipsis"
+              >
+                <span className="truncate uppercase tracking-wide text-xs font-semibold">{col.label}</span>
+              </div>
+            ))}
+          </div>
+          <div className="flex-1 flex items-center justify-center animate-fade-in" style={{ minHeight: 200 }}>
+            <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -812,6 +845,14 @@ export default function FileList() {
 }
 
 function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () => void, onSave: (data: Partial<FileInfo>) => void }) {
+  // Função utilitária para normalizar o valor inicial da data
+  function getInitialReleaseDate(ano?: string) {
+    if (!ano) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(ano)) return ano;
+    if (/^\d{4}$/.test(ano)) return ano + '-01-01';
+    return '';
+  }
+
   const [form, setForm] = useState({
     title: file.title || '',
     artist: file.artist || '',
@@ -821,18 +862,26 @@ function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () 
     genre: file.genre || '',
     album: file.album || '',
     label: file.label || '',
-    ano: file.ano || '',
+    releaseDate: getInitialReleaseDate(file.ano),
   });
   const [saving, setSaving] = useState(false);
-  const [anoError, setAnoError] = useState<string | null>(null);
+  const [dateError, setDateError] = useState<string | null>(null);
+
+  // Máscara para data YYYY-MM-DD
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = e.target.value.replace(/[^\d-]/g, '');
+    // Adiciona os traços automaticamente
+    if (value.length > 4 && value[4] !== '-') value = value.slice(0, 4) + '-' + value.slice(4);
+    if (value.length > 7 && value[7] !== '-') value = value.slice(0, 7) + '-' + value.slice(7);
+    value = value.slice(0, 10);
+    setForm(f => ({ ...f, releaseDate: value }));
+    setDateError(null);
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    if (name === 'ano') {
-      // Permitir apenas números e no máximo 4 dígitos
-      if (!/^\d{0,4}$/.test(value)) return;
-      setForm(f => ({ ...f, [name]: value.slice(0, 4) }));
-      setAnoError(null);
+    if (name === 'releaseDate') {
+      handleDateChange(e);
     } else {
       setForm(f => ({ ...f, [name]: value }));
     }
@@ -841,16 +890,16 @@ function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
-    setAnoError(null);
-    if (form.ano && form.ano.length !== 4) {
-      setAnoError('O ano deve ter 4 dígitos.');
+    setDateError(null);
+    if (form.releaseDate && !/^\d{4}-\d{2}-\d{2}$/.test(form.releaseDate)) {
+      setDateError('A data deve estar no formato YYYY-MM-DD.');
       setSaving(false);
       return;
     }
     await onSave({
       ...form,
       bpm: form.bpm ? parseInt(form.bpm) : undefined,
-      ano: form.ano ? form.ano : '',
+      ano: form.releaseDate || '',
     });
     setSaving(false);
     onClose();
@@ -877,8 +926,8 @@ function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () 
           <input name="genre" value={form.genre} onChange={handleChange} placeholder="Gênero" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
           <input name="album" value={form.album} onChange={handleChange} placeholder="Álbum" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
           <input name="label" value={form.label} onChange={handleChange} placeholder="Label" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="ano" value={form.ano} onChange={handleChange} placeholder="Ano" maxLength={4} className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          {anoError && <div className="text-red-400 text-xs">{anoError}</div>}
+          <input name="releaseDate" value={form.releaseDate} onChange={handleChange} placeholder="Data de Lançamento (YYYY-MM-DD)" maxLength={10} className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
+          {dateError && <div className="text-red-400 text-xs">{dateError}</div>}
           <button type="submit" disabled={saving} className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all font-medium shadow disabled:opacity-50 disabled:cursor-not-allowed">
             {saving ? 'Salvando...' : 'Salvar'}
           </button>
@@ -897,11 +946,13 @@ function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [menuPosition, setMenuPosition] = useState<{top: number, left: number}>({top: 0, left: 0});
 
   // Fechar menu ao clicar fora
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node) && buttonRef.current && !buttonRef.current.contains(event.target as Node)) {
         setOpen(false);
       }
     }
@@ -913,9 +964,46 @@ function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [open]);
 
-  return (
-    <div className="relative" ref={menuRef}>
+  // Calcular posição do menu
+  useEffect(() => {
+    if (open && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      setMenuPosition({
+        top: rect.bottom + window.scrollY + 4,
+        left: rect.right + window.scrollX - 160 // 160 = largura aproximada do menu
+      });
+    }
+  }, [open]);
+
+  const menu = (
+    <div
+      ref={menuRef}
+      className="z-[9999] bg-zinc-900 border border-zinc-700 rounded shadow-lg min-w-[160px] py-1 animate-fade-in"
+      style={{ position: 'absolute', top: menuPosition.top, left: menuPosition.left }}
+    >
       <button
+        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-blue-400"
+        onClick={() => { onUpdate(file.name, 'loading'); setOpen(false); }}
+      >Atualizar</button>
+      <button
+        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-green-400"
+        onClick={() => { onEdit(file); setOpen(false); }}
+      >Editar</button>
+      <button
+        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-purple-400"
+        onClick={() => { window.open(`/api/downloads/${encodeURIComponent(file.name)}`, '_blank'); setOpen(false); }}
+      >Baixar</button>
+      <button
+        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-red-400"
+        onClick={async () => { if (window.confirm('Remover este arquivo?')) { await removeFile(file.name, fetchFiles); setOpen(false); } }}
+      >Remover</button>
+    </div>
+  );
+
+  return (
+    <div className="relative inline-block">
+      <button
+        ref={buttonRef}
         className="p-2 rounded-full hover:bg-zinc-700 transition-colors text-zinc-300 flex items-center justify-center"
         onClick={() => setOpen((v) => !v)}
         title="Ações"
@@ -928,26 +1016,7 @@ function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
           <circle cx="12" cy="18" r="1.5" />
         </svg>
       </button>
-      {open && (
-        <div className="absolute right-0 top-10 z-20 bg-zinc-900 border border-zinc-700 rounded shadow-lg min-w-[140px] py-1 animate-fade-in">
-          <button
-            className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-blue-400"
-            onClick={() => { onUpdate(file.name, 'loading'); setOpen(false); }}
-          >Atualizar</button>
-          <button
-            className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-green-400"
-            onClick={() => { onEdit(file); setOpen(false); }}
-          >Editar</button>
-          <button
-            className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-purple-400"
-            onClick={() => { window.open(`/api/downloads/${encodeURIComponent(file.name)}`, '_blank'); setOpen(false); }}
-          >Baixar</button>
-          <button
-            className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-red-400"
-            onClick={async () => { if (window.confirm('Remover este arquivo?')) { await removeFile(file.name, fetchFiles); setOpen(false); } }}
-          >Remover</button>
-        </div>
-      )}
+      {open && typeof window !== 'undefined' && ReactDOM.createPortal(menu, document.body)}
     </div>
   );
 }

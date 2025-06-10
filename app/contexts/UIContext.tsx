@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+import { createContext, useContext, useState, ReactNode } from 'react';
 
 interface UIContextType {
   search: string;
@@ -21,6 +21,8 @@ interface UIContextType {
   setActionMenu: (menu: { x: number; y: number; file: any | null } | null) => void;
   colWidths: number[];
   setColWidths: (widths: number[]) => void;
+  playerMinimized: boolean;
+  setPlayerMinimized: (minimized: boolean) => void;
 }
 
 const UIContext = createContext<UIContextType | undefined>(undefined);
@@ -40,6 +42,7 @@ export function UIProvider({ children }: { children: ReactNode }) {
   });
   const [playerReady, setPlayerReady] = useState(false);
   const [actionMenu, setActionMenu] = useState<{ x: number; y: number; file: any | null } | null>(null);
+  const [playerMinimized, setPlayerMinimized] = useState(false);
   
   // 10 colunas: #, Thumbnail, Título, Duração, Artista, BPM, Key, Gênero, Álbum, Label
   const defaultWidths = [50, 50, 250, 80, 150, 70, 70, 120, 150, 120, 180];
@@ -97,7 +100,9 @@ export function UIProvider({ children }: { children: ReactNode }) {
       actionMenu,
       setActionMenu,
       colWidths,
-      setColWidths: handleSetColWidths
+      setColWidths: handleSetColWidths,
+      playerMinimized,
+      setPlayerMinimized
     }}>
       {children}
     </UIContext.Provider>

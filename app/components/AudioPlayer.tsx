@@ -12,9 +12,9 @@ export default function AudioPlayer() {
   const waveformRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const { playerState, setPlayerState, pause, resume, stop, setVolume, setIsMuted, play } = usePlayer();
-  const { setPlayerOpen } = useUI();
+  const { setPlayerOpen, playerMinimized, setPlayerMinimized } = useUI();
   const { volume, isMuted } = playerState;
-  const [minimized, setMinimized] = useState(false);
+  const [] = useState(false);
   const { files } = useFile();
 
   // Funções para avançar e voltar
@@ -198,7 +198,7 @@ export default function AudioPlayer() {
 
   if (playerState.error) {
     return (
-      <div className={`fixed bottom-0 left-0 right-0 z-50 flex items-center justify-center bg-black px-4 py-2 border-t border-zinc-800 w-full transition-all duration-300 ${minimized ? 'pointer-events-none opacity-0 select-none' : ''}`} style={{ minHeight: 80 }}>
+      <div className={`fixed bottom-0 left-0 right-0 z-50 flex items-center justify-center bg-black px-4 py-2 border-t border-zinc-800 w-full transition-all duration-300 ${playerMinimized ? 'pointer-events-none opacity-0 select-none' : ''}`} style={{ minHeight: 80 }}>
         <div className="text-red-500">{playerState.error}</div>
       </div>
     );
@@ -206,7 +206,7 @@ export default function AudioPlayer() {
 
   return (
     <>
-      <div className={`fixed bottom-0 left-0 right-0 z-50 flex items-center bg-black px-4 py-2 border-t border-zinc-800 w-full transition-all duration-300 ${minimized ? 'pointer-events-none opacity-0 select-none' : ''}`} style={{ minHeight: 80 }}>
+      <div className={`fixed bottom-0 left-0 right-0 z-50 flex items-center bg-black px-4 py-2 border-t border-zinc-800 w-full transition-all duration-300 ${playerMinimized ? 'pointer-events-none opacity-0 select-none' : ''}`} style={{ minHeight: 80 }}>
         {/* Info da faixa */}
         <div className="flex items-center gap-4 min-w-[260px]">
           <Image
@@ -323,7 +323,7 @@ export default function AudioPlayer() {
           </div>
 
           <button
-            onClick={() => setMinimized(true)}
+            onClick={() => setPlayerMinimized(true)}
             className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
             title="Minimizar"
           >
@@ -334,7 +334,7 @@ export default function AudioPlayer() {
         </div>
       </div>
       {/* Mini player flutuante, renderizado fora do player principal */}
-      {minimized && (
+      {playerMinimized && (
         <div className="fixed bottom-8 right-8 z-[100] bg-zinc-900 rounded-xl shadow-lg flex items-center gap-3 px-3 py-2 min-w-[220px] max-w-[320px] border border-zinc-800">
           <Image
             src={getThumbnailUrl(playerState.currentFile.name)}
@@ -368,7 +368,7 @@ export default function AudioPlayer() {
             )}
           </button>
           <button
-            onClick={() => setMinimized(false)}
+            onClick={() => setPlayerMinimized(false)}
             className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
             title="Restaurar"
           >
@@ -378,7 +378,10 @@ export default function AudioPlayer() {
           </button>
           {/* Botão de fechar */}
           <button
-            onClick={() => setPlayerState({ currentFile: null, isPlaying: false, currentTime: 0, isReady: false, isLoading: false })}
+            onClick={() => {
+              setPlayerState({ currentFile: null, isPlaying: false, currentTime: 0, isReady: false, isLoading: false })
+              setPlayerOpen(false);
+            }}
             className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
             title="Fechar"
           >
