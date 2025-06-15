@@ -156,13 +156,13 @@ export default function PlaylistTextModal({ isOpen, onClose }: PlaylistTextModal
         // Log para depuração do conteúdo de videoInfo
         console.log('videoInfo retornado:', videoInfo);
 
-        if (videoInfo.url) {
+        if (searchData.videoUrl) {
           // Log para depuração
-          console.log('Chamando /api/download para', videoInfo.url);
+          console.log('Chamando /api/download para', searchData.videoUrl);
           // Chama o endpoint de download para cada música
-          await fetch(`/api/download?url=${encodeURIComponent(videoInfo.url)}&useBeatport=true`);
+          await fetch(`/api/download?url=${encodeURIComponent(searchData.videoUrl)}&useBeatport=true`);
           // Adiciona à fila para feedback visual
-          addToQueue({ url: videoInfo.url, title: videoInfo.title || `${track.artist} - ${track.title}`, enrichWithBeatport: true });
+          addToQueue({ url: searchData.videoUrl, title: videoInfo.title || `${track.artist} - ${track.title}`, enrichWithBeatport: true });
         } else {
           throw new Error('URL de download não encontrada');
         }
