@@ -3,14 +3,13 @@
 import DownloadForm from './components/DownloadForm';
 import FileList from './components/FileList';
 import AudioPlayer from './components/AudioPlayer';
-import PlaylistTracklistModal from './components/PlaylistTracklistModal';
 import BeatportModal from './components/BeatportModal';
 import BeatportDownloaderModal from './components/BeatportDownloaderModal';
+import FloatingPlaylistButton from './components/FloatingPlaylistButton';
 import { useState } from 'react';
 import { useUI } from './contexts/UIContext';
 
 export default function Home() {
-  const [modalOpen, setModalOpen] = useState(false);
   const [beatportModalOpen, setBeatportModalOpen] = useState(false);
   const [beatportDownloaderModalOpen, setBeatportDownloaderModalOpen] = useState(false);
   const { playerOpen, playerMinimized } = useUI();
@@ -56,7 +55,10 @@ export default function Home() {
         </div>
       )}
       
-      <PlaylistTracklistModal isOpen={modalOpen} onClose={() => setModalOpen(false)} playlistUrl="" />
+      <div className="fixed bottom-6 right-6 z-[60]">
+        <FloatingPlaylistButton />
+      </div>
+      
       <BeatportModal isOpen={beatportModalOpen} onClose={() => setBeatportModalOpen(false)} />
       <BeatportDownloaderModal isOpen={beatportDownloaderModalOpen} onClose={() => setBeatportDownloaderModalOpen(false)} />
     </main>

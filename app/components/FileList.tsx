@@ -478,6 +478,8 @@ export default function FileList() {
     }
   };
 
+  const [releaseModal, setReleaseModal] = useState<{album: string, tracks: any[], metadata: any, loading: boolean, error: string | null} | null>(null);
+
   async function updateMetadataForFile(fileName: string, status: string) {
     setMetadataStatus({ ...metadataStatus, [fileName]: status });
     try {
@@ -715,6 +717,37 @@ export default function FileList() {
     }
   };
 
+  // Função para atualizar metadados da release por álbum
+  const handleUpdateRelease = async (albumName: string) => {
+    setReleaseModal({ album: albumName, tracks: [], metadata: {}, loading: true, error: null });
+    try {
+      const response = await fetch('/api/update-release-metadata', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ album: albumName }),
+      });
+      const result = await response.json();
+      if (!response.ok || result.error) {
+        setReleaseModal({ album: albumName, tracks: [], metadata: {}, loading: false, error: result.error || 'Erro desconhecido' });
+        return;
+      }
+      // Salvar catálogo no cache
+      if (result.metadata && result.metadata.catalogNumber) {
+        setCatalogNumbers((prev: any) => ({ ...prev, [albumName]: result.metadata.catalogNumber }));
+        // Atualizar título dos arquivos daquele álbum
+        setFiles((prevFiles: any[]) => prevFiles.map((f: any) => {
+          if (f.album === albumName && result.metadata.catalogNumber && f.title && !f.title.endsWith(`[${result.metadata.catalogNumber}]`)) {
+            return { ...f, title: `${f.title} [${result.metadata.catalogNumber}]` };
+          }
+          return f;
+        }));
+      }
+      setReleaseModal({ album: albumName, tracks: result.tracks, metadata: result.metadata, loading: false, error: null });
+    } catch (err: any) {
+      setReleaseModal({ album: albumName, tracks: [], metadata: {}, loading: false, error: err.message || 'Erro desconhecido' });
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col h-full min-h-0">
@@ -801,8 +834,20 @@ export default function FileList() {
           {Object.entries(groupedFiles).map(([group, files]) => (
             <div key={group} className="animate-fade-in">
               {groupByField && group !== '' && (
-                <div className="sticky top-0 bg-zinc-900 z-10 px-2 py-2 border-b border-zinc-700">
-                  <h3 className="text-sm font-medium text-white">{group}</h3>
+                <div className="sticky top-0 bg-zinc-900 z-10 px-2 py-2 border-b border-zinc-700 flex items-center justify-between">
+                  <h3 className="text-sm font-medium text-white mr-2">{group}</h3>
+                  {groupByField === 'album' && (
+                    <button
+                      className="p-1 rounded hover:bg-blue-700 transition-colors text-blue-400 ml-auto"
+                      title="Atualizar metadados da release"
+                      onClick={() => handleUpdateRelease(group)}
+                      style={{ minWidth: 32 }}
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582M20 20v-5h-.581M5.21 17.293A9 9 0 1 0 6 6.26m1 5.74V9h3" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
               )}
               {files.map((file, index) => (
@@ -838,6 +883,18 @@ export default function FileList() {
           file={editModalFile}
           onClose={() => setEditModalFile(null)}
           onSave={handleEditFileSave}
+        />
+      )}
+
+      {releaseModal && (
+        <ReleaseModal
+          album={releaseModal.album}
+          tracks={releaseModal.tracks}
+          metadata={releaseModal.metadata}
+          loading={releaseModal.loading}
+          error={releaseModal.error}
+          onClose={() => setReleaseModal(null)}
+          files={files}
         />
       )}
     </div>
@@ -1017,6 +1074,76 @@ function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
         </svg>
       </button>
       {open && typeof window !== 'undefined' && ReactDOM.createPortal(menu, document.body)}
+    </div>
+  );
+}
+
+// Modal para exibir faixas da release e metadados
+function ReleaseModal({ album, tracks, metadata, loading, error, onClose, files }: { album: string, tracks: any[], metadata: any, loading: boolean, error: string | null, onClose: () => void, files: any[] }) {
+  // Verificar faixas já baixadas
+  const downloadedTitles = new Set(files.map(f => (f.title || f.displayName || '').toLowerCase().trim()));
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+      <div className="bg-zinc-900 rounded-lg p-6 w-full max-w-2xl shadow-lg relative animate-fade-in">
+        <button
+          onClick={onClose}
+          className="absolute top-2 right-2 text-gray-400 hover:text-white"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+        <h2 className="text-xl font-semibold text-white mb-2">Release: {album}</h2>
+        {loading && <div className="text-blue-400">Buscando informações da release...</div>}
+        {error && <div className="text-red-400">{error}</div>}
+        {!loading && !error && (
+          <>
+            <div className="mb-4">
+              <div className="flex items-center gap-4">
+                {metadata.cover && <img src={metadata.cover} alt="Capa" className="w-20 h-20 rounded shadow" />}
+                <div>
+                  <div className="text-white font-bold">{metadata.album}</div>
+                  <div className="text-gray-400 text-sm">Artistas: {metadata.artists}</div>
+                  <div className="text-gray-400 text-sm">Label: {metadata.label}</div>
+                  <div className="text-gray-400 text-sm">Ano: {metadata.year}</div>
+                  <div className="text-gray-400 text-sm">Lançamento: {metadata.releaseDate}</div>
+                </div>
+              </div>
+            </div>
+            <div className="overflow-x-auto max-h-96">
+              <table className="min-w-full text-xs text-left">
+                <thead>
+                  <tr className="text-gray-400 border-b border-zinc-700">
+                    <th className="px-2 py-1">Título</th>
+                    <th className="px-2 py-1">Artistas</th>
+                    <th className="px-2 py-1">Remixers</th>
+                    <th className="px-2 py-1">BPM</th>
+                    <th className="px-2 py-1">Key</th>
+                    <th className="px-2 py-1">Gênero</th>
+                    <th className="px-2 py-1">Duração</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tracks.map((track, idx) => {
+                    const isDownloaded = downloadedTitles.has((track.title || '').toLowerCase().trim());
+                    return (
+                      <tr key={idx} className={isDownloaded ? 'bg-green-900/30 text-green-300' : 'bg-zinc-800/60'}>
+                        <td className="px-2 py-1 font-semibold">{track.title}</td>
+                        <td className="px-2 py-1">{track.artists}</td>
+                        <td className="px-2 py-1">{track.remixers}</td>
+                        <td className="px-2 py-1">{track.bpm}</td>
+                        <td className="px-2 py-1">{track.key}</td>
+                        <td className="px-2 py-1">{track.genre}</td>
+                        <td className="px-2 py-1">{track.duration}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
