@@ -37,9 +37,6 @@ export default function DownloadForm({ minimized, setMinimized }: DownloadFormPr
   const [currentDownloadId, setCurrentDownloadId] = useState<string | null>(null);
   const [isPasting, setIsPasting] = useState(false);
 
-  // Debug: Log quando o componente renderiza
-  console.log('🔄 DownloadForm renderizando - URL atual:', url);
-
   const { 
     addToQueue, 
     getCurrentDownload,
@@ -81,8 +78,8 @@ export default function DownloadForm({ minimized, setMinimized }: DownloadFormPr
       } else {
         console.log('📂 Pasta selecionada é a mesma atual, sem refresh necessário');
       }
-    } catch (error) {
-      if (error.name !== 'AbortError') {
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name !== 'AbortError') {
         console.error('❌ Erro ao selecionar pasta:', error);
       }
     }

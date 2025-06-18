@@ -97,6 +97,7 @@ export async function GET(request: NextRequest) {
     const { stdout: infoJson } = await execAsync(
       `yt-dlp --dump-json ` +
       `--cookies "cookies.txt" ` +
+      `--default-search "ytsearch" ` +
       `"${url}"`,
       {
         maxBuffer: 1024 * 1024 * 10 // 10MB buffer
@@ -147,6 +148,7 @@ export async function GET(request: NextRequest) {
       `--embed-thumbnail --convert-thumbnails jpg ` +
       `--add-metadata ` +
       `--cookies "cookies.txt" ` +
+      `--default-search "ytsearch" ` +
       `-o "${downloadsFolder}/%(title)s.%(ext)s" ` +
       `--no-part --force-overwrites "${url}"`,
       {

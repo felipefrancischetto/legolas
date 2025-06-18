@@ -206,7 +206,10 @@ export default function AudioPlayer() {
 
   return (
     <>
-      <div className={`fixed bottom-0 left-0 right-0 z-50 flex items-center bg-black px-4 py-2 border-t border-zinc-800 w-full transition-all duration-300 ${playerMinimized ? 'pointer-events-none opacity-0 select-none' : ''}`} style={{ minHeight: 80 }}>
+      <div 
+        className={`fixed bottom-0 left-0 right-0 z-50 flex items-center bg-black px-4 py-2 border-t border-zinc-800 w-full transition-all duration-300 ${playerMinimized ? 'pointer-events-none opacity-0 select-none' : ''}`}
+        style={{ minHeight: 80 }}
+      >
         {/* Info da faixa */}
         <div className="flex items-center gap-4 min-w-[260px]">
           <Image

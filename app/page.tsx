@@ -40,8 +40,8 @@ export default function Home() {
           <div
             className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200 flex-1 min-h-0 flex flex-col"
             style={{
-              ...(downloadFormMinimized ? { marginTop: 70 } : {}),
-              ...(playerOpen && !playerMinimized ? { marginBottom: 115 } : {})
+              marginTop: downloadFormMinimized ? 70 : 0,
+              marginBottom: playerOpen && !playerMinimized ? 115 : 0
             }}
           >
             <FileList />
@@ -49,11 +49,7 @@ export default function Home() {
         </div>
       </div>
       
-      {playerOpen && (
-        <div className="fixed bottom-0 left-0 right-0 z-50">
-          <AudioPlayer />
-        </div>
-      )}
+      {playerOpen && <AudioPlayer />}
       
       <div className="fixed bottom-6 right-6 z-[60]">
         <FloatingPlaylistButton />
