@@ -17,11 +17,11 @@ async function getDownloadsPath() {
 }
 
 export async function GET(
-  request: NextRequest,
-  { params }: { params: { filename: string } }
+  _: NextRequest,
+  context: { params: { filename: string } }
 ): Promise<NextResponse> {
   try {
-    const filename = params.filename;
+    const { filename } = await context.params;
     if (!filename) {
       return new NextResponse('Nome do arquivo é obrigatório', { status: 400 });
     }
