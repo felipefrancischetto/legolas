@@ -193,147 +193,85 @@ class BeatportProviderV2 implements MetadataProvider {
           genre: string;
           label: string;
         }> = {};
-
-        // DEBUG: Logar todos os elementos com classes que contenham 'Meta'
-        console.log('\n🔍 [DEBUG] ELEMENTOS ENCONTRADOS:');
-        const allElements = document.querySelectorAll('[class*="Meta"]');
-        console.log(`Total de elementos com 'Meta' no nome da classe: ${allElements.length}`);
-        
-        allElements.forEach((el, idx) => {
-          console.log(`\nElemento #${idx + 1}:`);
-          console.log(`  • Classe: ${el.className}`);
-          console.log(`  • HTML: ${el.outerHTML}`);
-          console.log(`  • Texto: ${el.textContent?.trim()}`);
-        });
-
-        // DEBUG: Logar todos os MetaWrappers e seus labels/valores
-        const wrappers = Array.from(document.querySelectorAll('[class*="MetaWrapper"]'));
-        console.log(`\n📦 [DEBUG] METAWRAPPERS ENCONTRADOS (${wrappers.length}):`);
-        
-        wrappers.forEach((wrapper, idx) => {
-          console.log(`\nMetaWrapper #${idx + 1}:`);
-          console.log(`  • Classe: ${wrapper.className}`);
-          console.log(`  • HTML: ${wrapper.outerHTML}`);
-          
-          const metaItems = wrapper.querySelectorAll('[class*="MetaItem"]');
-          console.log(`  • MetaItems encontrados: ${metaItems.length}`);
-          
-          metaItems.forEach((item, itemIdx) => {
-            const label = item.querySelector('div, span')?.textContent?.trim();
-            const value = item.querySelector('span:last-child')?.textContent?.trim();
-            console.log(`    Item #${itemIdx + 1}:`);
-            console.log(`      - Label: '${label}'`);
-            console.log(`      - Value: '${value}'`);
-            console.log(`      - HTML: ${item.outerHTML}`);
-          });
-        });
-
         // Título da música
         const titleEl = document.querySelector('h1[data-testid="track-title"], h1');
         if (titleEl) {
-          console.log('\n🎵 [DEBUG] TÍTULO ENCONTRADO:');
-          console.log(`  • Texto: ${titleEl.textContent?.trim()}`);
-          console.log(`  • HTML: ${titleEl.outerHTML}`);
           result.title = titleEl.textContent?.trim().replace(/\s+(Original Mix|Extended Mix|Club Mix|Radio Edit).*$/i, '');
         }
-
         // Artista
         const artistEl = document.querySelector('a[data-testid="artist-link"], a[href*="/artist/"]');
         if (artistEl) {
-          console.log('\n👨‍🎤 [DEBUG] ARTISTA ENCONTRADO:');
-          console.log(`  • Texto: ${artistEl.textContent?.trim()}`);
-          console.log(`  • HTML: ${artistEl.outerHTML}`);
           result.artist = artistEl.textContent?.trim();
         }
-
         // Estratégia: tentar pegar o MetaWrapper logo após o título
         let metaWrapper = null;
         if (titleEl) {
-          console.log('\n🔍 [DEBUG] PROCURANDO METAWRAPPER APÓS TÍTULO:');
           let el = titleEl.nextElementSibling;
           let depth = 0;
           while (el && depth < 5) {
-            console.log(`  • Elemento ${depth + 1}: ${el.className}`);
             if (el.className && el.className.includes('MetaWrapper')) {
               metaWrapper = el;
-              console.log('  ✅ MetaWrapper encontrado após título!');
               break;
             }
             el = el.nextElementSibling;
             depth++;
           }
         }
-        
         if (!metaWrapper) {
-          console.log('\n⚠️ [DEBUG] MetaWrapper não encontrado após título, tentando querySelector...');
           metaWrapper = document.querySelector('[class*="MetaWrapper"]');
-          if (metaWrapper) {
-            console.log('  ✅ MetaWrapper encontrado via querySelector!');
-          }
         }
-
         if (metaWrapper) {
-          console.log('\n📦 [DEBUG] EXTRAINDO DADOS DO METAWRAPPER:');
           const metaItems = metaWrapper.querySelectorAll('[class*="MetaItem"]');
           let foundFields = 0;
-          
-          metaItems.forEach((item, idx) => {
+          metaItems.forEach((item) => {
             const label = item.querySelector('div, span')?.textContent?.trim().toLowerCase();
             const value = item.querySelector('span:last-child')?.textContent?.trim();
-            
-            console.log(`\n  Item #${idx + 1}:`);
-            console.log(`    • Label: '${label}'`);
-            console.log(`    • Value: '${value}'`);
-            console.log(`    • HTML: ${item.outerHTML}`);
-            
-            if (!label || !value) {
-              console.log('    ❌ Label ou value vazio, pulando...');
-              return;
-            }
-            
+            if (!label || !value) return;
             if (label.includes('tamanho')) {
               const [min, sec] = value.split(':').map(Number);
               result.duration = min * 60 + sec;
               foundFields++;
-              console.log('    ✅ Duration extraído!');
             } else if (label.includes('lançamento')) {
               result.year = parseInt(value.split('-')[0]);
               foundFields++;
-              console.log('    ✅ Year extraído!');
             } else if (label.includes('bpm')) {
               result.bpm = parseInt(value);
               foundFields++;
-              console.log('    ✅ BPM extraído!');
-            } else if (label.includes('tom')) {
+            } else if (label.includes('tom') || label.includes('key')) {
               result.key = value;
               foundFields++;
-              console.log('    ✅ Key extraído!');
             } else if (label.includes('gênero') || label.includes('genre')) {
               result.genre = value;
               foundFields++;
-              console.log('    ✅ Genre extraído!');
             } else if (label.includes('gravadora') || label.includes('label')) {
               result.label = value;
               foundFields++;
-              console.log('    ✅ Label extraído!');
-            } else {
-              console.log('    ⚠️ Label não reconhecido');
             }
           });
-          
-          console.log(`\n📊 [DEBUG] RESUMO DA EXTRAÇÃO:`);
-          console.log(`  • Total de campos encontrados: ${foundFields}`);
-          console.log(`  • Dados extraídos:`, result);
-        } else {
-          console.log('\n❌ [DEBUG] NENHUM METAWRAPPER ENCONTRADO!');
+          // Fallback: sempre rodar regex para garantir extração do key
+          const wrapperText = metaWrapper?.textContent || '';
+          let regexKey = null;
+          const keyMatch = wrapperText.match(/Key[:\s]*([A-G][#♯♭b]?\s*(?:Minor|Major|Min|Maj|m|M))/i);
+          if (keyMatch) {
+            regexKey = keyMatch[1].trim();
+          } else {
+            const keyPatternMatch = wrapperText.match(/([A-G][#♯♭b]?\s*(?:Minor|Major|Min|Maj|m|M))/i);
+            if (keyPatternMatch) {
+              regexKey = keyPatternMatch[1].trim();
+            }
+          }
+          // Só sobrescreve se não encontrou no label
+          if (!result.key && regexKey) {
+            result.key = regexKey;
+          }
         }
-
         return result;
       });
       
       await browser.close();
       
       // LOG DETALHADO DOS METADADOS EXTRAÍDOS
+      console.log('[DEBUG NODE] Key extraído:', metadata.key);
       if (metadata && (metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.artist)) {
         console.log(`\n✅ [Beatport] METADADOS EXTRAÍDOS COM SUCESSO:`);
         console.log(`   🌐 URL Beatport: ${trackUrl}`);

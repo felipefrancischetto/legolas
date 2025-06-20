@@ -135,7 +135,49 @@ export default function AudioPlayer() {
   useEffect(() => {
     if (playerState.currentFile && wavesurferRef.current) {
       const audioUrl = `/api/downloads/${encodeURIComponent(playerState.currentFile.name)}`;
-      wavesurferRef.current.load(audioUrl);
+      
+      // Add error handling for browser extension interference
+      const loadAudio = async () => {
+        try {
+          console.log(`🎵 [AudioPlayer] Loading audio: ${audioUrl}`);
+          await wavesurferRef.current!.load(audioUrl);
+        } catch (error) {
+          console.error(`❌ [AudioPlayer] Error loading audio:`, error);
+          
+          // Check if it's a browser extension interference error
+          if (error instanceof Error && (
+            error.message.includes('runtime.sendMessage') ||
+            error.message.includes('Message length exceeded') ||
+            error.message.includes('Receiving end does not exist')
+          )) {
+            console.warn(`⚠️ [AudioPlayer] Browser extension interference detected. Retrying with fallback...`);
+            
+            // Try alternative loading method
+            try {
+              // Force reload with different approach
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              await wavesurferRef.current!.load(audioUrl);
+              console.log(`✅ [AudioPlayer] Fallback loading successful`);
+            } catch (fallbackError) {
+              console.error(`❌ [AudioPlayer] Fallback loading also failed:`, fallbackError);
+              setPlayerState(prev => ({
+                ...prev,
+                error: 'Erro ao carregar áudio (interferência de extensão do navegador)',
+                isLoading: false
+              }));
+            }
+          } else {
+            // Other types of errors
+            setPlayerState(prev => ({
+              ...prev,
+              error: 'Erro ao carregar o áudio',
+              isLoading: false
+            }));
+          }
+        }
+      };
+      
+      loadAudio();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playerState.currentFile]);
