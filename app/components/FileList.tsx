@@ -237,6 +237,7 @@ export default function FileList() {
     setUpdateProgress,
     customDownloadsPath,
     setCustomDownloadsPath,
+    fetchFiles,
   } = useFile();
 
   const {
@@ -270,72 +271,32 @@ export default function FileList() {
   const fetchFilesDebounced = useRef<NodeJS.Timeout | null>(null);
   const isCurrentlyFetching = useRef(false);
 
-  const fetchFiles = useCallback(async (force = false) => {
-    // Evitar múltiplas chamadas simultâneas
-    if (isCurrentlyFetching.current && !force) {
-      console.log('📂 Fetch já em andamento, ignorando nova chamada');
-      return;
-    }
-
-    // Debounce - aguardar 500ms antes de executar
-    if (fetchFilesDebounced.current) {
-      clearTimeout(fetchFilesDebounced.current);
-    }
-
-    fetchFilesDebounced.current = setTimeout(async () => {
-      isCurrentlyFetching.current = true;
-      try {
-        console.log('📂 Buscando lista de arquivos...');
-        const response = await fetch('/api/files');
-        const data = await response.json();
-        setFiles(data.files);
-        console.log(`📂 Lista de arquivos atualizada: ${data.files.length} arquivos`);
-      } catch (error) {
-        console.error('❌ Erro ao carregar arquivos:', error);
-      } finally {
-        setLoading(false);
-        isCurrentlyFetching.current = false;
-      }
-    }, force ? 0 : 500);
-  }, [setFiles, setLoading]);
+  const [selectedRelease, setSelectedRelease] = useState<string | null>(null);
+  const [releaseModalData, setReleaseModalData] = useState<any>(null);
+  const [columnWidths, setColumnWidths] = useState(columns.map(c => c.width));
+  const [catalogNumbers, setCatalogNumbers] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    // Carregar a preferência salva
     const savedPath = localStorage.getItem('customDownloadsPath');
     if (savedPath) {
       setCustomDownloadsPath(savedPath);
     }
     
-    // Carregar arquivos inicialmente (força execução imediata)
-    fetchFiles(true);
+    const interval = setInterval(() => fetchFiles(false), 60000);
 
-    // Atualizar a cada 60 segundos (reduzido frequência para evitar calls desnecessários)
-    const interval = setInterval(() => fetchFiles(), 60000);
-
-    // Atualizar quando um novo download for concluído (com debounce)
-    const handleRefresh = () => {
-      console.log('🔄 Evento refresh-files recebido, atualizando lista...');
-      fetchFiles();
-    };
-    window.addEventListener('refresh-files', handleRefresh);
-
-    // Ouvir evento customizado para abrir a fila de downloads
     const openQueue = () => setShowQueue(true);
     window.addEventListener('open-download-queue', openQueue);
 
     return () => {
       clearInterval(interval);
-      window.removeEventListener('refresh-files', handleRefresh);
       window.removeEventListener('open-download-queue', openQueue);
       
-      // Limpar timeout pendente
       if (fetchFilesDebounced.current) {
         clearTimeout(fetchFilesDebounced.current);
       }
     };
   }, [fetchFiles, setCustomDownloadsPath, setShowQueue]);
 
-  // Função para alternar ordenação
   const handleSort = useCallback((column: string) => {
     if (sortBy === column) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
@@ -481,7 +442,7 @@ export default function FileList() {
   const [releaseModal, setReleaseModal] = useState<{album: string, tracks: any[], metadata: any, loading: boolean, error: string | null} | null>(null);
 
   async function updateMetadataForFile(fileName: string, status: string) {
-    setMetadataStatus({ ...metadataStatus, [fileName]: status });
+    setMetadataStatus((prev: any) => ({ ...prev, [fileName]: status }));
     try {
       const file = files.find(f => f.name === fileName);
       if (!file) {
@@ -497,48 +458,19 @@ export default function FileList() {
           artist: file.artist || ''
         }),
       });
-      const result = await response.json();
-      if (!response.ok || result.error) {
-        setMetadataStatus({ ...metadataStatus, [fileName]: result.error || 'error' });
-        return;
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Falha ao buscar metadados');
       }
 
-      // Extrair o ano (YYYY) do metadata.year ou metadata.ano ou metadata.releaseDate
-      let year = '';
-      if (result.metadata) {
-        if (result.metadata.year && /^\d{4}/.test(result.metadata.year.toString())) {
-          year = result.metadata.year.toString().slice(0, 4);
-        } else if (result.metadata.ano && /^\d{4}/.test(result.metadata.ano.toString())) {
-          year = result.metadata.ano.toString().slice(0, 4);
-        } else if (result.metadata.releaseDate && /^\d{4}/.test(result.metadata.releaseDate.toString())) {
-          year = result.metadata.releaseDate.toString().slice(0, 4);
-        }
-      }
-
-      // Atualizar os metadados do arquivo com os novos dados
-      const updatedFile = {
-        ...file,
-        ...result.metadata,
-        isBeatportFormat: true,
-        year, // garantir que o campo year seja só 4 dígitos
-        fileName: file.name // garantir que fileName sempre vai para o backend
-      };
-
-      // Atualizar o arquivo no backend
-      const updateResponse = await fetch('/api/update-metadata', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedFile),
-      });
-
-      if (!updateResponse.ok) {
-        throw new Error('Erro ao atualizar arquivo');
-      }
-
-      setMetadataStatus({ ...metadataStatus, [fileName]: 'success' });
-      fetchFiles();
+      const { metadata } = await response.json();
+      
+      setFiles((prevFiles: any) => prevFiles.map((f: any) => f.name === fileName ? { ...f, ...metadata, status: 'success' } : f));
+      setMetadataStatus((prev: any) => ({ ...prev, [fileName]: 'success' }));
+      
     } catch (err: any) {
-      setMetadataStatus({ ...metadataStatus, [fileName]: err.message || 'error' });
+      setMetadataStatus((prev: any) => ({ ...prev, [fileName]: err.message || 'error' }));
     }
   }
 
@@ -578,36 +510,6 @@ export default function FileList() {
   const queueCount = queueActive.length;
   // Verificar se há algum download em andamento
   const isProcessing = queue.some(item => item.status === 'downloading');
-
-  // Nova função para selecionar pasta de downloads com feedback
-  const handleSelectDownloadsFolder = async () => {
-    if (!('showDirectoryPicker' in window)) {
-      alert('Seu navegador não suporta seleção de pastas. Use o Chrome ou Edge mais recente.');
-      return;
-    }
-    try {
-      // Só pode ser chamado em resposta a um clique!
-      // @ts-ignore
-      const directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      setCustomDownloadsPath(directoryHandle.name);
-      localStorage.setItem('customDownloadsPath', directoryHandle.name);
-      // Atualizar a API/backend se necessário
-      await fetch('/api/set-downloads-path', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: directoryHandle.name }),
-      });
-      // Atualizar a lista
-      fetchFiles();
-      alert('Pasta selecionada com sucesso!');
-    } catch (error: any) {
-      if (error?.name === 'AbortError') {
-        alert('Seleção de pasta cancelada.');
-      } else {
-        alert('Permissão negada ou erro ao acessar a pasta.');
-      }
-    }
-  };
 
   // Função para iniciar o resize
   const handleResizeStart = (idx: number, e: React.MouseEvent) => {
@@ -677,43 +579,27 @@ export default function FileList() {
   const [editModalFile, setEditModalFile] = useState<FileInfo | null>(null);
 
   const handleEditFileSave = async (data: Partial<FileInfo>) => {
-    if (editModalFile) {
-      try {
-        // Montar novo nome de arquivo no padrão: Artista(s) - Título (Versão) [Label].extensão
-        const ext = editModalFile.name.split('.').pop();
-        let artista = (data.artist || editModalFile.artist || '').trim();
-        let titulo = (data.title || editModalFile.title || editModalFile.displayName || '').trim();
-        let label = (data.label || editModalFile.label || '').trim();
-        // Extrair versão do título se houver entre parênteses
-        let versao = '';
-        const matchVersao = titulo.match(/\(([^)]+)\)/);
-        if (matchVersao) {
-          versao = matchVersao[1];
-          // Remover a versão do título para não duplicar
-          titulo = titulo.replace(/\s*\([^)]*\)/, '').trim();
-        }
-        // Montar nome
-        let newFileName = `${artista} - ${titulo}`;
-        if (versao) newFileName += ` (${versao})`;
-        if (label) newFileName += ` [${label}]`;
-        newFileName = newFileName.replace(/\s+/g, ' ').replace(/[\\/:*?"<>|]/g, '').trim();
-        newFileName += `.${ext}`;
-        const response = await fetch('/api/update-metadata', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileName: editModalFile.name, ...data, year: data.ano ? String(data.ano).slice(0, 4) : '', newFileName }),
-        });
-        const result = await response.json();
-        if (!response.ok || result.error) {
-          setMetadataStatus({ ...metadataStatus, [editModalFile.name]: result.error || 'error' });
-        } else {
-          setMetadataStatus({ ...metadataStatus, [editModalFile.name]: 'success' });
-          fetchFiles();
-        }
-      } catch (err: any) {
-        setMetadataStatus({ ...metadataStatus, [editModalFile.name]: err.message || 'error' });
+    if (!editModalFile) return;
+
+    try {
+      await fetch(`/api/update-metadata?fileName=${encodeURIComponent(editModalFile.name)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      // Atualizar estado local
+      setFiles((prevFiles: any) => prevFiles.map((f: any) => f.name === editModalFile.name ? { ...f, ...data } : f));
+      if (data.name) {
+        setMetadataStatus((prev: any) => ({ ...prev, [data.name as string]: 'success' }));
       }
+    } catch (err: any) {
+      console.error('Erro ao salvar metadados:', err.message);
+      if(editModalFile.name) {
+        setMetadataStatus((prev: any) => ({ ...prev, [editModalFile.name as string]: 'error' }));
+      }
+    } finally {
       setEditModalFile(null);
+      fetchFiles(true); // Re-fetch para garantir consistência
     }
   };
 

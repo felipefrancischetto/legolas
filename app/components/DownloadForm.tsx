@@ -3,8 +3,11 @@
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { useDownload } from '../contexts/DownloadContext';
+import { useFile } from '../contexts/FileContext';
 import DownloadQueue from './DownloadQueue';
 import DownloadStatusIndicator from './DownloadStatusIndicator';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faFolderOpen } from '@fortawesome/free-solid-svg-icons';
 
 interface DownloadFormProps {
   minimized: boolean;
@@ -45,44 +48,11 @@ export default function DownloadForm({ minimized, setMinimized }: DownloadFormPr
     toasts,
     removeToast
   } = useDownload();
+  const { selectDownloadsFolder } = useFile();
 
   // Obter dados do download atual
   const currentDownload = currentDownloadId ? getCurrentDownload(currentDownloadId) : null;
   const playlistProgressData = currentDownloadId ? getPlaylistProgressData(currentDownloadId) : null;
-
-  const selectDownloadsFolder = async () => {
-    try {
-      // @ts-ignore - showDirectoryPicker é uma API experimental
-      const directoryHandle = await window.showDirectoryPicker({
-        mode: 'readwrite',
-        startIn: 'downloads'
-      });
-      
-      const newPath = directoryHandle.name;
-      const currentPath = localStorage.getItem('customDownloadsPath');
-      
-      // Só atualizar se a pasta realmente mudou
-      if (newPath !== currentPath) {
-        localStorage.setItem('customDownloadsPath', newPath);
-        await fetch('/api/set-downloads-path', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ path: newPath }),
-        });
-        
-        console.log('📂 Pasta de downloads alterada, disparando refresh-files');
-        window.dispatchEvent(new CustomEvent('refresh-files'));
-      } else {
-        console.log('📂 Pasta selecionada é a mesma atual, sem refresh necessário');
-      }
-    } catch (error: unknown) {
-      if (error instanceof Error && error.name !== 'AbortError') {
-        console.error('❌ Erro ao selecionar pasta:', error);
-      }
-    }
-  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -328,17 +298,16 @@ export default function DownloadForm({ minimized, setMinimized }: DownloadFormPr
           </div>
           <div className="flex-[0_0_auto] flex flex-col justify-end">
             <label className="block text-xs font-medium text-gray-300 mb-1">Pasta</label>
-            <button
-              onClick={selectDownloadsFolder}
-              className="h-11 px-4 py-2 rounded-md text-sm font-medium bg-zinc-700 text-white hover:bg-zinc-600 transition-all duration-200 flex items-center gap-2"
-              title="Selecionar pasta de downloads"
-              type="button"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-              </svg>
-              Selecionar Pasta
-            </button>
+            <div className="relative flex-grow min-w-[150px]">
+              <button
+                type="button"
+                onClick={selectDownloadsFolder}
+                className="w-full flex items-center justify-between bg-zinc-700 text-white px-4 py-2 rounded-md hover:bg-zinc-600 transition-all duration-200 text-sm"
+              >
+                <FontAwesomeIcon icon={faFolderOpen} className="mr-2" />
+                Selecionar Pasta
+              </button>
+            </div>
           </div>
           <div className="flex-[0_0_auto] flex flex-col justify-end min-w-[110px]">
             <label className="block text-xs font-medium text-gray-300 mb-1 sr-only">Beatport</label>

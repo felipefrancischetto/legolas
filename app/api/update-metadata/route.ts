@@ -8,6 +8,23 @@ import { spawn } from 'child_process';
 import { mkdtempSync, existsSync, renameSync } from 'fs';
 import os from 'os';
 
+function deduplicateLabel(label: string): string {
+  if (!label) return '';
+  
+  // Remove any duplicate words or phrases
+  const words = label.split(/\s+/);
+  const uniqueWords = [...new Set(words)];
+  
+  // Join back and clean
+  const deduplicated = uniqueWords.join(' ').trim();
+  
+  // Remove common duplicate patterns
+  return deduplicated
+    .replace(/(\w+)\s+\1/gi, '$1') // Remove consecutive duplicate words
+    .replace(/\s+/g, ' ') // Normalize spaces
+    .trim();
+}
+
 async function fileExists(path: string): Promise<boolean> {
   try {
     await access(path, constants.F_OK);
@@ -71,7 +88,7 @@ export async function POST(req: NextRequest) {
         if (album) tags.album = album;
         if (safeYear) tags.year = safeYear;
         if (genre) tags.genre = genre;
-        if (label) tags.publisher = label;
+        if (label) tags.publisher = deduplicateLabel(label);
         if (bpm) tags.TBPM = bpm.toString();
         if (key) tags.initialKey = key;
         if (duration) tags.length = duration.toString();
@@ -90,7 +107,7 @@ export async function POST(req: NextRequest) {
         if (album) args.push('-metadata', `album=${album}`);
         if (safeYear) args.push('-metadata', `date=${safeYear}`);
         if (genre) args.push('-metadata', `genre=${genre}`);
-        if (label) args.push('-metadata', `publisher=${label}`);
+        if (label) args.push('-metadata', `publisher=${deduplicateLabel(label)}`);
         if (bpm) args.push('-metadata', `bpm=${bpm}`);
         if (key) args.push('-metadata', `key=${key}`);
         if (duration) args.push('-metadata', `duration=${duration}`);
@@ -151,7 +168,7 @@ export async function POST(req: NextRequest) {
       album: metadata.album || '',
       year: metadata.ano || '',
       genre: metadata.genero || '',
-      publisher: metadata.label || '',
+      publisher: deduplicateLabel(metadata.label || ''),
       comment: { language: 'por', text: metadata.descricao || '' }
     }, filePath);
     if (!success) {

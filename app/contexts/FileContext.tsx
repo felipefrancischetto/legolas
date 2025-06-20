@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useContext, useState, ReactNode, useEffect, useCallback } from 'react';
 
 interface FileInfo {
   name: string;
@@ -42,7 +42,8 @@ interface FileContextType {
   setUpdateProgress: (progress: { current: number; total: number }) => void;
   customDownloadsPath: string | null;
   setCustomDownloadsPath: (path: string | null) => void;
-  fetchFiles: () => Promise<void>;
+  fetchFiles: (force?: boolean) => Promise<void>;
+  selectDownloadsFolder: () => Promise<void>;
 }
 
 const FileContext = createContext<FileContextType | undefined>(undefined);
@@ -56,17 +57,70 @@ export function FileProvider({ children }: { children: ReactNode }) {
   const [updateProgress, setUpdateProgress] = useState({ current: 0, total: 0 });
   const [customDownloadsPath, setCustomDownloadsPath] = useState<string | null>(null);
 
-  const fetchFiles = async () => {
+  const fetchFiles = useCallback(async (force = false) => {
+    console.log('Buscando lista de arquivos...');
+    setLoading(true);
     try {
       const response = await fetch('/api/files');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
       const data = await response.json();
       setFiles(data.files || []);
+      console.log(`Lista de arquivos atualizada: ${data.files?.length || 0} arquivos`);
     } catch (error) {
       console.error('Erro ao carregar arquivos:', error);
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const selectDownloadsFolder = async () => {
+    try {
+      // @ts-ignore
+      const directoryHandle = await window.showDirectoryPicker({
+        mode: 'readwrite',
+        startIn: 'downloads'
+      });
+      
+      const newPath = directoryHandle.name;
+      const currentPath = localStorage.getItem('customDownloadsPath');
+      
+      if (newPath !== currentPath) {
+        localStorage.setItem('customDownloadsPath', newPath);
+        
+        await fetch('/api/set-downloads-path', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: newPath }),
+        });
+        
+        setCustomDownloadsPath(newPath); // Atualiza o estado no contexto
+        console.log('📂 Pasta de downloads alterada, disparando refresh automático.');
+      } else {
+        console.log('📂 Pasta selecionada é a mesma atual, sem refresh necessário');
+      }
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name !== 'AbortError') {
+        console.error('❌ Erro ao selecionar pasta:', error);
+      }
+    }
   };
+
+  useEffect(() => {
+    const savedPath = localStorage.getItem('customDownloadsPath');
+    if (savedPath) {
+      setCustomDownloadsPath(savedPath);
+    }
+    fetchFiles(true); // Fetch inicial
+  }, [fetchFiles]);
+  
+  // Re-fetch files quando o caminho da pasta de download é alterado
+  useEffect(() => {
+    if (customDownloadsPath !== null) {
+      fetchFiles(true);
+    }
+  }, [customDownloadsPath, fetchFiles]);
 
   return (
     <FileContext.Provider value={{
@@ -84,7 +138,8 @@ export function FileProvider({ children }: { children: ReactNode }) {
       setUpdateProgress,
       customDownloadsPath,
       setCustomDownloadsPath,
-      fetchFiles
+      fetchFiles,
+      selectDownloadsFolder
     }}>
       {children}
     </FileContext.Provider>

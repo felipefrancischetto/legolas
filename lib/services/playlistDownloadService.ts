@@ -46,6 +46,23 @@ function sanitizeTitle(title: string): string {
   return title.replace(/[^\w\s\-\(\)\[\]]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+function deduplicateLabel(label: string): string {
+  if (!label) return '';
+  
+  // Remove any duplicate words or phrases
+  const words = label.split(/\s+/);
+  const uniqueWords = [...new Set(words)];
+  
+  // Join back and clean
+  const deduplicated = uniqueWords.join(' ').trim();
+  
+  // Remove common duplicate patterns
+  return deduplicated
+    .replace(/(\w+)\s+\1/gi, '$1') // Remove consecutive duplicate words
+    .replace(/\s+/g, ' ') // Normalize spaces
+    .trim();
+}
+
 function cleanArtistName(artist: string): string {
   if (!artist) return '';
   // Remove sufixos comuns do YouTube e plataformas
@@ -633,7 +650,12 @@ export class PlaylistDownloadService {
     if (version && !finalTitle.endsWith(`(${version})`)) {
       fileBase += ` (${version})`;
     }
-    if (metadata.label) fileBase += ` [${metadata.label}]`;
+    if (metadata.label) {
+      const deduplicatedLabel = deduplicateLabel(metadata.label);
+      if (deduplicatedLabel) {
+        fileBase += ` [${deduplicatedLabel}]`;
+      }
+    }
     const sanitizedNewFilename = sanitizeTitle(fileBase);
 
     // Renomear o arquivo com o novo nome formatado
@@ -654,18 +676,19 @@ export class PlaylistDownloadService {
 
     if (fileExtension === 'mp3') {
       // Use NodeID3 for MP3 files
+      const deduplicatedLabel = metadata.label ? deduplicateLabel(metadata.label) : '';
       const enhancedTags = {
         title: metadata.title || finalTitle,
         artist: finalArtist,
         album: existingTags.album || '',
         year: metadata.year?.toString() || existingTags.year || '',
         genre: metadata.genre || existingTags.genre || '',
-        publisher: metadata.label || existingTags.publisher || '',
+        publisher: deduplicatedLabel || existingTags.publisher || '',
         bpm: metadata.bpm?.toString() || '',
         initialkey: metadata.key || '',
         comment: {
           language: 'por',
-          text: `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${metadata.label || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`
+          text: `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${deduplicatedLabel || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`
         }
       };
       logger.info(`[DEBUG] enhancedTags a serem escritos: ${JSON.stringify(enhancedTags)}`);
@@ -741,10 +764,12 @@ export class PlaylistDownloadService {
         ffmpegArgs.push('-metadata', `"Genre=${escapedGenre}"`);
       }
       if (metadata.label) {
-        // Use both 'publisher' and 'label' fields that the API reads
-        const escapedLabel = escapeMetadataValue(metadata.label);
-        ffmpegArgs.push('-metadata', `"publisher=${escapedLabel}"`);
-        ffmpegArgs.push('-metadata', `"label=${escapedLabel}"`);
+        // Use only 'publisher' field to avoid duplication, and deduplicate the label
+        const deduplicatedLabel = deduplicateLabel(metadata.label);
+        if (deduplicatedLabel) {
+          const escapedLabel = escapeMetadataValue(deduplicatedLabel);
+          ffmpegArgs.push('-metadata', `"publisher=${escapedLabel}"`);
+        }
       }
       if (metadata.bpm) {
         // Use both 'BPM' and 'bpm' for better compatibility
@@ -761,7 +786,8 @@ export class PlaylistDownloadService {
       }
 
       // Add comment with source info (escape pipes to avoid shell interpretation)
-      const commentText = `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${metadata.label || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`;
+      const deduplicatedLabel = metadata.label ? deduplicateLabel(metadata.label) : '';
+      const commentText = `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${deduplicatedLabel || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`;
       ffmpegArgs.push('-metadata', `"comment=${escapeMetadataValue(commentText)}"`);
 
       // Specify FLAC format explicitly and output to temp file

@@ -21,6 +21,23 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+function deduplicateLabel(label: string): string {
+  if (!label) return '';
+  
+  // Remove any duplicate words or phrases
+  const words = label.split(/\s+/);
+  const uniqueWords = [...new Set(words)];
+  
+  // Join back and clean
+  const deduplicated = uniqueWords.join(' ').trim();
+  
+  // Remove common duplicate patterns
+  return deduplicated
+    .replace(/(\w+)\s+\1/gi, '$1') // Remove consecutive duplicate words
+    .replace(/\s+/g, ' ') // Normalize spaces
+    .trim();
+}
+
 async function getDownloadsPath() {
   try {
     const configPath = join(process.cwd(), 'downloads.config.json');
@@ -315,7 +332,7 @@ export async function GET(request: NextRequest) {
           album: metadata.album || '',
           year: metadata.year?.toString() || '',
           genre: metadata.genre || '',
-          label: metadata.label || '',
+          label: deduplicateLabel(metadata.label || ''),
           bpm: metadata.bpm?.toString() || '',
           key: metadata.key || '',
           comment: `BPM: ${metadata.bpm || 'N/A'} | Key: ${metadata.key || 'N/A'} | Sources: ${metadata.sources?.join(', ') || 'None'}`
@@ -379,7 +396,7 @@ export async function GET(request: NextRequest) {
             if (tags.album) ffmpegCmd += ` -metadata "album=${escapeValue(tags.album)}"`;
             if (tags.year) ffmpegCmd += ` -metadata "date=${tags.year}"`;
             if (tags.genre) ffmpegCmd += ` -metadata "genre=${escapeValue(tags.genre)}"`;
-            if (tags.label) ffmpegCmd += ` -metadata "label=${escapeValue(tags.label)}"`;
+            if (tags.label) ffmpegCmd += ` -metadata "publisher=${escapeValue(tags.label)}"`;
             if (tags.bpm) ffmpegCmd += ` -metadata "bpm=${tags.bpm}"`;
             if (tags.key) ffmpegCmd += ` -metadata "initialkey=${escapeValue(tags.key)}"`;
             if (tags.comment) ffmpegCmd += ` -metadata "comment=${escapeValue(tags.comment)}"`;
