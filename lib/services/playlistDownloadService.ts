@@ -71,6 +71,13 @@ export class PlaylistDownloadService {
       downloadId
     } = options;
 
+    logger.info(`🎵 Playlist download options:`, {
+      format,
+      enhanceMetadata,
+      useBeatport,
+      maxConcurrent
+    });
+
     const downloadsFolder = await getDownloadsPath();
     await mkdir(downloadsFolder, { recursive: true });
 
@@ -409,11 +416,11 @@ export class PlaylistDownloadService {
         if (trackNumber < totalTracks) {
           if (hadYouTubeIssues) {
             // Longer delay if we had YouTube issues
-            logger.info(`   ⏳ Extended delay (15s) due to YouTube issues...`);
-            await new Promise(resolve => setTimeout(resolve, 15000));
+            logger.info(`   ⏳ Extended delay (8s) due to YouTube issues...`);
+            await new Promise(resolve => setTimeout(resolve, 8000)); // Reduzido de 15s para 8s
           } else {
             // Normal delay
-            await new Promise(resolve => setTimeout(resolve, 3000));
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Reduzido de 3s para 1s
           }
         }
 
@@ -583,7 +590,8 @@ export class PlaylistDownloadService {
     // Buscar metadados usando padrão normalizado
     const metadata = await metadataAggregator.searchMetadata(
       normTitle,
-      normArtist
+      normArtist,
+      { useBeatport }
     );
     logger.info(`[DEBUG] metadataAggregator.searchMetadata retornou: ${JSON.stringify(metadata)}`);
 
@@ -693,16 +701,21 @@ export class PlaylistDownloadService {
       // Helper function to escape metadata values for ffmpeg in PowerShell
       const escapeMetadataValue = (value: string): string => {
         if (!value) return '';
-        // PowerShell-safe escaping (NÃO normalizar & nem | para genre, apenas remover chars perigosos)
+        // PowerShell-safe escaping - melhorado para Windows
         return value
-          // .replace(/\|/g, '-')        // REMOVIDO: Não substituir pipes
-          .replace(/:/g, ' -')        // Replace colons (PowerShell interprets : as command separator)
-          .replace(/"/g, "'")         // Replace double quotes with single quotes
-          .replace(/\$/g, '')         // Remove $ signs (PowerShell variables)
-          .replace(/`/g, "'")         // Replace backticks (PowerShell escape char)
-          // .replace(/&/g, 'and')       // REMOVIDO: Não substituir &
-          .replace(/<|>/g, '')        // Remove redirects
-          .replace(/;/g, ',')         // Replace semicolons
+          .replace(/"/g, '\\"')        // Escapar aspas duplas
+          .replace(/\$/g, '\\$')       // Escapar $ (PowerShell variables)
+          .replace(/`/g, '\\`')        // Escapar backticks (PowerShell escape char)
+          .replace(/&/g, '\\&')        // Escapar & (PowerShell command separator)
+          .replace(/\|/g, '\\|')       // Escapar | (PowerShell pipe)
+          .replace(/;/g, '\\;')        // Escapar ; (PowerShell command separator)
+          .replace(/</g, '\\<')        // Escapar < (PowerShell redirect)
+          .replace(/>/g, '\\>')        // Escapar > (PowerShell redirect)
+          .replace(/:/g, '\\:')        // Escapar : (PowerShell drive separator)
+          .replace(/\*/g, '\\*')       // Escapar * (PowerShell wildcard)
+          .replace(/\?/g, '\\?')       // Escapar ? (PowerShell wildcard)
+          .replace(/\[/g, '\\[')       // Escapar [ (PowerShell wildcard)
+          .replace(/\]/g, '\\]')       // Escapar ] (PowerShell wildcard)
           .trim();
       };
       

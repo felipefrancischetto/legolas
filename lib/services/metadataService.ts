@@ -44,13 +44,13 @@ class BeatportProviderV2 implements MetadataProvider {
   }
 
   async search(title: string, artist: string): Promise<Partial<EnhancedMetadata> | null> {
-    const timeoutMs = 30000;
+    const timeoutMs = 15000;
     console.log(`⏰ [Beatport] Iniciando busca com timeout de ${timeoutMs/1000}s`);
     
     return Promise.race([
       this.performBeatportSearch(title, artist),
       new Promise<null>((_, reject) => 
-        setTimeout(() => reject(new Error('Beatport timeout após 30s')), timeoutMs)
+        setTimeout(() => reject(new Error('Beatport timeout após 15s')), timeoutMs)
       )
     ]);
   }
@@ -64,9 +64,9 @@ class BeatportProviderV2 implements MetadataProvider {
       
       console.log(`🔧 [Beatport] Configurando opções do browser...`);
       const browserOptions = { 
-        headless: false,
-        timeout: 15000,
-        protocolTimeout: 20000,
+        headless: true,
+        timeout: 10000,
+        protocolTimeout: 15000,
         args: [
           '--no-sandbox', 
           '--disable-setuid-sandbox',
@@ -75,7 +75,13 @@ class BeatportProviderV2 implements MetadataProvider {
           '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
           '--disable-gpu',
-          '--window-size=1920,1080'
+          '--window-size=1920,1080',
+          '--disable-extensions',
+          '--disable-plugins',
+          '--disable-images',
+          '--disable-javascript',
+          '--memory-pressure-off',
+          '--max_old_space_size=4096'
         ]
       };
       console.log(`⚙️ [Beatport] Opções do browser:`, browserOptions);
@@ -93,8 +99,8 @@ class BeatportProviderV2 implements MetadataProvider {
       
       // Buscar na página de search
       const searchUrl = `https://www.beatport.com/search?q=${encodeURIComponent(`${artist} ${title}`)}`;
-      await page.goto(searchUrl, { waitUntil: 'networkidle0', timeout: 15000 });
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // Aceitar cookies se necessário
       try {
@@ -167,12 +173,12 @@ class BeatportProviderV2 implements MetadataProvider {
       
       // Ir para a página da música
       console.log(`🌐 [Beatport] Navegando para URL: ${trackUrl}`);
-      await page.goto(trackUrl, { waitUntil: 'networkidle0', timeout: 15000 });
+      await page.goto(trackUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
       console.log(`✅ [Beatport] Página carregada com sucesso`);
       
       // Aguardar um tempo menor para garantir que o conteúdo dinâmico seja carregado
       console.log(`⏳ [Beatport] Aguardando carregamento do conteúdo dinâmico...`);
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 1000));
       console.log(`✅ [Beatport] Tempo de espera concluído`);
       
       // Extrair metadados usando seletores específicos do Beatport
@@ -366,8 +372,26 @@ class BeatportProviderV2 implements MetadataProvider {
 }
 
 export class MetadataAggregator {
-  async searchMetadata(title: string, artist: string): Promise<EnhancedMetadata> {
-    console.log(`\n🔍 [MetadataAggregator] Iniciando busca Beatport para: "${title}" - "${artist}"`);
+  async searchMetadata(title: string, artist: string, options: { useBeatport?: boolean } = {}): Promise<EnhancedMetadata> {
+    const { useBeatport = false } = options;
+
+    console.log(`\n🔍 [MetadataAggregator] Iniciando busca com opções:`, {
+      title,
+      artist,
+      useBeatport,
+    });
+    
+    // Se useBeatport estiver desabilitado, retornar dados básicos sem buscar
+    if (!useBeatport) {
+      console.log(`⏭️ [MetadataAggregator] Beatport desabilitado (useBeatport: ${useBeatport}), pulando busca.`);
+      return {
+        title,
+        artist,
+        sources: []
+      };
+    }
+    
+    console.log(`\n🚀 [MetadataAggregator] Iniciando busca Beatport para: "${title}" - "${artist}"`);
     
     const beatportProvider = new BeatportProviderV2();
     const startTime = Date.now();

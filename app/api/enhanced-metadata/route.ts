@@ -5,17 +5,19 @@ interface MetadataRequest {
   title: string;
   artist: string;
   useBeatport?: boolean;
+  skipMetadata?: boolean;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: MetadataRequest = await request.json();
-    const { title, artist, useBeatport = false } = body;
+    const { title, artist, useBeatport = false, skipMetadata = true } = body;
 
     console.log('\n🎯 [Enhanced-Metadata API] Iniciando busca de metadados:');
     console.log(`   📋 Title: "${title}"`);
     console.log(`   🎤 Artist: "${artist}"`);
     console.log(`   🎧 Beatport habilitado: ${useBeatport}`);
+    console.log(`   ⏭️ Pular metadados: ${skipMetadata}`);
     console.log('───────────────────────────────────────────────────');
 
     if (!title) {
@@ -30,7 +32,8 @@ export async function POST(request: NextRequest) {
     
     // Buscar metadados usando o agregador
     const metadata = await metadataAggregator.searchMetadata(title, artist, { 
-      useBeatport 
+      useBeatport,
+      skipMetadata
     });
 
     const duration = Date.now() - startTime;
@@ -78,13 +81,13 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   try {
     // Return configuration status of all providers
-    const status = await metadataAggregator.getConfigurationStatus();
-    
     return NextResponse.json({
       success: true,
-      providers: status,
-      configured: Object.values(status).filter(Boolean).length,
-      total: Object.keys(status).length
+      providers: {
+        BeatportV2: true
+      },
+      configured: 1,
+      total: 1
     });
 
   } catch (error) {

@@ -35,7 +35,6 @@ export default function DownloadForm({ minimized, setMinimized }: DownloadFormPr
   const [enrichWithBeatport, setEnrichWithBeatport] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   const [currentDownloadId, setCurrentDownloadId] = useState<string | null>(null);
-  const [isPasting, setIsPasting] = useState(false);
 
   const { 
     addToQueue, 
@@ -85,15 +84,10 @@ export default function DownloadForm({ minimized, setMinimized }: DownloadFormPr
     }
   };
 
-  const handlePaste = async (e: React.ClipboardEvent) => {
-    const pastedText = e.clipboardData.getData('text');
-    if (pastedText && (pastedText.includes('youtube.com') || pastedText.includes('youtu.be'))) {
-      setIsPasting(true);
-      setUrl(pastedText);
-    }
-  };
-
   useEffect(() => {
+    const controller = new AbortController();
+    const { signal } = controller;
+
     const getVideoId = (url: string) => {
       const videoMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^#&?]+)/i);
       if (videoMatch) {
@@ -109,39 +103,41 @@ export default function DownloadForm({ minimized, setMinimized }: DownloadFormPr
     const fetchVideoInfo = async () => {
       console.log(`🔍 Buscando informações para URL: ${url}`);
       const isPlaylist = url.includes('list=');
-      if (isPlaylist) {
-        const playlistId = getPlaylistId(url);
-        if (!playlistId) return;
-        try {
+
+      try {
+        if (isPlaylist) {
+          const playlistId = getPlaylistId(url);
+          if (!playlistId) return;
+
           console.log(`📋 Chamando playlist-info para ID: ${playlistId}`);
           const endpoint = `/api/playlist-info?id=${encodeURIComponent(playlistId)}`;
-          const response = await fetch(endpoint);
+          const response = await fetch(endpoint, { signal });
+          if (signal.aborted) return;
+
           const data = await response.json();
           if (data.error) throw new Error(data.error);
+
           setVideoInfo({ ...data, isPlaylist: true });
           console.log(`✅ Playlist info obtida: ${data.title}`);
-        } catch (err) {
-          console.error(`❌ Erro ao buscar playlist info:`, err);
-          setVideoInfo(null);
-        } finally {
-          setIsPasting(false);
-        }
-      } else {
-        const videoId = getVideoId(url);
-        if (!videoId) return;
-        try {
+        } else {
+          const videoId = getVideoId(url);
+          if (!videoId) return;
+
           console.log(`🎵 Chamando video-info para ID: ${videoId}`);
           const endpoint = `/api/video-info?id=${encodeURIComponent(videoId)}`;
-          const response = await fetch(endpoint);
+          const response = await fetch(endpoint, { signal });
+          if (signal.aborted) return;
+
           const data = await response.json();
           if (data.error) throw new Error(data.error);
+
           setVideoInfo({ ...data, isPlaylist: false });
           console.log(`✅ Video info obtida: ${data.title}`);
-        } catch (err) {
-          console.error(`❌ Erro ao buscar video info:`, err);
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error(`❌ Erro ao buscar info:`, err);
           setVideoInfo(null);
-        } finally {
-          setIsPasting(false);
         }
       }
     };
@@ -152,7 +148,12 @@ export default function DownloadForm({ minimized, setMinimized }: DownloadFormPr
     } else {
       setVideoInfo(null);
     }
-  }, [url]); // Removido setDownloadStatus das dependências
+
+    return () => {
+      console.log(`🧹 Abortando fetch para: ${url}`);
+      controller.abort();
+    };
+  }, [url]);
 
   // Toast auto-hide
   useEffect(() => {
@@ -308,19 +309,10 @@ export default function DownloadForm({ minimized, setMinimized }: DownloadFormPr
                 type="url"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                onPaste={handlePaste}
                 className="w-full h-11 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white pr-10"
                 placeholder="https://www.youtube.com/watch?v=..."
                 required
               />
-              {isPasting && (
-                <div className="absolute right-2 top-1/2 transform -translate-y-1/2">
-                  <svg className="w-5 h-5 animate-spin text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" className="opacity-25" />
-                    <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" className="opacity-75" />
-                  </svg>
-                </div>
-              )}
             </div>
           </div>
           <div className="flex-[0_0_auto] flex flex-col justify-end min-w-[120px]">
@@ -409,7 +401,6 @@ export default function DownloadForm({ minimized, setMinimized }: DownloadFormPr
                   type="url"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  onPaste={handlePaste}
                   className="w-full h-10 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white"
                   placeholder="https://www.youtube.com/watch?v=..."
                   required

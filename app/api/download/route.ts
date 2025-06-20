@@ -42,6 +42,7 @@ export async function GET(request: NextRequest) {
     const url = searchParams.get('url');
     const format = searchParams.get('format') || 'flac';
     const useBeatport = searchParams.get('useBeatport') === 'true';
+    const skipMetadata = searchParams.get('skipMetadata') !== 'false';
     downloadId = searchParams.get('downloadId');
     
     if (!url) {
@@ -51,7 +52,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log('Iniciando download para URL:', url, 'Formato:', format, 'Beatport:', useBeatport, 'DownloadID:', downloadId);
+    console.log('Iniciando download para URL:', url, 'Formato:', format, 'Beatport:', useBeatport, 'SkipMetadata:', skipMetadata, 'DownloadID:', downloadId);
 
     // Enviar evento inicial
     if (downloadId) {
@@ -180,7 +181,7 @@ export async function GET(request: NextRequest) {
       });
     }
     
-    await new Promise(resolve => setTimeout(resolve, 2000)); // 2 segundos de delay
+    await new Promise(resolve => setTimeout(resolve, 500)); // Reduzido de 2s para 500ms
 
     // Evento: Iniciando busca de metadados
     if (downloadId) {
@@ -210,7 +211,8 @@ export async function GET(request: NextRequest) {
         body: JSON.stringify({ 
           title: videoInfo.title, 
           artist: videoInfo.uploader,
-          useBeatport: useBeatport
+          useBeatport: useBeatport,
+          skipMetadata: skipMetadata
         })
       });
       
@@ -348,7 +350,22 @@ export async function GET(request: NextRequest) {
             // Helper function to escape metadata values
             const escapeValue = (value: string): string => {
               if (!value) return '';
-              return value.replace(/"/g, '\\"').replace(/\|/g, '-').trim();
+              // PowerShell-safe escaping - melhorado para Windows
+              return value
+                .replace(/"/g, '\\"')        // Escapar aspas duplas
+                .replace(/\$/g, '\\$')       // Escapar $ (PowerShell variables)
+                .replace(/`/g, '\\`')        // Escapar backticks (PowerShell escape char)
+                .replace(/&/g, '\\&')        // Escapar & (PowerShell command separator)
+                .replace(/\|/g, '\\|')       // Escapar | (PowerShell pipe)
+                .replace(/;/g, '\\;')        // Escapar ; (PowerShell command separator)
+                .replace(/</g, '\\<')        // Escapar < (PowerShell redirect)
+                .replace(/>/g, '\\>')        // Escapar > (PowerShell redirect)
+                .replace(/:/g, '\\:')        // Escapar : (PowerShell drive separator)
+                .replace(/\*/g, '\\*')       // Escapar * (PowerShell wildcard)
+                .replace(/\?/g, '\\?')       // Escapar ? (PowerShell wildcard)
+                .replace(/\[/g, '\\[')       // Escapar [ (PowerShell wildcard)
+                .replace(/\]/g, '\\]')       // Escapar ] (PowerShell wildcard)
+                .trim();
             };
             
             // Construir comando FFmpeg com Vorbis comments e especificar formato explicitamente

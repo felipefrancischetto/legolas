@@ -1,20 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { join } from 'path';
 import { readFile } from 'fs/promises';
+import { getDownloadsPath } from '../../utils/common';
 
 export const runtime = 'nodejs';
-
-async function getDownloadsPath() {
-  try {
-    const configPath = join(process.cwd(), 'downloads.config.json');
-    const config = await readFile(configPath, 'utf-8');
-    const { path } = JSON.parse(config);
-    return join(process.cwd(), path);
-  } catch (error) {
-    // Se não houver configuração, use o caminho padrão
-    return join(process.cwd(), 'downloads');
-  }
-}
 
 export async function GET(
   _: NextRequest,

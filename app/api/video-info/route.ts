@@ -2,24 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { join } from 'path';
+import { formatDuration } from '../utils/common';
 
 const execAsync = promisify(exec);
 const cookiesPath = join(process.cwd(), 'cookies.txt');
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const remainingSeconds = seconds % 60;
-
-  if (hours > 0) {
-    return `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
-  } else {
-    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
-  }
-}
 
 async function getVideoInfo(videoId: string, retryCount = 0): Promise<any> {
   const maxRetries = 3;

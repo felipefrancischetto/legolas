@@ -29,6 +29,9 @@ export async function GET(request: NextRequest) {
       downloadId
     });
 
+    console.log(`🎵 [API] Toggle Beatport: ${useBeatport ? 'ATIVO' : 'INATIVO'}`);
+    console.log(`🎵 [API] Enhance Metadata: ${enhanceMetadata ? 'ATIVO' : 'INATIVO'}`);
+
     // Use the enhanced playlist download service
     const result = await playlistDownloadService.downloadPlaylist(url, {
       format: format as 'mp3' | 'flac' | 'wav',
