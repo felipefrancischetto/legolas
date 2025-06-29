@@ -265,7 +265,7 @@ export default function TracklistScraper({ onResult }: TracklistScraperProps) {
             </div>
 
             {/* Informações da playlist */}
-            {result.playlistInfo && (
+            {result.metadata && (
               <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 sm:p-4">
                 <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 sm:text-lg sm:mb-3">
                   <span>📋</span>
@@ -274,12 +274,24 @@ export default function TracklistScraper({ onResult }: TracklistScraperProps) {
                 <div className="grid md:grid-cols-2 gap-4 sm:grid-cols-1 sm:gap-3">
                   <div>
                     <span className="font-semibold text-gray-700 sm:text-sm">Title:</span>
-                    <p className="text-gray-600 sm:text-sm">{result.playlistInfo.title}</p>
+                    <p className="text-gray-600 sm:text-sm">{result.metadata.title}</p>
                   </div>
                   <div>
-                    <span className="font-semibold text-gray-700 sm:text-sm">Source:</span>
-                    <p className="text-gray-600 sm:text-sm">{result.playlistInfo.source}</p>
+                    <span className="font-semibold text-gray-700 sm:text-sm">Artist:</span>
+                    <p className="text-gray-600 sm:text-sm">{result.metadata.artist}</p>
                   </div>
+                  {result.metadata.venue && (
+                    <div>
+                      <span className="font-semibold text-gray-700 sm:text-sm">Venue:</span>
+                      <p className="text-gray-600 sm:text-sm">{result.metadata.venue}</p>
+                    </div>
+                  )}
+                  {result.metadata.date && (
+                    <div>
+                      <span className="font-semibold text-gray-700 sm:text-sm">Date:</span>
+                      <p className="text-gray-600 sm:text-sm">{result.metadata.date}</p>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

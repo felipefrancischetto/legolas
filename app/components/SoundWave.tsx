@@ -4,21 +4,45 @@ interface SoundWaveProps {
   color?: string;
   size?: 'small' | 'medium' | 'large';
   isPlaying?: boolean;
+  isLoading?: boolean;
 }
 
 export default function SoundWave({ 
   color = 'rgb(16, 185, 129)', 
   size = 'small',
-  isPlaying = true 
+  isPlaying = true,
+  isLoading = false
 }: SoundWaveProps) {
   
   const sizeConfig = {
-    small: { width: 20, barWidth: 2.5, barCount: 4, gap: 1.5 },
-    medium: { width: 26, barWidth: 3, barCount: 5, gap: 2 },
-    large: { width: 32, barWidth: 4, barCount: 6, gap: 2.5 }
+    small: { width: 20, barWidth: 2.5, barCount: 4, gap: 1.5, spinnerSize: 14 },
+    medium: { width: 26, barWidth: 3, barCount: 5, gap: 2, spinnerSize: 18 },
+    large: { width: 32, barWidth: 4, barCount: 6, gap: 2.5, spinnerSize: 22 }
   };
 
   const config = sizeConfig[size];
+
+  // Se estiver carregando, mostrar spinner circular
+  if (isLoading) {
+    return (
+      <div 
+        className="flex items-center justify-center"
+        style={{ 
+          width: config.width, 
+          height: config.width
+        }}
+      >
+        <div 
+          className="animate-spin rounded-full border-b-2 border-t-2 border-t-transparent" 
+          style={{ 
+            width: config.spinnerSize,
+            height: config.spinnerSize,
+            borderBottomColor: color
+          }}
+        />
+      </div>
+    );
+  }
 
   // Definir as animações de cada barra
   const getAnimationStyle = (index: number) => {
@@ -45,13 +69,13 @@ export default function SoundWave({
         <div
           key={index}
           className="rounded-full"
-                      style={{
-              width: `${config.barWidth}px`,
-              backgroundColor: color,
-              height: `${config.barWidth * 3.5}px`,
-              transformOrigin: 'bottom',
-              ...getAnimationStyle(index),
-            }}
+          style={{
+            width: `${config.barWidth}px`,
+            backgroundColor: color,
+            height: `${config.barWidth * 3.5}px`,
+            transformOrigin: 'bottom',
+            ...getAnimationStyle(index),
+          }}
         />
       ))}
     </div>

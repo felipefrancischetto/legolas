@@ -39,7 +39,7 @@ export default function BaseModal({
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 sm:p-2">
       <div 
-        className={`rounded-2xl backdrop-blur-xl border p-6 w-full ${maxWidth} shadow-lg relative animate-fade-in sm:p-4 sm:max-w-full sm:mx-2 sm:max-h-[90vh] sm:overflow-y-auto`}
+        className={`rounded-xl backdrop-blur-xl border p-6 w-full ${maxWidth} shadow-lg relative animate-fade-in sm:p-4 sm:max-w-full sm:mx-2 sm:max-h-[90vh] sm:overflow-y-auto`}
         style={{
           background: 'linear-gradient(135deg, rgba(39, 39, 42, 0.7) 0%, rgba(24, 24, 27, 0.8) 100%)',
           borderColor: 'rgba(255, 255, 255, 0.1)',

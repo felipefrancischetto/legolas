@@ -7,7 +7,7 @@ export interface Settings {
 }
 
 const defaultSettings: Settings = {
-  disableDynamicColors: false
+  disableDynamicColors: true
 };
 
 export function useSettings() {

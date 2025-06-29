@@ -739,8 +739,11 @@ export default function AudioPlayer() {
           >
             <div ref={waveformDesktopRef} className="w-full" style={{ height: 70 }} />
             {!isWaveReady && !isLoading && (
-              <div className="absolute inset-0 flex items-center justify-center text-zinc-200 text-sm font-medium">
-                Carregando visualização...
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div 
+                  className="animate-spin rounded-full h-8 w-8 border-b-2 border-t-2 border-t-transparent" 
+                  style={{ borderBottomColor: themeColors.primary }}
+                />
               </div>
             )}
             
@@ -788,7 +791,8 @@ export default function AudioPlayer() {
           </div>
 
           {/* Controls */}
-          <div className="absolute bottom-0 left-0 right-0 z-20 flex items-center px-4 py-2" style={{ height: 90 }}>
+          <div className="absolute bottom-0 left-0 right-0 z-20 flex justify-center px-4 py-2" style={{ height: 90 }}>
+            <div className="w-full max-w-7xl flex items-center">
             {/* Foto do álbum */}
             <div className="flex-shrink-0">
               <button onClick={handleAlbumClick} className="hover:scale-105 transition-transform duration-200">
@@ -808,7 +812,18 @@ export default function AudioPlayer() {
               <div className="text-white font-bold text-lg leading-tight truncate">
                 {currentFile.title || currentFile.displayName}
               </div>
-              <div className="text-base truncate font-medium mt-0.5" style={{ color: themeColors.primary }}>
+              <div className="text-base truncate font-medium mt-0.5 flex items-center gap-2" style={{ color: themeColors.primary }}>
+                <div 
+                  className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center"
+                  style={{ 
+                    backgroundColor: `${themeColors.primary}25`,
+                    border: `1px solid ${themeColors.primary}40`
+                  }}
+                >
+                  <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                  </svg>
+                </div>
                 {currentFile.artist || '-'}
               </div>
               <div className="flex items-center gap-3 mt-1">
@@ -927,11 +942,13 @@ export default function AudioPlayer() {
                 </svg>
               </button>
             </div>
+            </div>
           </div>
         </div>
 
         {/* Mobile Layout */}
-        <div className="flex sm:hidden flex-col p-3 gap-3">
+        <div className="flex sm:hidden justify-center p-3">
+          <div className="w-full max-w-7xl flex flex-col gap-3">
           <div className="flex items-center gap-3">
             <div className="flex-shrink-0">
               <button onClick={handleAlbumClick} className="hover:scale-105 transition-transform duration-200">
@@ -949,13 +966,24 @@ export default function AudioPlayer() {
               <div className="text-white font-bold text-base leading-tight truncate">
                 {currentFile.title || currentFile.displayName}
               </div>
-              <div className="text-sm truncate font-medium mt-0.5" style={{ color: themeColors.primary }}>
+              <div className="text-sm truncate font-medium mt-0.5 flex items-center gap-2" style={{ color: themeColors.primary }}>
+                <div 
+                  className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center"
+                  style={{ 
+                    backgroundColor: `${themeColors.primary}25`,
+                    border: `1px solid ${themeColors.primary}40`
+                  }}
+                >
+                  <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                  </svg>
+                </div>
                 {currentFile.artist || '-'}
               </div>
               <div className="flex items-center gap-2 mt-1">
                 {currentFile.bpm && (
                   <span 
-                    className="px-1.5 py-0.5 rounded text-xs font-bold border"
+                    className="px-1.5 py-0.5 rounded-md text-xs font-bold border"
                     style={{ 
                       backgroundColor: themeColors.background,
                       color: themeColors.primary,
@@ -967,7 +995,7 @@ export default function AudioPlayer() {
                 )}
                 {currentFile.key && (
                   <span 
-                    className="px-1.5 py-0.5 rounded text-xs font-bold border"
+                    className="px-1.5 py-0.5 rounded-md text-xs font-bold border"
                     style={{ 
                       backgroundColor: themeColors.background,
                       color: themeColors.primary,
@@ -992,8 +1020,11 @@ export default function AudioPlayer() {
             >
               <div ref={waveformMobileRef} className="w-full h-full" />
               {!isWaveReady && !isLoading && (
-                <div className="absolute inset-0 flex items-center justify-center text-sm font-medium" style={{ color: themeColors.primaryLight }}>
-                  Carregando visualização...
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div 
+                    className="animate-spin rounded-full h-8 w-8 border-b-2 border-t-2 border-t-transparent" 
+                    style={{ borderBottomColor: themeColors.primary }}
+                  />
                 </div>
               )}
               {isLoading && (
@@ -1131,6 +1162,7 @@ export default function AudioPlayer() {
               </svg>
             </button>
           </div>
+          </div>
         </div>
       </div>
 
@@ -1167,7 +1199,18 @@ export default function AudioPlayer() {
             <div className="text-white font-bold text-sm truncate leading-tight">
               {currentFile.title || currentFile.displayName}
             </div>
-            <div className="text-xs truncate font-medium mt-0.5" style={{ color: themeColors.primary }}>
+            <div className="text-xs truncate font-medium mt-0.5 flex items-center gap-2" style={{ color: themeColors.primary }}>
+              <div 
+                className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center"
+                style={{ 
+                  backgroundColor: `${themeColors.primary}25`,
+                  border: `1px solid ${themeColors.primary}40`
+                }}
+              >
+                <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                </svg>
+              </div>
               {currentFile.artist || '-'}
             </div>
           </div>

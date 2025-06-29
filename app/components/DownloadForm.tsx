@@ -41,6 +41,7 @@ interface VideoInfo {
 export default function DownloadForm({ minimized, setMinimized, showQueue, setShowQueue, setSettingsModalOpen }: DownloadFormProps) {
   const [url, setUrl] = useState('');
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
+  const [isLoadingVideoInfo, setIsLoadingVideoInfo] = useState(false);
   const [selectedTracks, setSelectedTracks] = useState<number[]>([]);
   const [format, setFormat] = useState('flac');
   const [enrichWithBeatport, setEnrichWithBeatport] = useState(true); // Sempre ativo por padrão
@@ -133,11 +134,17 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
     const fetchVideoInfo = async () => {
       console.log(`🔍 Buscando informações para URL: ${url}`);
       const isPlaylist = url.includes('list=');
+      
+      setIsLoadingVideoInfo(true);
+      setVideoInfo(null);
 
       try {
         if (isPlaylist) {
           const playlistId = getPlaylistId(url);
-          if (!playlistId) return;
+          if (!playlistId) {
+            setIsLoadingVideoInfo(false);
+            return;
+          }
 
           console.log(`📋 Chamando playlist-info para ID: ${playlistId}`);
           const endpoint = `/api/playlist-info?id=${encodeURIComponent(playlistId)}`;
@@ -151,7 +158,10 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
           console.log(`✅ Playlist info obtida: ${data.title}`);
         } else {
           const videoId = getVideoId(url);
-          if (!videoId) return;
+          if (!videoId) {
+            setIsLoadingVideoInfo(false);
+            return;
+          }
 
           console.log(`🎵 Chamando video-info para ID: ${videoId}`);
           const endpoint = `/api/video-info?id=${encodeURIComponent(videoId)}`;
@@ -168,6 +178,10 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         if (err.name !== 'AbortError') {
           console.error(`❌ Erro ao buscar info:`, err);
           setVideoInfo(null);
+        }
+      } finally {
+        if (!signal.aborted) {
+          setIsLoadingVideoInfo(false);
         }
       }
     };
@@ -255,10 +269,10 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
   };
 
   return (
-    <div className="w-full mx-auto transition-all duration-300">
+    <div className="w-full transition-all duration-300">
       {/* Status de download usando dados do contexto */}
       {currentDownload && (
-        <div className="mb-3">
+        <div className="w-full px-6 py-3">
           <DownloadStatusIndicator
             type={currentDownload.isPlaylist ? 'playlist' : 'individual'}
             status={currentDownload.status}
@@ -301,282 +315,367 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         </div>
       )}
 
-      {/* Container principal com transparência */}
+      {/* Container principal ocupando toda largura */}
       <div 
-        className="rounded-2xl backdrop-blur-xl border transition-all duration-300 overflow-hidden"
+        className="w-full backdrop-blur-xl border-y transition-all duration-300 overflow-hidden"
         style={{
-          background: 'linear-gradient(135deg, rgba(39, 39, 42, 0.7) 0%, rgba(24, 24, 27, 0.8) 100%)',
-          borderColor: 'rgba(255, 255, 255, 0.1)',
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
+          background: `linear-gradient(135deg, ${themeColors.background}aa 0%, ${themeColors.background}cc 100%)`,
+          borderColor: themeColors.border,
+          boxShadow: `0 8px 32px ${themeColors.primary}20`
         }}
       >
-        {/* Header com controles de minimizar */}
-        <div className="flex items-center justify-between p-3 md:p-2 sm:p-2 border-b border-white/10">
-          <div className="flex items-center gap-3 md:gap-2">
-            <Image
-              src="/legolas_thumb.png"
-              alt="Legolas"
-              width={24}
-              height={24}
-              className="object-contain w-6 h-6 md:w-5 md:h-5 sm:w-4 sm:h-4"
-            />
-            <h3 className="text-lg font-semibold bg-gradient-to-r from-white via-gray-200 to-emerald-200 bg-clip-text text-transparent md:text-base sm:text-sm">
-              Legolas
-            </h3>
-            {videoInfo && (
-              <span 
-                className="px-2 py-1 rounded-full text-xs font-medium"
-                style={{
-                  backgroundColor: themeColors.background,
-                  color: themeColors.primary
-                }}
-              >
-                {videoInfo.isPlaylist ? 'Playlist' : 'Vídeo'} detectado
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              className="rounded-full p-2 transition-all duration-200 hover:scale-105" 
-              onClick={() => setSettingsModalOpen(true)}
-              aria-label="Configurações"
-              type="button"
-              style={{
-                backgroundColor: themeColors.background,
-                color: themeColors.primary,
-                border: `1px solid ${themeColors.border}`
-              }}
+        <div className="w-full px-6 py-3">
+          <div 
+            className="rounded-xl backdrop-blur-xl border transition-all duration-300 overflow-hidden"
+            style={{
+              background: `linear-gradient(135deg, ${themeColors.background}66 0%, ${themeColors.background}88 100%)`,
+              borderColor: themeColors.border,
+              boxShadow: `0 8px 32px ${themeColors.primary}15`
+            }}
+          >
+            {/* Header com controles de minimizar */}
+            <div 
+              className="flex items-center justify-between p-3 md:p-2 sm:p-2 border-b"
+              style={{ borderColor: themeColors.border }}
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
-            <button
-              className="rounded-full p-2 transition-all duration-200 hover:scale-105" 
-              onClick={() => setShowPlaylistModal(true)}
-              aria-label="Importar playlist"
-              type="button"
-              style={{
-                backgroundColor: themeColors.background,
-                color: themeColors.primary,
-                border: `1px solid ${themeColors.border}`
-              }}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-            </button>
-            <button
-              className="rounded-full p-2 transition-all duration-200 hover:scale-105" 
-              onClick={() => setShowQueue(!showQueue)}
-              aria-label={showQueue ? 'Fechar fila' : 'Abrir fila'}
-              type="button"
-              style={{
-                backgroundColor: themeColors.background,
-                color: themeColors.primary,
-                border: `1px solid ${themeColors.border}`
-              }}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" />
-              </svg>
-            </button>
-            <button
-              className="rounded-full p-2 transition-all duration-200 hover:scale-105"
-              onClick={() => setMinimized(!minimized)}
-              aria-label={minimized ? 'Expandir' : 'Minimizar'}
-              type="button"
-              style={{
-                backgroundColor: themeColors.background,
-                color: themeColors.primary,
-                border: `1px solid ${themeColors.border}`
-              }}
-            >
-              {minimized ? (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              ) : (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                </svg>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Formulário principal */}
-        <div className={`transition-all duration-300 ${minimized ? 'h-0 overflow-hidden' : 'p-4 md:p-3 sm:p-2'}`}>
-          <form onSubmit={handleSubmit} className="space-y-4 md:space-y-3 sm:space-y-2">
-            {/* Linha principal - URL e controles */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-3 sm:gap-2">
-              {/* Campo URL */}
-              <div className="lg:col-span-6">
-                <label className="block text-sm font-medium mb-2" style={{ color: themeColors.primary }}>
-                  URL do YouTube
-                </label>
-                <input
-                  type="url"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  className="w-full h-11 md:h-10 sm:h-9 px-4 md:px-3 sm:px-2 py-2 bg-black/30 rounded-lg text-white transition-all duration-200 focus:outline-none backdrop-blur-sm"
-                  style={{
-                    border: `1px solid ${themeColors.border}`,
-                    boxShadow: url ? `0 0 0 1px ${themeColors.primaryLight}` : 'none'
-                  }}
-                  placeholder="https://www.youtube.com/watch?v=..."
-                  required
+              <div className="flex items-center gap-3 md:gap-2 flex-1">
+                <Image
+                  src="/legolas_thumb.png"
+                  alt="Legolas"
+                  width={24}
+                  height={24}
+                  className="object-contain w-6 h-6 md:w-5 md:h-5 sm:w-4 sm:h-4"
                 />
-              </div>
-
-              {/* Formato */}
-              <div className="lg:col-span-2">
-                <label className="block text-sm font-medium mb-2" style={{ color: themeColors.primary }}>
-                  Formato
-                </label>
-                <select
-                  value={format}
-                  onChange={(e) => setFormat(e.target.value)}
-                  className="w-full h-11 md:h-10 sm:h-9 px-4 md:px-3 sm:px-2 py-2 bg-black/30 rounded-lg text-white transition-all duration-200 focus:outline-none backdrop-blur-sm"
-                  style={{
-                    border: `1px solid ${themeColors.border}`
-                  }}
+                <h3 
+                  className="text-lg font-semibold md:text-base sm:text-sm"
+                  style={{ color: themeColors.primary }}
                 >
-                  <option value="flac">FLAC</option>
-                  <option value="mp3">MP3</option>
-                </select>
+                  Legolas
+                </h3>
+                
+                {/* Input e botão quando minimizado */}
+                {minimized && (
+                  <div className="flex items-center gap-3 flex-1 ml-6 mr-2">
+                    <input
+                      type="url"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      className="flex-1 h-8 px-3 py-1 rounded-lg text-white text-sm transition-all duration-200 focus:outline-none backdrop-blur-sm"
+                      style={{
+                        backgroundColor: themeColors.background,
+                        border: `1px solid ${themeColors.border}`,
+                        boxShadow: url ? `0 0 0 1px ${themeColors.primaryLight}` : 'none'
+                      }}
+                      placeholder="Cole a URL do YouTube aqui..."
+                    />
+                    <button
+                      type="submit"
+                      onClick={handleSubmit}
+                      disabled={downloadStatus.loading || !videoInfo || !url.trim()}
+                      className="h-8 px-4 flex items-center justify-center gap-1 text-white rounded-lg transition-all duration-200 shadow disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105 text-sm font-medium whitespace-nowrap min-w-[90px]"
+                      style={{
+                        backgroundColor: (downloadStatus.loading || !videoInfo || !url.trim()) ? 'rgb(82, 82, 91)' : themeColors.primary,
+                        border: `1px solid ${themeColors.border}`
+                      }}
+                    >
+                      {downloadStatus.loading ? (
+                        <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 714 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                      ) : isLoadingVideoInfo ? (
+                        <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 714 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                      ) : (
+                        <>
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-3 h-3">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
+                          </svg>
+                          <span className="hidden md:inline">Baixar</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+                
+                {/* Badge de vídeo detectado quando não minimizado */}
+                {!minimized && videoInfo && (
+                  <span 
+                    className="px-2 py-1 rounded-full text-xs font-medium"
+                    style={{
+                      backgroundColor: themeColors.background,
+                      color: themeColors.primary
+                    }}
+                  >
+                    {videoInfo.isPlaylist ? 'Playlist' : 'Vídeo'} detectado
+                  </span>
+                )}
               </div>
 
-              {/* Pasta */}
-              <div className="lg:col-span-2">
-                <label className="block text-sm font-medium mb-2" style={{ color: themeColors.primary }}>
-                  Pasta
-                </label>
+              <div className="flex items-center gap-2">
                 <button
+                  className="rounded-full p-2 transition-all duration-200 hover:scale-105" 
+                  onClick={() => setSettingsModalOpen(true)}
+                  aria-label="Configurações"
                   type="button"
-                  onClick={selectDownloadsFolder}
-                  className="w-full h-11 md:h-10 sm:h-9 flex items-center justify-center gap-2 rounded-lg transition-all duration-200 hover:scale-105 text-sm font-medium"
                   style={{
                     backgroundColor: themeColors.background,
                     color: themeColors.primary,
                     border: `1px solid ${themeColors.border}`
                   }}
                 >
-                  <FontAwesomeIcon icon={faFolderOpen} className="w-4 h-4" />
-                  <span className="hidden md:inline">Pasta</span>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
                 </button>
-              </div>
-
-              {/* Botão Download */}
-              <div className="lg:col-span-2">
-                <label className="block text-sm font-medium mb-2 text-transparent">
-                  Download
-                </label>
                 <button
-                  type="submit"
-                  disabled={downloadStatus.loading || !videoInfo}
-                  className="w-full h-11 md:h-10 sm:h-9 flex items-center justify-center gap-2 text-white rounded-lg transition-all duration-200 shadow disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105 text-sm font-medium"
+                  className="rounded-full p-2 transition-all duration-200 hover:scale-105" 
+                  onClick={() => setShowPlaylistModal(true)}
+                  aria-label="Importar playlist"
+                  type="button"
                   style={{
-                    backgroundColor: themeColors.primary,
+                    backgroundColor: themeColors.background,
+                    color: themeColors.primary,
                     border: `1px solid ${themeColors.border}`
                   }}
                 >
-                  {downloadStatus.loading ? (
-                    <>
-                      <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      <span className="hidden sm:inline">Baixando...</span>
-                    </>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </button>
+                <button
+                  className="rounded-full p-2 transition-all duration-200 hover:scale-105" 
+                  onClick={() => setShowQueue(!showQueue)}
+                  aria-label={showQueue ? 'Fechar fila' : 'Abrir fila'}
+                  type="button"
+                  style={{
+                    backgroundColor: themeColors.background,
+                    color: themeColors.primary,
+                    border: `1px solid ${themeColors.border}`
+                  }}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" />
+                  </svg>
+                </button>
+                <button
+                  className="rounded-full p-2 transition-all duration-200 hover:scale-105"
+                  onClick={() => setMinimized(!minimized)}
+                  aria-label={minimized ? 'Expandir' : 'Minimizar'}
+                  type="button"
+                  style={{
+                    backgroundColor: themeColors.background,
+                    color: themeColors.primary,
+                    border: `1px solid ${themeColors.border}`
+                  }}
+                >
+                  {minimized ? (
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
                   ) : (
-                    <>
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
-                      </svg>
-                      <span className="hidden sm:inline">Baixar</span>
-                    </>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                    </svg>
                   )}
                 </button>
               </div>
             </div>
 
-            {/* Toggle Beatport */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={enrichWithBeatport}
-                    onChange={(e) => setEnrichWithBeatport(e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div 
-                    className="w-11 h-6 rounded-full transition-all relative"
-                    style={{
-                      backgroundColor: enrichWithBeatport ? themeColors.primary : 'rgb(63, 63, 70)',
-                      border: `1px solid ${enrichWithBeatport ? themeColors.border : 'rgb(82, 82, 91)'}`
-                    }}
-                  >
-                    <div 
-                      className="w-5 h-5 bg-white rounded-full transition-all absolute top-0.5 left-0.5 shadow-md"
-                      style={{
-                        transform: enrichWithBeatport ? 'translateX(20px)' : 'translateX(0px)'
-                      }}
-                    ></div>
-                  </div>
-                  <span className="ml-3 text-sm font-medium" style={{ color: themeColors.primary }}>
-                    Enriquecer com dados do Beatport
+            {/* Indicador de vídeo detectado quando minimizado */}
+            {minimized && videoInfo && (
+              <div 
+                className="px-3 py-2 border-t"
+                style={{ borderColor: themeColors.border }}
+              >
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: themeColors.primary }}></div>
+                  <span className="text-xs" style={{ color: themeColors.primary }}>
+                    {videoInfo.isPlaylist ? `Playlist detectada (${videoInfo.videos?.length} vídeos)` : 'Vídeo detectado'}
                   </span>
-                </label>
+                </div>
               </div>
-            </div>
-          </form>
-        </div>
-      </div>
+            )}
 
-      {/* Preview do vídeo/playlist */}
-      {videoInfo && !minimized && (
-        <div className="mt-2 rounded-xl border border-white/10 overflow-hidden backdrop-blur-sm"
-          style={{
-            background: 'linear-gradient(135deg, rgba(39, 39, 42, 0.6) 0%, rgba(24, 24, 27, 0.7) 100%)'
-          }}
-        >
-          <div className="p-3 md:p-2 sm:p-2">
-            <div className="flex items-start gap-4 md:gap-3 sm:gap-2">
-              {videoInfo.thumbnail && (
-                <Image
-                  src={videoInfo.thumbnail}
-                  alt={videoInfo.title}
-                  width={120}
-                  height={90}
-                  className="rounded-lg object-cover flex-shrink-0 w-24 h-18 md:w-20 md:h-15 sm:w-16 sm:h-12"
-                />
-              )}
-              <div className="flex-1 min-w-0">
-                <h4 className="font-semibold text-white truncate text-sm md:text-xs">
-                  {videoInfo.title}
-                </h4>
-                <p className="text-zinc-400 text-sm md:text-xs mt-1">
-                  Duração: {videoInfo.duration}
-                  {videoInfo.isPlaylist && videoInfo.videos && (
-                    <span className="ml-2">• {videoInfo.videos.length} vídeos</span>
-                  )}
-                </p>
-              </div>
+            {/* Formulário principal */}
+            <div className={`transition-all duration-300 ${minimized ? 'h-0 overflow-hidden' : 'p-4 md:p-3 sm:p-2'}`}>
+              <form onSubmit={handleSubmit} className="space-y-4 md:space-y-3 sm:space-y-2">
+                {/* Linha principal - URL e controles */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-3 sm:gap-2">
+                  {/* Campo URL */}
+                  <div className="lg:col-span-6">
+                    <label className="block text-sm font-medium mb-2" style={{ color: themeColors.primary }}>
+                      URL do YouTube
+                    </label>
+                    <input
+                      type="url"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      className="w-full h-11 md:h-10 sm:h-9 px-4 md:px-3 sm:px-2 py-2 rounded-lg text-white transition-all duration-200 focus:outline-none backdrop-blur-sm"
+                      style={{
+                        backgroundColor: themeColors.background,
+                        border: `1px solid ${themeColors.border}`,
+                        boxShadow: url ? `0 0 0 1px ${themeColors.primaryLight}` : 'none'
+                      }}
+                      placeholder="https://www.youtube.com/watch?v=..."
+                      required
+                    />
+                  </div>
+
+                  {/* Formato */}
+                  <div className="lg:col-span-2">
+                    <label className="block text-sm font-medium mb-2" style={{ color: themeColors.primary }}>
+                      Formato
+                    </label>
+                    <select
+                      value={format}
+                      onChange={(e) => setFormat(e.target.value)}
+                      className="w-full h-11 md:h-10 sm:h-9 px-4 md:px-3 sm:px-2 py-2 rounded-lg text-white transition-all duration-200 focus:outline-none backdrop-blur-sm"
+                      style={{
+                        backgroundColor: themeColors.background,
+                        border: `1px solid ${themeColors.border}`
+                      }}
+                    >
+                      <option value="flac">FLAC</option>
+                      <option value="mp3">MP3</option>
+                    </select>
+                  </div>
+
+                  {/* Pasta */}
+                  <div className="lg:col-span-2">
+                    <label className="block text-sm font-medium mb-2" style={{ color: themeColors.primary }}>
+                      Pasta
+                    </label>
+                    <button
+                      type="button"
+                      onClick={selectDownloadsFolder}
+                      className="w-full h-11 md:h-10 sm:h-9 flex items-center justify-center gap-2 rounded-lg transition-all duration-200 hover:scale-105 text-sm font-medium"
+                      style={{
+                        backgroundColor: themeColors.background,
+                        color: themeColors.primary,
+                        border: `1px solid ${themeColors.border}`
+                      }}
+                    >
+                      <FontAwesomeIcon icon={faFolderOpen} className="w-4 h-4" />
+                      <span className="hidden md:inline">Pasta</span>
+                    </button>
+                  </div>
+
+                  {/* Botão Download */}
+                  <div className="lg:col-span-2">
+                    <label className="block text-sm font-medium mb-2 text-transparent">
+                      Download
+                    </label>
+                    <button
+                      type="submit"
+                      disabled={downloadStatus.loading || !videoInfo}
+                      className="w-full h-11 md:h-10 sm:h-9 flex items-center justify-center gap-2 text-white rounded-lg transition-all duration-200 shadow disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105 text-sm font-medium"
+                      style={{
+                        backgroundColor: themeColors.primary,
+                        border: `1px solid ${themeColors.border}`
+                      }}
+                    >
+                      {downloadStatus.loading ? (
+                        <>
+                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 714 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          <span className="hidden sm:inline">Baixando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
+                          </svg>
+                          <span className="hidden sm:inline">Baixar</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Toggle Beatport */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={enrichWithBeatport}
+                        onChange={(e) => setEnrichWithBeatport(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div 
+                        className="w-11 h-6 rounded-full transition-all relative"
+                        style={{
+                          backgroundColor: enrichWithBeatport ? themeColors.primary : 'rgb(63, 63, 70)',
+                          border: `1px solid ${enrichWithBeatport ? themeColors.border : 'rgb(82, 82, 91)'}`
+                        }}
+                      >
+                        <div 
+                          className="w-5 h-5 bg-white rounded-full transition-all absolute top-0.5 left-0.5 shadow-md"
+                          style={{
+                            transform: enrichWithBeatport ? 'translateX(20px)' : 'translateX(0px)'
+                          }}
+                        ></div>
+                      </div>
+                      <span className="ml-3 text-sm font-medium" style={{ color: themeColors.primary }}>
+                        Enriquecer com dados do Beatport
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              </form>
             </div>
+
+            {/* Preview do vídeo/playlist */}
+            {videoInfo && !minimized && (
+              <div 
+                className="mt-2 rounded-lg border overflow-hidden backdrop-blur-sm"
+                style={{
+                  background: `linear-gradient(135deg, ${themeColors.background}44 0%, ${themeColors.background}66 100%)`,
+                  borderColor: themeColors.border
+                }}
+              >
+                <div className="p-3 md:p-2 sm:p-2">
+                  <div className="flex items-start gap-4 md:gap-3 sm:gap-2">
+                    {videoInfo.thumbnail && (
+                      <Image
+                        src={videoInfo.thumbnail}
+                        alt={videoInfo.title}
+                        width={120}
+                        height={90}
+                        className="rounded-lg object-cover flex-shrink-0 w-24 h-18 md:w-20 md:h-15 sm:w-16 sm:h-12"
+                      />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-semibold text-white truncate text-sm md:text-xs">
+                        {videoInfo.title}
+                      </h4>
+                      <p className="text-zinc-400 text-sm md:text-xs mt-1">
+                        Duração: {videoInfo.duration}
+                        {videoInfo.isPlaylist && videoInfo.videos && (
+                          <span className="ml-2">• {videoInfo.videos.length} vídeos</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Modal de Importar Playlist */}
+            <PlaylistTextModal
+              isOpen={showPlaylistModal}
+              onClose={() => setShowPlaylistModal(false)}
+              themeColors={themeColors}
+            />
           </div>
         </div>
-      )}
-
-      {/* Modal de Importar Playlist */}
-      <PlaylistTextModal
-        isOpen={showPlaylistModal}
-        onClose={() => setShowPlaylistModal(false)}
-        themeColors={themeColors}
-      />
+      </div>
     </div>
   );
 } 

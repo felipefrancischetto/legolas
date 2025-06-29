@@ -158,7 +158,7 @@ const FileRow = memo(({
         background: isPlaying ? 'rgba(59, 130, 246, 0.2)' : dominantColor,
         backdropFilter: 'blur(8px)',
         border: `1px solid ${dominantColor.replace('0.15', '0.3')}`,
-        borderRadius: '6px'
+        borderRadius: '8px'
       }}
       onClick={e => onContextMenu(e, file)}
     >
@@ -263,7 +263,8 @@ function DynamicFileItem({
   dominantColors,
   onUpdate,
   onEdit,
-  fetchFiles
+  fetchFiles,
+  isLoading
 }: { 
   file: FileInfo; 
   isPlaying: boolean; 
@@ -274,6 +275,7 @@ function DynamicFileItem({
   onUpdate: (fileName: string, status: string) => void;
   onEdit: (file: any) => void;
   fetchFiles: (force?: boolean) => void;
+  isLoading: boolean;
 }) {
   const [itemColor, setItemColor] = useState<{ rgb: string; rgba: (opacity: number) => string }>({
     rgb: '16, 185, 129',
@@ -337,6 +339,7 @@ function DynamicFileItem({
                   color={`rgb(${itemColor.rgb})`}
                   size="small"
                   isPlaying={true}
+                  isLoading={isLoading}
                 />
               ) : (
                 <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" style={{ color: `rgb(${itemColor.rgb})` }}>
@@ -794,12 +797,12 @@ export default function FileList() {
     const file = files.find(f => f.name === fileName);
     if (!file) {
       console.error(`Arquivo ${fileName} não encontrado na lista.`);
-      setMetadataStatus(prev => ({ ...prev, [fileName]: 'error' }));
+      setMetadataStatus({ ...metadataStatus, [fileName]: 'error' });
       return;
     }
 
     try {
-      setMetadataStatus((prev: any) => ({ ...prev, [fileName]: status }));
+      setMetadataStatus({ ...metadataStatus, [fileName]: status });
       const response = await fetch(`/api/enhanced-metadata`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -816,7 +819,7 @@ export default function FileList() {
       
     } catch (err: any) {
       console.error(`Erro ao atualizar metadados para ${fileName}:`, err.message);
-      setMetadataStatus((prev: any) => ({ ...prev, [fileName]: 'error' }));
+      setMetadataStatus({ ...metadataStatus, [fileName]: 'error' });
     }
   }
 
@@ -998,12 +1001,13 @@ export default function FileList() {
       if (result.metadata && result.metadata.catalogNumber) {
         setCatalogNumbers((prev: any) => ({ ...prev, [albumName]: result.metadata.catalogNumber }));
         // Atualizar título dos arquivos daquele álbum
-        setFiles((prevFiles: any[]) => prevFiles.map((f: any) => {
+        const updatedFiles = files.map((f: any) => {
           if (f.album === albumName && result.metadata.catalogNumber && f.title && !f.title.endsWith(`[${result.metadata.catalogNumber}]`)) {
             return { ...f, title: `${f.title} [${result.metadata.catalogNumber}]` };
           }
           return f;
-        }));
+        });
+        setFiles(updatedFiles);
       }
       setReleaseModal({ album: albumName, tracks: result.tracks, metadata: result.metadata, loading: false, error: null });
     } catch (err: any) {
@@ -1014,67 +1018,196 @@ export default function FileList() {
   if (loading) {
     return (
       <div className="flex flex-col h-full min-h-0">
-        <div className="flex items-center mb-6 gap-4 flex-shrink-0">
+        {/* Skeleton do header mais elegante */}
+        <div className="flex flex-col lg:flex-row lg:items-center gap-4 mb-6 md:mb-4 sm:mb-3 flex-shrink-0">
           <div className="flex-1 relative">
-            <div className="w-full h-12 rounded-xl bg-zinc-800/50 border border-zinc-700/50 animate-pulse"></div>
+            <div 
+              className="w-full h-11 md:h-10 sm:h-9 rounded-xl border animate-pulse relative overflow-hidden"
+              style={{
+                background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                borderColor: 'rgba(255, 255, 255, 0.1)',
+                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+              }}
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full animate-shimmer"></div>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="w-20 h-6 bg-zinc-700/50 rounded animate-pulse"></div>
-            <div className="w-32 h-10 bg-zinc-800/50 border border-zinc-700/50 rounded-lg animate-pulse"></div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 lg:gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-20 h-4 bg-zinc-600/40 rounded animate-pulse"></div>
+              <div 
+                className="w-32 h-11 md:h-10 sm:h-9 rounded-xl border animate-pulse relative overflow-hidden"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.5) 0%, rgba(39, 39, 42, 0.6) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.2)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                }}
+              >
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full animate-shimmer"></div>
+              </div>
+            </div>
+            <div 
+              className="w-28 h-8 rounded-lg animate-pulse relative overflow-hidden"
+              style={{
+                background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(5, 150, 105, 0.15) 100%)',
+                border: '1px solid rgba(16, 185, 129, 0.2)'
+              }}
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-emerald-400/10 to-transparent -translate-x-full animate-shimmer"></div>
+            </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto space-y-3">
-          {Array.from({ length: 6 }).map((_, index) => {
-            // Larguras fixas predefinidas para evitar hydration mismatch
-            const titleWidths = ['75%', '85%', '68%', '92%', '78%', '82%'];
-            const subtitleWidths = ['55%', '48%', '62%', '45%', '58%', '52%'];
+        {/* Skeleton dos cards muito mais realista */}
+        <div className="flex-1 overflow-y-auto space-y-1">
+          {Array.from({ length: 8 }).map((_, index) => {
+            // Variações realistas para diferentes elementos
+            const titleWidths = ['w-3/4', 'w-5/6', 'w-2/3', 'w-11/12', 'w-4/5', 'w-3/5', 'w-5/6', 'w-3/4'];
+            const artistWidths = ['w-1/2', 'w-2/5', 'w-3/5', 'w-2/3', 'w-1/3', 'w-1/2', 'w-2/5', 'w-3/5'];
+            const colors = [
+              'rgba(16, 185, 129, 0.15)', // emerald
+              'rgba(59, 130, 246, 0.15)', // blue  
+              'rgba(168, 85, 247, 0.15)', // purple
+              'rgba(236, 72, 153, 0.15)', // pink
+              'rgba(251, 146, 60, 0.15)', // orange
+              'rgba(34, 197, 94, 0.15)', // green
+              'rgba(239, 68, 68, 0.15)', // red
+              'rgba(14, 165, 233, 0.15)'  // sky
+            ];
+            const primaryColors = [
+              'rgb(16, 185, 129)', 'rgb(59, 130, 246)', 'rgb(168, 85, 247)', 'rgb(236, 72, 153)',
+              'rgb(251, 146, 60)', 'rgb(34, 197, 94)', 'rgb(239, 68, 68)', 'rgb(14, 165, 233)'
+            ];
+            
+            const cardColor = colors[index];
+            const primaryColor = primaryColors[index];
             
             return (
               <div
                 key={index}
-                className="backdrop-blur-md border border-emerald-500/20 rounded-xl p-4 animate-pulse"
+                className="backdrop-blur-md border rounded-lg p-2 transition-all duration-300 h-[50px] flex items-center animate-pulse relative overflow-hidden"
                 style={{
+                  borderColor: cardColor.replace('0.15', '0.25'),
                   background: `linear-gradient(135deg, 
-                    rgba(16, 185, 129, 0.08) 0%, 
-                    rgba(5, 150, 105, 0.12) 30%, 
-                    rgba(0, 0, 0, 0.6) 70%, 
-                    rgba(15, 23, 42, 0.7) 100%
+                    ${cardColor.replace('0.15', '0.03')} 0%, 
+                    ${cardColor.replace('0.15', '0.06')} 30%, 
+                    rgba(0, 0, 0, 0.4) 70%, 
+                    rgba(15, 23, 42, 0.5) 100%
                   )`,
-                  boxShadow: '0 4px 16px rgba(16, 185, 129, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                  boxShadow: `0 4px 16px ${cardColor.replace('0.15', '0.08')}, inset 0 1px 0 rgba(255, 255, 255, 0.05)`
                 }}
               >
-                <div className="flex items-center gap-6">
+                {/* Shimmer effect */}
+                <div 
+                  className="absolute inset-0 bg-gradient-to-r from-transparent to-transparent -translate-x-full animate-shimmer"
+                  style={{
+                    background: `linear-gradient(90deg, transparent, ${cardColor.replace('0.15', '0.1')}, transparent)`
+                  }}
+                ></div>
+                
+                <div className="flex items-center gap-3 w-full relative z-10">
+                  {/* Thumbnail skeleton mais realista */}
                   <div className="relative flex-shrink-0">
-                    <div className="w-16 h-16 bg-zinc-700/30 rounded-xl"></div>
+                    <div 
+                      className="w-9 h-9 rounded border-2 relative overflow-hidden"
+                      style={{
+                        background: `linear-gradient(135deg, ${primaryColor}20 0%, ${primaryColor}10 100%)`,
+                        borderColor: cardColor.replace('0.15', '0.3')
+                      }}
+                    >
+                      {/* Ícone musical simulado */}
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div 
+                          className="w-4 h-4 rounded-full opacity-40"
+                          style={{ backgroundColor: primaryColor }}
+                        ></div>
+                      </div>
+                      <div 
+                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full animate-shimmer"
+                        style={{ animationDelay: `${index * 0.1}s` }}
+                      ></div>
+                    </div>
                   </div>
                   
+                  {/* Conteúdo principal mais elaborado */}
                   <div className="flex-1 min-w-0">
                     <div 
-                      className="h-5 bg-zinc-700/30 rounded mb-2" 
-                      style={{ width: titleWidths[index] }}
-                    ></div>
-                    <div 
-                      className="h-4 bg-zinc-700/20 rounded mb-3" 
-                      style={{ width: subtitleWidths[index] }}
-                    ></div>
-                    
-                    <div className="flex flex-wrap gap-2 mt-3">
-                      <div className="h-7 w-16 bg-emerald-500/20 rounded-md"></div>
-                      <div className="h-7 w-12 bg-emerald-500/20 rounded-md"></div>
-                      <div className="h-7 w-20 bg-white/10 rounded-md"></div>
-                      <div className="h-7 w-14 bg-blue-500/20 rounded-md"></div>
+                      className={`h-3.5 rounded mb-1 relative overflow-hidden ${titleWidths[index]}`}
+                      style={{ backgroundColor: `${primaryColor}25` }}
+                    >
+                      <div 
+                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent -translate-x-full animate-shimmer"
+                        style={{ animationDelay: `${index * 0.15}s` }}
+                      ></div>
                     </div>
-                    
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      <div className="h-6 w-24 bg-white/10 rounded-md"></div>
-                      <div className="h-6 w-20 bg-white/15 rounded-md"></div>
+                    <div 
+                      className={`h-3 rounded relative overflow-hidden ${artistWidths[index]}`}
+                      style={{ backgroundColor: `${primaryColor}15` }}
+                    >
+                      <div 
+                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full animate-shimmer"
+                        style={{ animationDelay: `${index * 0.2}s` }}
+                      ></div>
                     </div>
                   </div>
 
-                  <button className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-zinc-700/20 rounded-full">
-                    <div className="w-5 h-5 bg-zinc-600/30 rounded"></div>
-                  </button>
+                  {/* Tags skeleton mais realistas */}
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {/* BPM tag */}
+                    <div 
+                      className="h-5 w-8 rounded relative overflow-hidden"
+                      style={{ 
+                        backgroundColor: `${primaryColor}25`,
+                        border: `1px solid ${primaryColor}30`
+                      }}
+                    >
+                      <div 
+                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent -translate-x-full animate-shimmer"
+                        style={{ animationDelay: `${index * 0.25}s` }}
+                      ></div>
+                    </div>
+                    
+                    {/* Key tag */}
+                    <div 
+                      className="h-5 w-10 rounded relative overflow-hidden"
+                      style={{ 
+                        backgroundColor: `${primaryColor}25`,
+                        border: `1px solid ${primaryColor}30`
+                      }}
+                    >
+                      <div 
+                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent -translate-x-full animate-shimmer"
+                        style={{ animationDelay: `${index * 0.3}s` }}
+                      ></div>
+                    </div>
+                    
+                    {/* Genre tag (ocasional) */}
+                    {index % 3 === 0 && (
+                      <div className="h-5 w-12 bg-white/15 border border-white/20 rounded relative overflow-hidden">
+                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full animate-shimmer"></div>
+                      </div>
+                    )}
+                    
+                    {/* Year tag (ocasional) */}
+                    {index % 4 === 0 && (
+                      <div className="h-5 w-8 bg-blue-500/20 border border-blue-400/30 rounded relative overflow-hidden">
+                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-blue-400/20 to-transparent -translate-x-full animate-shimmer"></div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Menu button skeleton */}
+                  <div className="flex-shrink-0">
+                    <div 
+                      className="w-6 h-6 rounded relative overflow-hidden"
+                      style={{ backgroundColor: `${primaryColor}20` }}
+                    >
+                      <div 
+                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent -translate-x-full animate-shimmer"
+                        style={{ animationDelay: `${index * 0.35}s` }}
+                      ></div>
+                    </div>
+                  </div>
                 </div>
               </div>
             );
@@ -1225,6 +1358,7 @@ export default function FileList() {
                               color="rgb(16, 185, 129)"
                               size="small"
                               isPlaying={true}
+                              isLoading={playerState.isLoading}
                             />
                           ) : (
                             <svg className="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
@@ -1318,6 +1452,7 @@ export default function FileList() {
                   onUpdate={updateMetadataForFile}
                   onEdit={setEditModalFile}
                   fetchFiles={fetchFiles}
+                  isLoading={playerState.isLoading}
                 />
               ))}
             </div>
@@ -1419,7 +1554,7 @@ function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div 
-        className="w-full max-w-2xl rounded-2xl border border-emerald-500/30 shadow-2xl relative animate-fade-in backdrop-blur-xl"
+        className="w-full max-w-2xl rounded-xl border border-emerald-500/30 shadow-2xl relative animate-fade-in backdrop-blur-xl"
         style={{
           background: `linear-gradient(135deg, 
             rgba(16, 185, 129, 0.1) 0%, 

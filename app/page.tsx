@@ -22,7 +22,7 @@ export default function Home() {
   const [beatportDownloaderModalOpen, setBeatportDownloaderModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const { playerOpen, playerMinimized } = useUI();
-  const [downloadFormMinimized, setDownloadFormMinimized] = useState(false);
+  const [downloadFormMinimized, setDownloadFormMinimized] = useState(true);
   const [showQueue, setShowQueue] = useState(false);
   
   console.log('🎵 [Page] playerOpen:', playerOpen);

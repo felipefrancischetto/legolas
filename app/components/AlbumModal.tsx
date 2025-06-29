@@ -72,7 +72,7 @@ export default function AlbumModal({ isOpen, onClose, albumData, themeColors }: 
       onClick={handleBackdropClick}
     >
       <div 
-        className="rounded-2xl backdrop-blur-xl max-w-5xl w-full shadow-2xl relative animate-fade-in border max-h-[90vh] overflow-y-auto custom-scroll"
+        className="rounded-xl backdrop-blur-xl max-w-5xl w-full shadow-2xl relative animate-fade-in border max-h-[90vh] overflow-y-auto custom-scroll"
         style={{
           background: 'linear-gradient(135deg, rgba(39, 39, 42, 0.7) 0%, rgba(24, 24, 27, 0.8) 100%)',
           borderColor: 'rgba(255, 255, 255, 0.1)',
@@ -120,7 +120,7 @@ export default function AlbumModal({ isOpen, onClose, albumData, themeColors }: 
             {/* Album Artwork */}
             <div className="flex-shrink-0 flex justify-center lg:justify-start">
               <div 
-                className="relative w-80 h-80 lg:w-96 lg:h-96 rounded-3xl overflow-hidden shadow-2xl border group sm:w-72 sm:h-72"
+                className="relative w-80 h-80 lg:w-96 lg:h-96 rounded-xl overflow-hidden shadow-2xl border group sm:w-72 sm:h-72"
                 style={{ borderColor: colors.border }}
               >
                 {albumData.artwork ? (
