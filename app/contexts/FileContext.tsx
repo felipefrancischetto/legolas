@@ -58,7 +58,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
   const [customDownloadsPath, setCustomDownloadsPath] = useState<string | null>(null);
 
   const fetchFiles = useCallback(async (force = false) => {
-    console.log('Buscando lista de arquivos...');
+    console.log('🔄 [FileContext] Buscando lista de arquivos... (force:', force, ')');
     setLoading(true);
     try {
       const response = await fetch('/api/files');
@@ -66,10 +66,19 @@ export function FileProvider({ children }: { children: ReactNode }) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const data = await response.json();
-      setFiles(data.files || []);
-      console.log(`Lista de arquivos atualizada: ${data.files?.length || 0} arquivos`);
+      
+      // Verificar se realmente houve mudanças para evitar updates desnecessários
+      setFiles(prevFiles => {
+        const newFiles = data.files || [];
+        if (JSON.stringify(prevFiles) === JSON.stringify(newFiles)) {
+          console.log('🔄 [FileContext] Lista não mudou, mantendo estado atual');
+          return prevFiles;
+        }
+        console.log(`🔄 [FileContext] Lista atualizada: ${newFiles.length} arquivos`);
+        return newFiles;
+      });
     } catch (error) {
-      console.error('Erro ao carregar arquivos:', error);
+      console.error('❌ [FileContext] Erro ao carregar arquivos:', error);
     } finally {
       setLoading(false);
     }

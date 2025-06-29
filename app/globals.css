@@ -25,108 +25,131 @@ body {
   min-height: 100vh;
 }
 
-/* Transparência global para componentes */
+/* Transparência global para componentes - Melhorada */
 .glass-effect {
   background: rgba(39, 39, 42, 0.7);
   backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
 .glass-card {
   background: rgba(24, 24, 27, 0.8);
   backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
 }
 
-/* Melhorias para dispositivos móveis e responsividade */
+/* Melhorias para dispositivos móveis e responsividade - Refinadas */
 @media (max-width: 640px) {
   .mobile-padding {
-    @apply px-2;
+    @apply px-3;
   }
   
   .mobile-margin {
-    @apply mx-2;
+    @apply mx-3;
   }
   
   .mobile-text {
-    @apply text-xs;
+    @apply text-sm;
   }
 
   .mobile-form {
-    @apply flex-col gap-2;
+    @apply flex-col gap-3;
   }
 
   .mobile-input {
-    @apply w-full text-sm h-9;
+    @apply w-full text-sm h-10 px-3;
   }
 
   .mobile-button {
-    @apply w-full text-sm h-9;
+    @apply w-full text-sm h-10 px-4;
   }
 
   .mobile-card {
-    @apply p-2 text-sm;
+    @apply p-3 text-sm;
   }
 
   .mobile-player {
-    @apply flex-col items-stretch gap-2 px-2 py-1;
+    @apply flex-col items-stretch gap-3 px-3 py-2;
   }
 }
 
 @media (max-width: 768px) {
   .tablet-padding {
-    @apply px-3;
+    @apply px-4;
   }
   
   .tablet-text {
-    @apply text-sm;
+    @apply text-base;
   }
 
   .tablet-form {
-    @apply flex-wrap gap-2;
+    @apply flex-wrap gap-3;
   }
 }
 
 @media (max-width: 1024px) {
   .laptop-padding {
-    @apply px-4;
+    @apply px-6;
   }
 }
 
-/* Utilitários customizados para responsividade */
+/* Utilitários customizados para responsividade - Aprimorados */
 .responsive-container {
-  @apply w-full max-w-7xl mx-auto px-4 sm:px-2 md:px-3 lg:px-4;
+  @apply w-full max-w-7xl mx-auto px-6 md:px-4 sm:px-3;
 }
 
 .responsive-form {
-  @apply flex flex-row gap-1 items-stretch sm:flex-col sm:gap-2 md:flex-row md:gap-1;
+  @apply grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-3 sm:gap-2;
 }
 
 .responsive-input {
-  @apply w-full h-11 px-3 py-2 text-white sm:h-9 sm:text-sm;
+  @apply w-full h-11 md:h-10 sm:h-9 px-4 md:px-3 sm:px-2 py-2 text-white rounded-lg transition-all;
 }
 
 .responsive-button {
-  @apply h-11 px-4 flex items-center justify-center gap-2 text-white transition-all sm:h-9 sm:text-sm sm:w-full;
+  @apply h-11 md:h-10 sm:h-9 px-4 md:px-3 sm:px-2 flex items-center justify-center gap-2 text-white transition-all rounded-lg font-medium;
 }
 
 .responsive-card {
-  @apply p-3 rounded-lg sm:p-2 sm:text-sm;
+  @apply p-6 md:p-4 sm:p-3 rounded-xl backdrop-blur-xl;
 }
 
 .responsive-player {
-  @apply flex items-center px-4 py-2 sm:flex-col sm:items-stretch sm:gap-2 sm:px-2 sm:py-1;
+  @apply flex items-center px-6 py-4 md:px-4 md:py-3 sm:flex-col sm:items-stretch sm:gap-3 sm:px-3 sm:py-2;
 }
 
 .responsive-table-header {
-  @apply flex w-full px-2 py-2 text-sm sm:px-1 sm:py-1 sm:text-xs;
+  @apply flex w-full px-3 py-3 text-sm md:px-2 md:py-2 sm:px-1 sm:py-1 sm:text-xs font-medium;
 }
 
 .responsive-table-cell {
-  @apply flex items-center h-12 px-2 sm:h-8 sm:px-1;
+  @apply flex items-center h-14 md:h-12 sm:h-10 px-3 md:px-2 sm:px-1;
 }
 
-/* Animações responsivas */
+/* Sistema de espaçamento consistente */
+.spacing-xs { @apply gap-1 p-1; }
+.spacing-sm { @apply gap-2 p-2; }
+.spacing-md { @apply gap-3 p-3; }
+.spacing-lg { @apply gap-4 p-4; }
+.spacing-xl { @apply gap-6 p-6; }
+
+/* Responsive spacing */
+.spacing-responsive {
+  @apply gap-6 p-6 md:gap-4 md:p-4 sm:gap-3 sm:p-3;
+}
+
+/* Typography responsiva */
+.text-responsive-xs { @apply text-xs md:text-[11px] sm:text-[10px]; }
+.text-responsive-sm { @apply text-sm md:text-xs sm:text-[11px]; }
+.text-responsive-base { @apply text-base md:text-sm sm:text-xs; }
+.text-responsive-lg { @apply text-lg md:text-base sm:text-sm; }
+.text-responsive-xl { @apply text-xl md:text-lg sm:text-base; }
+.text-responsive-2xl { @apply text-2xl md:text-xl sm:text-lg; }
+.text-responsive-3xl { @apply text-3xl md:text-2xl sm:text-xl; }
+
+/* Animações responsivas - Melhoradas */
 @keyframes slide-up {
   from {
     opacity: 0;
@@ -158,6 +181,17 @@ body {
   }
 }
 
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .animate-slide-up {
   animation: slide-up 0.3s ease-out;
 }
@@ -170,88 +204,11 @@ body {
   animation: fade-in 0.3s ease-out;
 }
 
-@layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
-  }
-
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
-  }
+.animate-scale-in {
+  animation: scale-in 0.3s ease-out;
 }
 
-@layer base {
-  * {
-    @apply border-border;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
-}
-
-@layer utilities {
-  .animate-pulse-slow {
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-
-  .animate-slide-in-right {
-    animation: slideInFromRight 0.3s ease-out;
-  }
-
-  .animate-pulse-glow {
-    animation: pulseGlow 2s infinite;
-  }
-
-  .animate-progress-pulse {
-    animation: progressPulse 1.5s infinite;
-  }
-
-  .animate-bounce-in {
-    animation: bounceIn 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
-  }
-
-  .animate-status-change {
-    animation: statusChange 0.3s ease-out;
-  }
-}
-
+/* Animações específicas melhoradas */
 @keyframes slideInFromRight {
   from {
     transform: translateX(100%);
@@ -373,9 +330,9 @@ body {
   }
 }
 
-/* WaveSurfer customizations - Paleta azul/verde/ciano */
+/* WaveSurfer customizations - Melhoradas */
 wave {
-  border-radius: 8px;
+  border-radius: 12px;
   overflow: hidden;
   background: transparent !important;
   border: none !important;
@@ -383,29 +340,29 @@ wave {
 }
 
 wave canvas {
-  border-radius: 8px;
+  border-radius: 12px;
 }
 
 /* Mobile WaveSurfer improvements */
 @media (max-width: 640px) {
   wave {
-    height: 64px !important;
-    border-radius: 12px;
+    height: 80px !important;
+    border-radius: 16px;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
   }
   
   wave canvas {
-    border-radius: 12px;
+    border-radius: 16px;
   }
 }
 
 /* Desktop WaveSurfer */
 @media (min-width: 641px) {
   wave {
-    height: 96px !important;
-    border-radius: 8px;
+    height: 120px !important;
+    border-radius: 12px;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
@@ -429,5 +386,178 @@ wave canvas {
   }
   100% {
     background-position: 200% 0;
+  }
+}
+
+/* Custom Audio Player Slider - Melhorado */
+.audio-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+  border-radius: 6px;
+  height: 6px;
+}
+
+.audio-slider::-webkit-slider-track {
+  background: rgb(63, 63, 70);
+  height: 6px;
+  border-radius: 6px;
+}
+
+.audio-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  width: 16px;
+  border-radius: 50%;
+  background: currentColor;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s ease;
+}
+
+.audio-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Focus states melhorados */
+.focus-ring:focus {
+  outline: none;
+  ring: 2px solid currentColor;
+  ring-offset: 2px;
+}
+
+/* Hover effects refinados */
+.hover-scale:hover {
+  transform: scale(1.05);
+  transition: transform 0.2s ease;
+}
+
+.hover-glow:hover {
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.4);
+  transition: box-shadow 0.3s ease;
+}
+
+/* Estados de loading melhorados */
+.loading-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.loading-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Componentes específicos */
+.player-button {
+  transition: all 0.2s ease;
+}
+
+.player-button:hover {
+  transform: scale(1.1);
+  filter: brightness(1.2);
+}
+
+.download-card {
+  background: linear-gradient(135deg, rgba(39, 39, 42, 0.7) 0%, rgba(24, 24, 27, 0.8) 100%);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  transition: all 0.3s ease;
+}
+
+.download-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+/* Form elements melhorados */
+.form-input {
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.form-input:focus {
+  border-color: currentColor;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.form-button {
+  background: linear-gradient(135deg, currentColor 0%, rgba(0, 0, 0, 0.1) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.form-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.form-button:active {
+  transform: translateY(0);
+}
+
+/* Utilities para spacing e layout */
+.space-y-responsive > * + * {
+  margin-top: 1.5rem;
+}
+
+@media (max-width: 768px) {
+  .space-y-responsive > * + * {
+    margin-top: 1rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .space-y-responsive > * + * {
+    margin-top: 0.75rem;
+  }
+}
+
+/* Grid system responsivo */
+.grid-responsive {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+@media (max-width: 768px) {
+  .grid-responsive {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+}
+
+/* Containers com max-width responsivo */
+.container-responsive {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+@media (max-width: 1024px) {
+  .container-responsive {
+    padding: 0 1.5rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .container-responsive {
+    padding: 0 1rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .container-responsive {
+    padding: 0 0.75rem;
   }
 }

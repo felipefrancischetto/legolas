@@ -257,7 +257,10 @@ function DynamicFileItem({
   isPlayerPlaying, 
   onPlay, 
   extractDominantColor, 
-  dominantColors 
+  dominantColors,
+  onUpdate,
+  onEdit,
+  fetchFiles
 }: { 
   file: FileInfo; 
   isPlaying: boolean; 
@@ -265,6 +268,9 @@ function DynamicFileItem({
   onPlay: () => void;
   extractDominantColor: (fileName: string, imageUrl: string) => Promise<{ rgb: string; rgba: (opacity: number) => string }>;
   dominantColors: { [fileName: string]: { rgb: string; rgba: (opacity: number) => string } };
+  onUpdate: (fileName: string, status: string) => void;
+  onEdit: (file: any) => void;
+  fetchFiles: (force?: boolean) => void;
 }) {
   const [itemColor, setItemColor] = useState<{ rgb: string; rgba: (opacity: number) => string }>({
     rgb: '16, 185, 129',
@@ -401,9 +407,9 @@ function DynamicFileItem({
         <div className="flex-shrink-0">
           <ActionMenu 
             file={file} 
-            onUpdate={(fileName: string, status: string) => {}} 
-            onEdit={(file: any) => {}} 
-            fetchFiles={(force?: boolean) => {}} 
+            onUpdate={onUpdate} 
+            onEdit={onEdit} 
+            fetchFiles={fetchFiles} 
           />
         </div>
       </div>
@@ -447,7 +453,7 @@ export default function FileList() {
     setColWidths,
   } = useUI();
 
-  const { play, playerState } = usePlayer();
+  const { play, resume, playerState } = usePlayer();
   const { queue, updateQueueItem } = useDownload();
   const resizingCol = useRef<number | null>(null);
   const startX = useRef<number>(0);
@@ -629,6 +635,7 @@ export default function FileList() {
 
   const [releaseModal, setReleaseModal] = useState<{album: string, tracks: any[], metadata: any, loading: boolean, error: string | null} | null>(null);
   const [dominantColors, setDominantColors] = useState<{ [fileName: string]: { rgb: string, rgba: (opacity: number) => string } }>({});
+  const [mobileActionMenus, setMobileActionMenus] = useState<{ [fileName: string]: boolean }>({});
 
   // Função para extrair cor dominante
   const extractDominantColor = useCallback(async (fileName: string, imageUrl: string) => {
@@ -889,10 +896,32 @@ export default function FileList() {
   // Handlers memoizados
   const handlePlay = useCallback((file: FileInfo) => {
     console.log('🎵 [FileList] handlePlay chamado para:', file.displayName);
-    play(file);
+    
+    // Proteção contra chamadas duplicadas rapidamente (usando timestamp)
+    const now = Date.now();
+    const lastPlayTime = parseInt(localStorage.getItem('lastPlayTime') || '0');
+    if (lastPlayedFile.current === file.name && (now - lastPlayTime) < 500) {
+      console.log('🎵 [FileList] Ignorando chamada duplicada rapidamente');
+      return;
+    }
+    localStorage.setItem('lastPlayTime', now.toString());
+    
+    // Se é a mesma música já carregada, apenas resumir sem zerar progresso
+    if (playerState.currentFile?.name === file.name) {
+      console.log('🎵 [FileList] Mesma música - apenas resumindo');
+      if (!playerState.isPlaying) {
+        // Usar resume() ao invés de play() para não zerar o progresso
+        resume();
+      }
+    } else {
+      console.log('🎵 [FileList] Nova música - carregando do início');
+      play(file); // Para nova música, usar play normal
+      lastPlayedFile.current = file.name;
+    }
+    
     setPlayerOpen(true);
     console.log('🎵 [FileList] setPlayerOpen(true) chamado');
-  }, [play, setPlayerOpen]);
+  }, [play, resume, setPlayerOpen, playerState.currentFile, playerState.isPlaying]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, file: FileInfo) => {
     if (e.button === 0) {
@@ -1070,36 +1099,79 @@ export default function FileList() {
 
       return (
       <div className="flex flex-col h-full min-h-0">
-        <div className="flex items-center mb-4 gap-3 flex-shrink-0">
+        {/* Controles superiores com melhor responsividade */}
+        <div className="flex flex-col lg:flex-row lg:items-center gap-4 mb-6 md:mb-4 sm:mb-3 flex-shrink-0">
+          {/* Campo de busca */}
           <div className="flex-1 relative">
             <input
               type="text"
               placeholder="Buscar por título ou artista..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="w-full pl-4 pr-10 py-2.5 rounded-lg bg-zinc-800/50 border border-zinc-700/50 text-white placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-emerald-500/50 focus:border-emerald-500/50 backdrop-blur-sm transition-all duration-200 text-sm"
+              className="w-full h-11 md:h-10 sm:h-9 pl-4 pr-12 py-2.5 rounded-xl bg-black/30 backdrop-blur-xl border border-white/10 text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm font-medium"
+              style={{
+                background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+              }}
             />
-            <svg className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="absolute right-4 top-1/2 transform -translate-y-1/2 w-5 h-5 md:w-4 md:h-4 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
           </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-zinc-400 font-medium whitespace-nowrap">Agrupar por:</label>
-            <select
-              value={groupByField}
-              onChange={e => setGroupByField(e.target.value)}
-              className="px-3 py-2 rounded-md bg-zinc-800/50 border border-zinc-700/50 text-white text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500/50 backdrop-blur-sm min-w-[100px]"
-            >
-              {groupableFields.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
+          
+          {/* Controles laterais */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 lg:gap-4">
+            {/* Seletor de agrupamento */}
+            <div className="flex items-center gap-3 min-w-0">
+              <label className="text-sm md:text-xs text-zinc-300 font-medium whitespace-nowrap">
+                Agrupar por:
+              </label>
+              <select
+                value={groupByField}
+                onChange={e => setGroupByField(e.target.value)}
+                className="flex-1 sm:flex-none h-11 md:h-10 sm:h-9 px-4 md:px-3 py-2 rounded-xl backdrop-blur-xl border text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all duration-200 min-w-[120px] appearance-none cursor-pointer"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.5) 0%, rgba(39, 39, 42, 0.6) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.2)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)',
+                  backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='rgba(255,255,255,0.6)' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
+                  backgroundPosition: 'right 12px center',
+                  backgroundRepeat: 'no-repeat',
+                  backgroundSize: '16px',
+                  paddingRight: '40px'
+                }}
+              >
+                {groupableFields.map(opt => (
+                  <option 
+                    key={opt.value} 
+                    value={opt.value}
+                    className="bg-zinc-900 text-white py-2"
+                    style={{
+                      backgroundColor: '#18181b',
+                      color: '#ffffff'
+                    }}
+                  >
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            
+                         {/* Estatísticas da biblioteca */}
+             <div className="flex items-center gap-2 text-xs text-zinc-400 bg-black/20 px-3 py-2 rounded-lg backdrop-blur-sm border border-white/5">
+               <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+               </svg>
+               <span className="font-medium">
+                 {Object.values(groupedFiles).flat().length} {Object.values(groupedFiles).flat().length === 1 ? 'música' : 'músicas'}
+               </span>
+             </div>
           </div>
         </div>
 
       {/* Lista de arquivos - Layout mobile (cards) */}
       <div className="block sm:hidden flex-1 overflow-y-auto space-y-3">
-        {(groupedFiles[groupByField] || []).length === 0 ? (
+        {Object.keys(groupedFiles).length === 0 || Object.values(groupedFiles).every(group => group.length === 0) ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
               <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1110,86 +1182,104 @@ export default function FileList() {
             <p className="text-zinc-500 text-sm mt-1">Baixe algumas músicas para começar</p>
           </div>
         ) : (
-          groupedFiles[groupByField]?.map((file, index) => (
-            <div
-              key={file.name}
-              className={`glass-card backdrop-blur-sm border border-emerald-500/20 hover:border-emerald-500/40 rounded-lg p-3 transition-all duration-300 cursor-pointer hover:shadow-lg hover:shadow-emerald-500/20 ${
-                playerState.currentFile?.name === file.name ? 'border-emerald-500/60 bg-emerald-500/10' : ''
-              }`}
-              onClick={() => handlePlay(file)}
-              style={{
-                background: `linear-gradient(135deg, 
-                  rgba(16, 185, 129, 0.05) 0%, 
-                  rgba(5, 150, 105, 0.08) 40%, 
-                  rgba(16, 185, 129, 0.03) 100%
-                )`,
-                boxShadow: '0 4px 12px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
-              }}
-            >
-              <div className="flex items-center gap-3">
-                <div className="relative flex-shrink-0">
-                  <Image
-                    src={getThumbnailUrl(file.name)}
-                    alt={file.title || file.displayName}
-                    width={48}
-                    height={48}
-                    className="object-cover w-12 h-12 bg-zinc-800 rounded-lg border border-zinc-700/50"
-                  />
-                  {playerState.currentFile?.name === file.name && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-xl">
-                      {playerState.isPlaying ? (
-                        <svg className="w-6 h-6 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
-                          <rect x="7" y="6" width="3" height="12" rx="1" />
-                          <rect x="14" y="6" width="3" height="12" rx="1" />
-                        </svg>
-                      ) : (
-                        <svg className="w-6 h-6 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
-                          <polygon points="8,5 19,12 8,19" />
-                        </svg>
+          Object.entries(groupedFiles).map(([groupName, groupFiles]) => (
+            <div key={groupName} className="space-y-3">
+              {/* Cabeçalho do grupo (se houver agrupamento) */}
+              {groupByField && groupName !== '' && (
+                <div className="sticky top-0 z-10 bg-black/40 backdrop-blur-sm rounded-lg p-3 border border-white/10">
+                  <h3 className="text-lg font-semibold text-white">
+                    {groupableFields.find(f => f.value === groupByField)?.label}: {groupName}
+                  </h3>
+                  <p className="text-sm text-zinc-400">
+                    {groupFiles.length} {groupFiles.length === 1 ? 'música' : 'músicas'}
+                  </p>
+                </div>
+              )}
+              
+                            {/* Arquivos do grupo */}
+              {groupFiles.map((file, index) => (
+                <div
+                  key={file.name}
+                  className={`glass-card backdrop-blur-sm border border-emerald-500/20 hover:border-emerald-500/40 rounded-lg p-3 transition-all duration-300 cursor-pointer hover:shadow-lg hover:shadow-emerald-500/20 ${
+                    playerState.currentFile?.name === file.name ? 'border-emerald-500/60 bg-emerald-500/10' : ''
+                  }`}
+                  onClick={() => handlePlay(file)}
+                  style={{
+                    background: `linear-gradient(135deg, 
+                      rgba(16, 185, 129, 0.05) 0%, 
+                      rgba(5, 150, 105, 0.08) 40%, 
+                      rgba(16, 185, 129, 0.03) 100%
+                    )`,
+                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="relative flex-shrink-0">
+                      <Image
+                        src={getThumbnailUrl(file.name)}
+                        alt={file.title || file.displayName}
+                        width={48}
+                        height={48}
+                        className="object-cover w-12 h-12 bg-zinc-800 rounded-lg border border-zinc-700/50"
+                      />
+                      {playerState.currentFile?.name === file.name && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-xl">
+                          {playerState.isPlaying ? (
+                            <svg className="w-6 h-6 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
+                              <rect x="7" y="6" width="3" height="12" rx="1" />
+                              <rect x="14" y="6" width="3" height="12" rx="1" />
+                            </svg>
+                          ) : (
+                            <svg className="w-6 h-6 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
+                              <polygon points="8,5 19,12 8,19" />
+                            </svg>
+                          )}
+                        </div>
                       )}
                     </div>
-                  )}
-                </div>
-                
-                <div className="flex-1 min-w-0">
-                  <div className="text-white font-bold text-sm leading-tight truncate">
-                    {file.title || file.displayName}
-                  </div>
-                  <div className="text-emerald-400 text-xs truncate font-medium">
-                    {file.artist || 'Artista desconhecido'}
-                  </div>
-                  
-                  <div className="flex flex-wrap gap-1.5 mt-1.5">
-                    {file.bpm && (
-                      <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-xs font-medium">
-                        {file.bpm} BPM
-                      </span>
-                    )}
-                    {file.key && (
-                      <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-xs font-medium">
-                        {file.key}
-                      </span>
-                    )}
-                    {file.genre && (
-                      <span className="bg-zinc-700/50 text-zinc-300 px-2 py-0.5 rounded text-xs">
-                        {file.genre}
-                      </span>
-                    )}
-                  </div>
-                  
-                  {file.label && (
-                    <div className="text-zinc-400 text-xs mt-1 truncate">
-                      {file.label}
+                    
+                    <div className="flex-1 min-w-0">
+                      <div className="text-white font-bold text-sm leading-tight truncate">
+                        {file.title || file.displayName}
+                      </div>
+                      <div className="text-emerald-400 text-xs truncate font-medium">
+                        {file.artist || 'Artista desconhecido'}
+                      </div>
+                      
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        {file.bpm && (
+                          <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-xs font-medium">
+                            {file.bpm} BPM
+                          </span>
+                        )}
+                        {file.key && (
+                          <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-xs font-medium">
+                            {file.key}
+                          </span>
+                        )}
+                        {file.genre && (
+                          <span className="bg-zinc-700/50 text-zinc-300 px-2 py-0.5 rounded text-xs">
+                            {file.genre}
+                          </span>
+                        )}
+                      </div>
+                      
+                      {file.label && (
+                        <div className="text-zinc-400 text-xs mt-1 truncate">
+                          {file.label}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
 
-                <button className="flex-shrink-0 w-10 h-10 flex items-center justify-center text-zinc-400 hover:text-emerald-400 transition-colors">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-                  </svg>
-                </button>
-              </div>
+                    <MobileActionMenu 
+                      file={file}
+                      onUpdate={updateMetadataForFile}
+                      onEdit={setEditModalFile}
+                      fetchFiles={fetchFiles}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           ))
         )}
@@ -1197,7 +1287,7 @@ export default function FileList() {
 
       {/* Lista de arquivos - Layout desktop (cards como mobile) */}
       <div className="hidden sm:block flex-1 overflow-y-auto space-y-3">
-        {groupedFiles[groupByField]?.length === 0 ? (
+        {Object.keys(groupedFiles).length === 0 || Object.values(groupedFiles).every(group => group.length === 0) ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
               <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1208,16 +1298,36 @@ export default function FileList() {
             <p className="text-zinc-500 text-sm mt-1">Baixe algumas músicas para começar</p>
           </div>
         ) : (
-          groupedFiles[groupByField]?.map((file, index) => (
-            <DynamicFileItem 
-              key={file.name}
-              file={file}
-              isPlaying={playerState.currentFile?.name === file.name}
-              isPlayerPlaying={playerState.isPlaying}
-              onPlay={() => handlePlay(file)}
-              extractDominantColor={extractDominantColor}
-              dominantColors={dominantColors}
-            />
+          Object.entries(groupedFiles).map(([groupName, groupFiles]) => (
+            <div key={groupName} className="space-y-3">
+              {/* Cabeçalho do grupo (se houver agrupamento) */}
+              {groupByField && groupName !== '' && (
+                <div className="sticky top-0 z-10 bg-black/40 backdrop-blur-sm rounded-lg p-3 border border-white/10">
+                  <h3 className="text-lg font-semibold text-white">
+                    {groupableFields.find(f => f.value === groupByField)?.label}: {groupName}
+                  </h3>
+                  <p className="text-sm text-zinc-400">
+                    {groupFiles.length} {groupFiles.length === 1 ? 'música' : 'músicas'}
+                  </p>
+                </div>
+              )}
+              
+              {/* Arquivos do grupo */}
+              {groupFiles.map((file, index) => (
+                <DynamicFileItem 
+                  key={file.name}
+                  file={file}
+                  isPlaying={playerState.currentFile?.name === file.name}
+                  isPlayerPlaying={playerState.isPlaying}
+                  onPlay={() => handlePlay(file)}
+                  extractDominantColor={extractDominantColor}
+                  dominantColors={dominantColors}
+                  onUpdate={updateMetadataForFile}
+                  onEdit={setEditModalFile}
+                  fetchFiles={fetchFiles}
+                />
+              ))}
+            </div>
           ))
         )}
       </div>
@@ -1314,33 +1424,362 @@ function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
-      <div className="bg-zinc-900 rounded-lg p-6 w-full max-w-md shadow-lg relative animate-fade-in">
-        <button
-          onClick={onClose}
-          className="absolute top-2 right-2 text-gray-400 hover:text-white"
-        >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-        <h2 className="text-xl font-semibold text-white mb-4">Editar informações</h2>
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <input name="title" value={form.title} onChange={handleChange} placeholder="Título" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="artist" value={form.artist} onChange={handleChange} placeholder="Artista" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="duration" value={form.duration} onChange={handleChange} placeholder="Duração" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="bpm" value={form.bpm} onChange={handleChange} placeholder="BPM" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="key" value={form.key} onChange={handleChange} placeholder="Key" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="genre" value={form.genre} onChange={handleChange} placeholder="Gênero" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="album" value={form.album} onChange={handleChange} placeholder="Álbum" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="label" value={form.label} onChange={handleChange} placeholder="Label" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="releaseDate" value={form.releaseDate} onChange={handleChange} placeholder="Data de Lançamento (YYYY-MM-DD)" maxLength={10} className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          {dateError && <div className="text-red-400 text-xs">{dateError}</div>}
-          <button type="submit" disabled={saving} className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all font-medium shadow disabled:opacity-50 disabled:cursor-not-allowed">
-            {saving ? 'Salvando...' : 'Salvar'}
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div 
+        className="w-full max-w-2xl rounded-2xl border border-emerald-500/30 shadow-2xl relative animate-fade-in backdrop-blur-xl"
+        style={{
+          background: `linear-gradient(135deg, 
+            rgba(16, 185, 129, 0.1) 0%, 
+            rgba(5, 150, 105, 0.15) 30%, 
+            rgba(0, 0, 0, 0.8) 70%, 
+            rgba(15, 23, 42, 0.9) 100%
+          )`,
+          boxShadow: '0 25px 50px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+        }}
+      >
+        {/* Header compacto */}
+        <div className="relative p-4 pb-3 border-b border-emerald-500/20">
+          <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-emerald-400/50 to-transparent"></div>
+          
+          <button
+            onClick={onClose}
+            className="absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded-lg text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition-all duration-200"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
+          
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
+              <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-white">Editar Metadados</h2>
+              <p className="text-xs text-emerald-300/80">Personalize as informações da música</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Form otimizado horizontalmente */}
+        <form onSubmit={handleSubmit} className="p-4 space-y-3">
+          {/* Grid principal com 3 colunas em desktop */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            {/* Título - ocupa 2 colunas */}
+            <div className="lg:col-span-2 space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Título</label>
+              <input 
+                name="title" 
+                value={form.title} 
+                onChange={handleChange} 
+                placeholder="Nome da música"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            {/* Duração */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Duração</label>
+              <input 
+                name="duration" 
+                value={form.duration} 
+                onChange={handleChange} 
+                placeholder="0:00"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Segunda linha - Artista e BPM */}
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+            {/* Artista - ocupa 3 colunas */}
+            <div className="lg:col-span-3 space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Artista</label>
+              <input 
+                name="artist" 
+                value={form.artist} 
+                onChange={handleChange} 
+                placeholder="Nome do artista"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            {/* BPM */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">BPM</label>
+              <input 
+                name="bpm" 
+                value={form.bpm} 
+                onChange={handleChange} 
+                placeholder="120"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Terceira linha - Key, Gênero, Data */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Key</label>
+              <input 
+                name="key" 
+                value={form.key} 
+                onChange={handleChange} 
+                placeholder="A Minor"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Gênero</label>
+              <input 
+                name="genre" 
+                value={form.genre} 
+                onChange={handleChange} 
+                placeholder="Deep House"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            <div className="space-y-1 md:col-span-2 lg:col-span-1">
+              <label className="text-xs font-medium text-emerald-300">Data</label>
+              <input 
+                name="releaseDate" 
+                value={form.releaseDate} 
+                onChange={handleChange} 
+                placeholder="YYYY-MM-DD" 
+                maxLength={10}
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Quarta linha - Álbum e Label */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Álbum</label>
+              <input 
+                name="album" 
+                value={form.album} 
+                onChange={handleChange} 
+                placeholder="Nome do álbum"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Label</label>
+              <input 
+                name="label" 
+                value={form.label} 
+                onChange={handleChange} 
+                placeholder="Gravadora"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Erro de data */}
+          {dateError && (
+            <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg p-2">
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {dateError}
+            </div>
+          )}
+
+          {/* Botão de salvar compacto */}
+          <div className="pt-3 border-t border-emerald-500/20">
+            <button 
+              type="submit" 
+              disabled={saving}
+              className="w-full px-4 py-2.5 rounded-lg font-semibold text-white transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              style={{
+                background: saving 
+                  ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(5, 150, 105, 0.4) 100%)'
+                  : 'linear-gradient(135deg, rgba(16, 185, 129, 0.8) 0%, rgba(5, 150, 105, 0.9) 100%)',
+                boxShadow: saving 
+                  ? '0 4px 16px rgba(16, 185, 129, 0.1)' 
+                  : '0 8px 32px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)'
+              }}
+              onMouseEnter={(e) => {
+                if (!saving) {
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 12px 40px rgba(16, 185, 129, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!saving) {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 8px 32px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)';
+                }
+              }}
+            >
+              {saving ? (
+                <div className="flex items-center justify-center gap-2">
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  Salvando...
+                </div>
+              ) : (
+                <div className="flex items-center justify-center gap-2">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  Salvar Alterações
+                </div>
+              )}
+            </button>
+          </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+// Menu de ações mobile
+function MobileActionMenu({ file, onUpdate, onEdit, fetchFiles }: { 
+  file: any, 
+  onUpdate: (fileName: string, status: string) => void, 
+  onEdit: (file: any) => void,
+  fetchFiles: (force?: boolean) => void 
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // Fechar menu ao clicar fora
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node) && 
+          buttonRef.current && !buttonRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside);
+    } else {
+      document.removeEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  return (
+    <div className="relative inline-block">
+      <button
+        ref={buttonRef}
+        className="flex-shrink-0 w-10 h-10 flex items-center justify-center text-zinc-400 hover:text-emerald-400 transition-colors rounded-lg hover:bg-emerald-500/10"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        title="Ações"
+        type="button"
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          ref={menuRef}
+          className="absolute right-0 top-full mt-2 z-[9999] backdrop-blur-md border border-emerald-500/20 rounded-lg shadow-xl min-w-[140px] py-1.5 animate-fade-in"
+          style={{
+            background: `linear-gradient(135deg, 
+              rgba(16, 185, 129, 0.1) 0%, 
+              rgba(5, 150, 105, 0.15) 30%, 
+              rgba(0, 0, 0, 0.8) 70%, 
+              rgba(15, 23, 42, 0.9) 100%
+            )`,
+            boxShadow: '0 8px 32px rgba(16, 185, 129, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+          }}
+        >
+          <button
+            className="w-full text-left px-3 py-2 text-xs hover:bg-emerald-500/10 text-emerald-300 font-medium transition-colors rounded-md mx-1"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onUpdate(file.name, 'loading');
+              setOpen(false);
+            }}
+          >
+            ↻ Atualizar Metadados
+          </button>
+          <button
+            className="w-full text-left px-3 py-2 text-xs hover:bg-blue-500/10 text-blue-300 font-medium transition-colors rounded-md mx-1"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onEdit(file);
+              setOpen(false);
+            }}
+          >
+            ✎ Editar
+          </button>
+          <button
+            className="w-full text-left px-3 py-2 text-xs hover:bg-red-500/10 text-red-300 font-medium transition-colors rounded-md mx-1"
+            onClick={async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (window.confirm('Remover este arquivo?')) {
+                await removeFile(file.name, fetchFiles);
+                setOpen(false);
+              }
+            }}
+          >
+            🗑 Remover
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1426,7 +1865,11 @@ function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
       <button
         ref={buttonRef}
         className="w-8 h-8 rounded-lg hover:bg-emerald-500/10 transition-colors text-zinc-400 hover:text-emerald-400 flex items-center justify-center border border-transparent hover:border-emerald-500/20"
-        onClick={() => setOpen((v) => !v)}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
         title="Ações"
         type="button"
       >
