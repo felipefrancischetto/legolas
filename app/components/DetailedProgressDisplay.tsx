@@ -147,75 +147,109 @@ export default function DetailedProgressDisplay({
   }
 
   return (
-    <div className="mt-4 p-4 bg-zinc-800/50 rounded-lg border border-zinc-700/50">
-      <div className="flex items-center justify-between mb-3">
-        <h4 className="text-sm font-medium text-white flex items-center gap-2">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v11a2 2 0 002 2h5.586a1 1 0 00.707-.293l5.414-5.414a1 1 0 00.293-.707V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-          </svg>
-          Progresso Detalhado
-        </h4>
-        
-        {/* Indicador de conexão */}
-        <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
-          <span className="text-xs text-zinc-400">
-            {isConnected ? 'Conectado' : 'Desconectado'}
+    <div className="space-y-3 sm:space-y-2">
+      {/* Header com informações principais */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 sm:gap-1">
+          {isConnected && (
+            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse sm:w-1.5 sm:h-1.5" title="Conectado ao servidor" />
+          )}
+          <span className="text-white font-medium text-sm sm:text-xs">
+            {currentStep || 'Preparando...'}
           </span>
         </div>
+        {progress > 0 && (
+          <span className="text-zinc-400 text-xs font-mono sm:text-[10px]">
+            {progress}%
+          </span>
+        )}
       </div>
+
+      {/* Substep */}
+      {currentSubstep && (
+        <div className="flex items-center gap-2 pl-4 sm:gap-1 sm:pl-2">
+          <div className="w-1 h-1 bg-zinc-500 rounded-full" />
+          <span className="text-zinc-400 text-xs sm:text-[10px]">
+            {currentSubstep}
+          </span>
+        </div>
+      )}
+
+      {/* Detail */}
+      {detail && (
+        <div className="text-zinc-500 text-xs pl-4 truncate sm:pl-2 sm:text-[10px]">
+          {detail}
+        </div>
+      )}
 
       {/* Lista de passos */}
-      <div className="space-y-2 max-h-40 overflow-y-auto custom-scroll">
-        {stepsToShow.map((step, index) => (
-          <div key={index} className="flex items-start gap-3 p-2 rounded bg-zinc-800/30">
-            {/* Ícone do passo */}
-            <div className="flex-shrink-0 mt-0.5">
-              {getStepIcon(step.type, step.completed || false)}
-            </div>
-            
-            {/* Conteúdo do passo */}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between">
-                <p className={`text-sm ${step.completed ? 'text-green-400' : 'text-white'} font-medium`}>
-                  {step.step}
-                </p>
-                <span className="text-xs text-zinc-500">
-                  {step.progress}%
-                </span>
-              </div>
+      {steps && steps.length > 0 && (
+        <div className="space-y-2 sm:space-y-1">
+          <div className="text-zinc-400 text-xs font-medium sm:text-[10px]">Progresso:</div>
+          <div className="space-y-1">
+            {steps.map((step, index) => {
+              const isActive = step.step === currentStep;
+              const isCompleted = step.completed;
               
-              {/* Substep */}
-              {step.substep && (
-                <p className="text-xs text-zinc-400 mt-1">
-                  {step.substep}
-                </p>
-              )}
-              
-              {/* Detail */}
-              {step.detail && (
-                <p className="text-xs text-zinc-500 mt-1 truncate">
-                  {step.detail}
-                </p>
-              )}
-            </div>
+              return (
+                <div
+                  key={index}
+                  className={`flex items-center gap-2 p-2 rounded transition-all duration-200 sm:gap-1 sm:p-1 ${
+                    isActive ? 'bg-blue-900/30 border border-blue-700' :
+                    isCompleted ? 'bg-green-900/20 border border-green-800' :
+                    'bg-zinc-800/50'
+                  }`}
+                >
+                  <div className="flex-shrink-0">
+                    {getStepIcon(step.type, isCompleted || false)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className={`text-sm font-medium truncate sm:text-xs ${
+                        isActive ? 'text-blue-400' :
+                        isCompleted ? 'text-green-400' :
+                        'text-zinc-400'
+                      }`}>
+                        {step.step}
+                      </span>
+                      {isActive && (
+                        <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse flex-shrink-0 sm:w-1.5 sm:h-1.5" />
+                      )}
+                      {isCompleted && (
+                        <svg className="w-4 h-4 text-green-400 flex-shrink-0 sm:w-3 sm:h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                    </div>
+                    {step.substep && (
+                      <div className="text-xs text-zinc-500 truncate mt-1 sm:text-[10px]">
+                        {step.substep}
+                      </div>
+                    )}
+                    {step.detail && (
+                      <div className="text-xs text-zinc-500 truncate mt-1 sm:text-[10px]">
+                        {step.detail}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
-      {/* Progresso geral */}
-      <div className="mt-3 pt-3 border-t border-zinc-700">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-zinc-400">Progresso Geral</span>
-          <span className="text-xs text-zinc-400">{progress}%</span>
+      {/* Barra de progresso geral */}
+      {progress > 0 && (
+        <div className="space-y-1">
+          <div className="w-full bg-zinc-700 rounded-full h-2 sm:h-1.5">
+            <div
+              className="h-full bg-blue-500 rounded-full transition-all duration-300 animate-progress-pulse"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
         </div>
-        <div className="w-full bg-zinc-700 rounded-full h-1.5">
-          <div
-            className="bg-gradient-to-r from-blue-500 to-green-500 h-full rounded-full transition-all duration-500"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-      </div>
+      )}
     </div>
   );
 } 

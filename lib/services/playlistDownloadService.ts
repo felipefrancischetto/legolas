@@ -7,7 +7,7 @@ import NodeID3 from 'node-id3';
 import { metadataAggregator } from './metadataService';
 import { logger } from '../utils/logger';
 import { scrapeTracklist } from '../tracklistScraper';
-import { sendProgressEvent } from '../../app/api/download-progress/route';
+import { sendProgressEvent } from '../utils/progressEventService';
 
 const execAsync = promisify(exec);
 
@@ -614,7 +614,7 @@ export class PlaylistDownloadService {
 
     // Check if we got useful enhanced data
     const hasEnhancedData = metadata.bpm || metadata.key || metadata.label || 
-                           metadata.genre || metadata.album || metadata.artist;
+                           metadata.genre || metadata.album || metadata.artist || metadata.year;
 
     if (!hasEnhancedData) {
       logger.warn(`[DEBUG] No enhanced metadata found for: ${normTitle} - ${normArtist}`);

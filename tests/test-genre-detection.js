@@ -4,7 +4,7 @@ async function testGenreDetection() {
   console.log('🎭 [Genre Test] Testando detecção de gênero "Minimal / Deep Tech"...');
   
   const browser = await puppeteer.launch({ 
-    headless: true,
+    headless: false, // Browser visível para debug
     args: [
       '--no-sandbox', 
       '--disable-setuid-sandbox',

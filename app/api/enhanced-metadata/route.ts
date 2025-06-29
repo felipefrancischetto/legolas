@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { metadataAggregator } from '@/lib/services/metadataService';
+import { extractArtistTitle } from '../utils/common';
 
 interface MetadataRequest {
   title: string;
@@ -10,13 +11,11 @@ interface MetadataRequest {
 export async function POST(request: NextRequest) {
   try {
     const body: MetadataRequest = await request.json();
-    const { title, artist, useBeatport = false } = body;
+    let { title, artist, useBeatport = false } = body;
 
-    console.log('\n🎯 [Enhanced-Metadata API] Iniciando busca de metadados:');
+    console.log('\n🎯 [Enhanced-Metadata API] Iniciando busca de metadados (dados brutos):');
     console.log(`   📋 Title: "${title}"`);
     console.log(`   🎤 Artist: "${artist}"`);
-    console.log(`   🎧 Beatport habilitado: ${useBeatport}`);
-    console.log('───────────────────────────────────────────────────');
 
     if (!title) {
       console.log('❌ [Enhanced-Metadata API] Erro: título não fornecido');
@@ -25,6 +24,17 @@ export async function POST(request: NextRequest) {
         error: 'Title is required' 
       }, { status: 400 });
     }
+
+    // Limpa e extrai o artista/título mais preciso
+    const cleaned = extractArtistTitle(title, artist);
+    title = cleaned.title;
+    artist = cleaned.artist;
+
+    console.log('\n✨ [Enhanced-Metadata API] Dados de busca otimizados:');
+    console.log(`   📋 Title: "${title}"`);
+    console.log(`   🎤 Artist: "${artist}"`);
+    console.log(`   🎧 Beatport habilitado: ${useBeatport}`);
+    console.log('───────────────────────────────────────────────────');
 
     const startTime = Date.now();
     

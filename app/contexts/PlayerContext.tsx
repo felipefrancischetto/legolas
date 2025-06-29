@@ -104,9 +104,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const partial = state(prev);
         let newState = { ...prev, ...partial };
 
-        // Se mudou de música, zera o progresso
+        // Se mudou de música, zera o progresso, senão mantém
         if (partial.currentFile && partial.currentFile !== prev.currentFile) {
           newState.currentTime = 0;
+        } else if (partial.currentTime !== undefined) {
+          // Mantém o currentTime se foi explicitamente definido
+          newState.currentTime = partial.currentTime;
         }
 
         // Salva no localStorage
@@ -124,9 +127,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     } else {
       setPlayerState(prev => {
         let newState = { ...prev, ...state };
-        // Se mudou de música, zera o progresso
+        // Se mudou de música, zera o progresso, senão mantém
         if (state.currentFile && state.currentFile !== prev.currentFile) {
           newState.currentTime = 0;
+        } else if (state.currentTime !== undefined) {
+          // Mantém o currentTime se foi explicitamente definido
+          newState.currentTime = state.currentTime;
         }
         // Salva no localStorage
         if (typeof window !== 'undefined') {
@@ -152,11 +158,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   };
 
   const play = useCallback((file: FileInfo) => {
+    console.log('🎵 [PlayerContext] play() chamado para:', file.displayName);
     // Sempre zera o progresso ao tocar uma nova música
     updatePlayerState(prev => {
       if (prev.currentFile?.name === file.name && prev.isPlaying) {
+        console.log('🎵 [PlayerContext] Mesma música já está tocando, ignorando');
         return {}; // Não atualiza se já está tocando o mesmo arquivo
       }
+      console.log('🎵 [PlayerContext] Atualizando estado para nova música');
       return {
         currentFile: file,
         isPlaying: true,

@@ -176,14 +176,16 @@ async function debugBeatportSearch() {
       const key = getDetail('Key');
       const genre = getDetail('Genre');
       const label = getDetail('Label');
+      const year = getDetail('Year');
       
       console.log('📊 Resultado da extração:');
       console.log(`  BPM: ${bpm || 'N/A'}`);
       console.log(`  Key: ${key || 'N/A'}`);
       console.log(`  Genre: ${genre || 'N/A'}`);
       console.log(`  Label: ${label || 'N/A'}`);
+      console.log(`  Year: ${year || 'N/A'}`);
       
-      return { bpm, key, genre, label };
+      return { bpm, key, genre, label, year };
     });
     
     console.log('\n📊 Metadados extraídos:');
@@ -191,8 +193,9 @@ async function debugBeatportSearch() {
     console.log(`  🔑 Key: ${metadata.key || 'N/A'}`);
     console.log(`  🎭 Genre: ${metadata.genre || 'N/A'}`);
     console.log(`  🏷️  Label: ${metadata.label || 'N/A'}`);
+    console.log(`  🗓️  Year: ${metadata.year || 'N/A'}`);
     
-    const hasData = metadata.bpm || metadata.key || metadata.genre || metadata.label;
+    const hasData = metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.year;
     console.log(`\n${hasData ? '🎉 SUCESSO' : '❌ FALHOU'}: ${hasData ? 'Metadados encontrados!' : 'Nenhum metadado encontrado'}`);
     
     // Esperar um pouco antes de fechar para ver a página

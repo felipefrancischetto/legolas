@@ -79,4 +79,44 @@ export function extractVideoId(url: string): string | null {
   }
   
   return null;
+}
+
+export function extractArtistTitle(
+  title: string,
+  artist?: string
+): {
+  title: string;
+  artist: string;
+} {
+  const genericArtists = ['various artists', 'va', 'v/a', 'various', 'unknown artist', 'various artist'];
+  const suspiciousSuffixes = ['music', 'tv', 'records', 'recordings', 'channel', 'official', 'topic'];
+
+  let cleanArtist = artist?.toLowerCase()?.trim() || '';
+  let cleanTitle = title.trim();
+
+  const isGenericArtist = genericArtists.some(ga => cleanArtist.includes(ga));
+  const isSuspiciousArtist = suspiciousSuffixes.some(suffix => cleanArtist.endsWith(suffix));
+
+  if ((!cleanArtist || isGenericArtist || isSuspiciousArtist) && (cleanTitle.includes('-') || cleanTitle.includes('–'))) {
+    const patterns = [
+      /(.+?)\s*-\s*(.+)/,
+      /(.+?)\s*–\s*(.+)/,
+      /(.+?)\s*—\s*(.+)/,
+      /(.+?)\s*:\s*(.+)/,
+    ];
+
+    for (const pattern of patterns) {
+        const match = cleanTitle.match(pattern);
+        if (match && match[1] && match[2]) {
+            if (match[1].length < 80) { // Evitar falsos positivos
+              const newArtist = match[1].trim();
+              const newTitle = match[2].trim();
+              console.log(`[extractArtistTitle] Artista suspeito. Extraído do título: Artista='${newArtist}', Título='${newTitle}'`);
+              return { artist: newArtist, title: newTitle };
+            }
+        }
+    }
+  }
+
+  return { artist: artist || '', title: title };
 } 

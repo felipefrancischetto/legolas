@@ -8,6 +8,7 @@ import { useFile } from '../contexts/FileContext';
 import { useUI } from '../contexts/UIContext';
 import { usePlayer } from '../contexts/PlayerContext';
 import { getThumbnailUrl } from '../utils/thumbnailCache';
+import { getCachedDominantColor } from '../utils/colorExtractor';
 import ReactDOM from 'react-dom';
 
 interface FileInfo {
@@ -77,16 +78,16 @@ const ThumbnailImage = memo(({ file, fileExists }: { file: FileInfo, fileExists:
 ThumbnailImage.displayName = 'ThumbnailImage';
 
 // Definição centralizada das colunas
-const columns = [
-  { label: 'Título', key: 'title', width: 260 },
-  { label: 'Artistas', key: 'artist', width: 180 },
-  { label: 'Gravadora', key: 'label', width: 100 },
-  { label: 'Albúm', key: 'album', width: 120 },
-  { label: 'Gênero', key: 'genre', width: 100 },
-  { label: 'BPM', key: 'bpm', width: 60 },
-  { label: 'Tom', key: 'key', width: 70 },
-  { label: 'Lançamento', key: 'ano', width: 70 },
-  { label: 'Ações', key: 'acoes', width: 50 },
+const columns: { label: string; key: string; width: number; always: boolean }[] = [
+  { label: 'Título', key: 'title', width: 260, always: true },
+  { label: 'Artistas', key: 'artist', width: 180, always: true },
+  { label: 'Gravadora', key: 'label', width: 100, always: false },
+  { label: 'Albúm', key: 'album', width: 120, always: false },
+  { label: 'Gênero', key: 'genre', width: 100, always: false },
+  { label: 'BPM', key: 'bpm', width: 60, always: false },
+  { label: 'Tom', key: 'key', width: 70, always: false },
+  { label: 'Lançamento', key: 'ano', width: 70, always: false },
+  { label: 'Ações', key: 'acoes', width: 50, always: true },
 ];
 
 // Memoizando o FileRow para evitar re-renders desnecessários
@@ -106,7 +107,7 @@ const FileRow = memo(({
   file: FileInfo;
   index: number;
   files: FileInfo[];
-  columns: { label: string, key: string, width: number }[];
+  columns: { label: string, key: string, width: number, always: boolean }[];
   onPlay: (file: FileInfo) => void;
   onContextMenu: (e: React.MouseEvent, file: FileInfo) => void;
   metadataStatus: any;
@@ -116,6 +117,24 @@ const FileRow = memo(({
   fetchFiles: (force?: boolean) => void;
 }) => {
   const fileExists = files.some(f => f.name === file.name);
+  const [dominantColor, setDominantColor] = useState<string>('rgba(0, 0, 0, 0.3)');
+  
+  // Extrai cor dominante da capa
+  useEffect(() => {
+    const extractColor = async () => {
+      try {
+        const thumbnailUrl = getThumbnailUrl(file.name);
+        const colorData = await getCachedDominantColor(thumbnailUrl);
+        setDominantColor(colorData.rgba(0.15));
+      } catch (error) {
+        console.warn('Erro ao extrair cor para', file.name, error);
+        setDominantColor('rgba(0, 0, 0, 0.3)');
+      }
+    };
+    
+    extractColor();
+  }, [file.name]);
+  
   // Checar se todos os campos principais estão preenchidos
   const isComplete = Boolean(
     (file.title || file.displayName) &&
@@ -130,8 +149,14 @@ const FileRow = memo(({
   return (
     <div
       key={file.path}
-      className={`flex items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs cursor-pointer ${isPlaying ? 'ring-2 ring-blue-400 bg-blue-900/20' : ''}`}
-      style={{ minHeight: 50, margin: '5px 0px' }}
+      className={`flex items-center hover:bg-zinc-700/50 transition-all duration-200 group w-full h-[80px] animate-fade-in text-xs cursor-pointer ${isPlaying ? 'ring-2 ring-blue-400 bg-blue-900/20' : ''}`}
+      style={{ 
+        minHeight: 80, 
+        margin: '4px 0px',
+        background: isPlaying ? 'rgba(59, 130, 246, 0.2)' : dominantColor,
+        backdropFilter: 'blur(8px)',
+        border: `1px solid ${dominantColor.replace('0.15', '0.3')}`
+      }}
       onClick={e => onContextMenu(e, file)}
     >
       {/* Primeira coluna: check sutil se completo */}
@@ -143,6 +168,7 @@ const FileRow = memo(({
         )}
       </div>
       {columns.map((col, idx) => {
+        if (!col.always && typeof window !== 'undefined' && window.innerWidth < 640) return null;
         let content = null;
         switch (col.key) {
           case 'title':
@@ -150,7 +176,8 @@ const FileRow = memo(({
               <div className="flex items-center overflow-hidden">
                 <button
                   onClick={(e) => { e.stopPropagation(); onPlay(file); }}
-                  className="w-12 h-12 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110 mr-2"
+                  className="w-12 h-12 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110 mr-2 sm:w-8 sm:h-8"
+                  style={{ margin: '4px' }}
                 >
                   <ThumbnailImage file={file} fileExists={fileExists} />
                   <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -159,12 +186,12 @@ const FileRow = memo(({
                     </svg>
                   </div>
                 </button>
-                <span className="font-bold text-white truncate block max-w-full" title={file.title || file.displayName}>{file.title || file.displayName}</span>
+                <span className="font-bold text-white truncate block max-w-full break-words sm:text-xs">{file.title || file.displayName}</span>
               </div>
             );
             break;
           case 'artist':
-            content = <span className="text-xs text-blue-400 truncate block max-w-full" title={file.artist || ''}>{file.artist || '-'}</span>;
+            content = <span className="text-xs text-blue-400 truncate block max-w-full break-words sm:text-xs">{file.artist || '-'}</span>;
             break;
           case 'label':
             content = <span className="truncate block max-w-full" title={file.label || ''}>{file.label || '-'}</span>;
@@ -221,6 +248,167 @@ async function removeFile(fileName: string, fetchFiles: (force?: boolean) => voi
     alert(err.message || 'Erro ao mover arquivo para lixeira.');
     fetchFiles(true); // Atualiza a lista mesmo em caso de erro
   }
+}
+
+// Componente para item da lista com cor dinâmica
+function DynamicFileItem({ 
+  file, 
+  isPlaying, 
+  isPlayerPlaying, 
+  onPlay, 
+  extractDominantColor, 
+  dominantColors 
+}: { 
+  file: FileInfo; 
+  isPlaying: boolean; 
+  isPlayerPlaying: boolean; 
+  onPlay: () => void;
+  extractDominantColor: (fileName: string, imageUrl: string) => Promise<{ rgb: string; rgba: (opacity: number) => string }>;
+  dominantColors: { [fileName: string]: { rgb: string; rgba: (opacity: number) => string } };
+}) {
+  const [itemColor, setItemColor] = useState<{ rgb: string; rgba: (opacity: number) => string }>({
+    rgb: '16, 185, 129',
+    rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})`
+  });
+
+  useEffect(() => {
+    const loadColor = async () => {
+      if (dominantColors[file.name]) {
+        setItemColor(dominantColors[file.name]);
+      } else {
+        const thumbnailUrl = getThumbnailUrl(file.name);
+        try {
+          const color = await extractDominantColor(file.name, thumbnailUrl);
+          setItemColor(color);
+        } catch (error) {
+          console.error('Erro ao carregar cor:', error);
+        }
+      }
+    };
+    loadColor();
+  }, [file.name, dominantColors, extractDominantColor]);
+
+  return (
+    <div
+      className="backdrop-blur-md border rounded-lg p-3 transition-all duration-300 cursor-pointer hover:shadow-lg"
+      onClick={onPlay}
+      style={{
+        borderColor: itemColor.rgba(isPlaying ? 0.6 : 0.3),
+        background: isPlaying
+          ? `linear-gradient(135deg, 
+              ${itemColor.rgba(0.25)} 0%, 
+              ${itemColor.rgba(0.35)} 30%, 
+              rgba(0, 0, 0, 0.7) 70%, 
+              rgba(15, 23, 42, 0.8) 100%
+            )`
+          : `linear-gradient(135deg, 
+              ${itemColor.rgba(0.08)} 0%, 
+              ${itemColor.rgba(0.12)} 30%, 
+              rgba(0, 0, 0, 0.6) 70%, 
+              rgba(15, 23, 42, 0.7) 100%
+            )`,
+        boxShadow: isPlaying
+          ? `0 8px 32px ${itemColor.rgba(0.2)}, inset 0 1px 0 rgba(255, 255, 255, 0.15)`
+          : `0 4px 16px ${itemColor.rgba(0.08)}, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
+      }}
+    >
+      <div className="flex items-center gap-4">
+        <div className="relative flex-shrink-0">
+          <Image
+            src={getThumbnailUrl(file.name)}
+            alt={file.title || file.displayName}
+            width={56}
+            height={56}
+            className="object-cover w-14 h-14 bg-zinc-800 rounded-lg border border-zinc-700/50 shadow-lg"
+          />
+          {isPlaying && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-lg backdrop-blur-sm">
+              {isPlayerPlaying ? (
+                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24" style={{ color: `rgb(${itemColor.rgb})` }}>
+                  <rect x="7" y="6" width="3" height="12" rx="1" />
+                  <rect x="14" y="6" width="3" height="12" rx="1" />
+                </svg>
+              ) : (
+                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24" style={{ color: `rgb(${itemColor.rgb})` }}>
+                  <polygon points="8,5 19,12 8,19" />
+                </svg>
+              )}
+            </div>
+          )}
+        </div>
+        
+        <div className="flex-1 min-w-0">
+          <div className="text-white font-bold text-base leading-tight truncate">
+            {file.title || file.displayName}
+          </div>
+          <div className="text-sm truncate font-medium" style={{ color: `rgb(${itemColor.rgb})` }}>
+            {file.artist || 'Artista desconhecido'}
+          </div>
+          
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {file.bpm && (
+              <span 
+                className="px-2 py-0.5 rounded text-xs font-bold border backdrop-blur-sm"
+                style={{ 
+                  backgroundColor: itemColor.rgba(0.25),
+                  color: `rgb(${itemColor.rgb})`,
+                  borderColor: itemColor.rgba(0.2)
+                }}
+              >
+                {file.bpm} BPM
+              </span>
+            )}
+            {file.key && (
+              <span 
+                className="px-2 py-0.5 rounded text-xs font-bold border backdrop-blur-sm"
+                style={{ 
+                  backgroundColor: itemColor.rgba(0.25),
+                  color: `rgb(${itemColor.rgb})`,
+                  borderColor: itemColor.rgba(0.2)
+                }}
+              >
+                {file.key}
+              </span>
+            )}
+            {file.genre && (
+              <span className="bg-white/10 text-zinc-200 px-2 py-0.5 rounded text-xs font-medium border border-white/15 backdrop-blur-sm">
+                {file.genre}
+              </span>
+            )}
+            {(file as any).ano && (
+              <span className="bg-blue-500/20 text-blue-200 px-2 py-0.5 rounded text-xs font-medium border border-blue-400/20 backdrop-blur-sm">
+                {String((file as any).ano).slice(0, 4)}
+              </span>
+            )}
+          </div>
+          
+          {(file.label || file.album) && (
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {file.label && (
+                <span className="text-zinc-300 text-xs bg-white/8 px-2 py-0.5 rounded border border-white/10 backdrop-blur-sm">
+                  {file.label}
+                </span>
+              )}
+              {file.album && (
+                <span className="text-zinc-200 text-xs bg-white/10 px-2 py-0.5 rounded border border-white/15 backdrop-blur-sm">
+                  {file.album}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex-shrink-0">
+          <ActionMenu 
+            file={file} 
+            onUpdate={(fileName: string, status: string) => {}} 
+            onEdit={(file: any) => {}} 
+            fetchFiles={(force?: boolean) => {}} 
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function FileList() {
@@ -440,69 +628,214 @@ export default function FileList() {
   };
 
   const [releaseModal, setReleaseModal] = useState<{album: string, tracks: any[], metadata: any, loading: boolean, error: string | null} | null>(null);
+  const [dominantColors, setDominantColors] = useState<{ [fileName: string]: { rgb: string, rgba: (opacity: number) => string } }>({});
+
+  // Função para extrair cor dominante
+  const extractDominantColor = useCallback(async (fileName: string, imageUrl: string) => {
+    if (dominantColors[fileName]) return dominantColors[fileName];
+
+    // Verificar se estamos no cliente
+    if (typeof window === 'undefined') {
+      const fallbackColor = { rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` };
+      return fallbackColor;
+    }
+
+    try {
+      const img = new (window as any).Image();
+      img.crossOrigin = 'anonymous';
+      
+      return new Promise<{ rgb: string, rgba: (opacity: number) => string }>((resolve) => {
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve({ rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` });
+            return;
+          }
+
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const data = imageData.data;
+          const colorCounts: { [key: string]: number } = {};
+
+          // Analisar pixels em intervalos para performance
+          for (let i = 0; i < data.length; i += 16) { // Pular pixels para performance
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            const alpha = data[i + 3];
+
+            if (alpha < 128) continue; // Ignorar pixels transparentes
+
+            // Agrupar cores similares
+            const key = `${Math.floor(r / 32) * 32},${Math.floor(g / 32) * 32},${Math.floor(b / 32) * 32}`;
+            colorCounts[key] = (colorCounts[key] || 0) + 1;
+          }
+
+          // Encontrar cor mais comum
+          let dominantColor = '16, 185, 129'; // Fallback para emerald
+          let maxCount = 0;
+
+          for (const [color, count] of Object.entries(colorCounts)) {
+            if (count > maxCount) {
+              maxCount = count;
+              dominantColor = color;
+            }
+          }
+
+          // Ajustar saturação e brilho para melhor contraste
+          const [r, g, b] = dominantColor.split(',').map(Number);
+          const adjustedColor = adjustColorForUI(r, g, b);
+
+          const colorData = {
+            rgb: adjustedColor,
+            rgba: (opacity: number) => `rgba(${adjustedColor}, ${opacity})`
+          };
+
+          setDominantColors(prev => ({ ...prev, [fileName]: colorData }));
+          resolve(colorData);
+        };
+
+        img.onerror = () => {
+          const fallbackColor = { rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` };
+          setDominantColors(prev => ({ ...prev, [fileName]: fallbackColor }));
+          resolve(fallbackColor);
+        };
+
+        img.src = imageUrl;
+      });
+    } catch (error) {
+      console.error('Erro ao extrair cor:', error);
+      const fallbackColor = { rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` };
+      setDominantColors(prev => ({ ...prev, [fileName]: fallbackColor }));
+      return fallbackColor;
+    }
+  }, [dominantColors]);
+
+  // Função para ajustar cor para melhor contraste na UI
+  const adjustColorForUI = (r: number, g: number, b: number): string => {
+    // Converter para HSL para ajustar saturação e luminosidade
+    const max = Math.max(r, g, b) / 255;
+    const min = Math.min(r, g, b) / 255;
+    const diff = max - min;
+    const add = max + min;
+    const l = add * 0.5;
+
+    let s = 0;
+    if (diff !== 0) {
+      s = l < 0.5 ? diff / add : diff / (2 - add);
+    }
+
+    // Ajustar saturação (mínimo 0.4, máximo 0.8)
+    s = Math.max(0.4, Math.min(0.8, s));
+    
+    // Ajustar luminosidade (mínimo 0.3, máximo 0.7)
+    const adjustedL = Math.max(0.3, Math.min(0.7, l));
+
+    // Converter de volta para RGB
+    const hue = getHue(r, g, b, max, min, diff);
+    const [newR, newG, newB] = hslToRgb(hue, s, adjustedL);
+
+    return `${Math.round(newR)}, ${Math.round(newG)}, ${Math.round(newB)}`;
+  };
+
+  const getHue = (r: number, g: number, b: number, max: number, min: number, diff: number): number => {
+    if (diff === 0) return 0;
+    
+    const rNorm = r / 255;
+    const gNorm = g / 255;
+    const bNorm = b / 255;
+    
+    let hue = 0;
+    if (max === rNorm) {
+      hue = ((gNorm - bNorm) / diff) % 6;
+    } else if (max === gNorm) {
+      hue = (bNorm - rNorm) / diff + 2;
+    } else {
+      hue = (rNorm - gNorm) / diff + 4;
+    }
+    
+    return hue * 60;
+  };
+
+  const hslToRgb = (h: number, s: number, l: number): [number, number, number] => {
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    const m = l - c / 2;
+
+    let r = 0, g = 0, b = 0;
+
+    if (0 <= h && h < 60) {
+      r = c; g = x; b = 0;
+    } else if (60 <= h && h < 120) {
+      r = x; g = c; b = 0;
+    } else if (120 <= h && h < 180) {
+      r = 0; g = c; b = x;
+    } else if (180 <= h && h < 240) {
+      r = 0; g = x; b = c;
+    } else if (240 <= h && h < 300) {
+      r = x; g = 0; b = c;
+    } else if (300 <= h && h < 360) {
+      r = c; g = 0; b = x;
+    }
+
+    return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+  };
 
   async function updateMetadataForFile(fileName: string, status: string) {
-    setMetadataStatus((prev: any) => ({ ...prev, [fileName]: status }));
-    try {
-      const file = files.find(f => f.name === fileName);
-      if (!file) {
-        throw new Error('Arquivo não encontrado');
-      }
+    if (!fileName) return;
 
-      const response = await fetch('/api/update-individual-metadata', {
+    const file = files.find(f => f.name === fileName);
+    if (!file) {
+      console.error(`Arquivo ${fileName} não encontrado na lista.`);
+      setMetadataStatus(prev => ({ ...prev, [fileName]: 'error' }));
+      return;
+    }
+
+    try {
+      setMetadataStatus((prev: any) => ({ ...prev, [fileName]: status }));
+      const response = await fetch(`/api/enhanced-metadata`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          fileName,
           title: file.title || file.displayName,
-          artist: file.artist || ''
+          artist: file.artist,
+          useBeatport: true // Assumindo que deve usar Beatport por padrão
         }),
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Falha ao buscar metadados');
-      }
-
-      const { metadata } = await response.json();
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Erro desconhecido');
       
-      setFiles((prevFiles: any) => prevFiles.map((f: any) => f.name === fileName ? { ...f, ...metadata, status: 'success' } : f));
-      setMetadataStatus((prev: any) => ({ ...prev, [fileName]: 'success' }));
+      await fetchFiles(true);
       
     } catch (err: any) {
-      setMetadataStatus((prev: any) => ({ ...prev, [fileName]: err.message || 'error' }));
+      console.error(`Erro ao atualizar metadados para ${fileName}:`, err.message);
+      setMetadataStatus((prev: any) => ({ ...prev, [fileName]: 'error' }));
     }
   }
 
   async function updateAllMetadata() {
-    const filesToUpdate = files.filter(file => !file.isBeatportFormat);
-    if (filesToUpdate.length === 0) return;
-
     setIsUpdatingAll(true);
+    setUpdateProgress({ current: 0, total: files.length });
+
+    const filesToUpdate = files.filter(f => !f.isBeatportFormat);
     setUpdateProgress({ current: 0, total: filesToUpdate.length });
 
-    for (const file of filesToUpdate) {
-      setMetadataStatus({ ...metadataStatus, [file.name]: 'loading' });
+    for (let i = 0; i < filesToUpdate.length; i++) {
+      const file = filesToUpdate[i];
+      setUpdateProgress({ current: i + 1, total: filesToUpdate.length });
       try {
-        const response = await fetch('/api/update-metadata', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileName: file.name }),
-        });
-        const result = await response.json();
-        if (!response.ok || result.error) {
-          setMetadataStatus({ ...metadataStatus, [file.name]: result.error || 'error' });
-        } else {
-          setMetadataStatus({ ...metadataStatus, [file.name]: 'success' });
-        }
-      } catch (err: any) {
-        setMetadataStatus({ ...metadataStatus, [file.name]: err.message || 'error' });
+        await updateMetadataForFile(file.name, 'loading');
+      } catch (error) {
+        // O erro já é tratado em updateMetadataForFile
       }
-      setUpdateProgress({ ...updateProgress, current: updateProgress.current + 1 });
     }
 
+    await fetchFiles(true); // Recarrega tudo no final
     setIsUpdatingAll(false);
-    fetchFiles();
   }
 
   // Contar apenas downloads em andamento ou na fila
@@ -555,8 +888,10 @@ export default function FileList() {
 
   // Handlers memoizados
   const handlePlay = useCallback((file: FileInfo) => {
+    console.log('🎵 [FileList] handlePlay chamado para:', file.displayName);
     play(file);
     setPlayerOpen(true);
+    console.log('🎵 [FileList] setPlayerOpen(true) chamado');
   }, [play, setPlayerOpen]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, file: FileInfo) => {
@@ -581,25 +916,42 @@ export default function FileList() {
   const handleEditFileSave = async (data: Partial<FileInfo>) => {
     if (!editModalFile) return;
 
+    setIsUpdatingAll(true); // Reutiliza o estado de 'carregando'
     try {
-      await fetch(`/api/update-metadata?fileName=${encodeURIComponent(editModalFile.name)}`, {
+      const payload = {
+        operation: 'update',
+        fileName: editModalFile.name,
+        title: data.title,
+        artist: data.artist,
+        album: data.album,
+        year: data.ano,
+        genre: data.genre,
+        label: data.label,
+        bpm: data.bpm,
+        key: data.key,
+      };
+
+      const response = await fetch('/api/metadata/unified', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
       });
-      // Atualizar estado local
-      setFiles((prevFiles: any) => prevFiles.map((f: any) => f.name === editModalFile.name ? { ...f, ...data } : f));
-      if (data.name) {
-        setMetadataStatus((prev: any) => ({ ...prev, [data.name as string]: 'success' }));
+
+      if (!response.ok) {
+        const errorResult = await response.json();
+        throw new Error(errorResult.error || 'Falha ao atualizar metadados.');
       }
-    } catch (err: any) {
-      console.error('Erro ao salvar metadados:', err.message);
-      if(editModalFile.name) {
-        setMetadataStatus((prev: any) => ({ ...prev, [editModalFile.name as string]: 'error' }));
-      }
+
+      await fetchFiles(true); // Força a atualização da lista
+      setEditModalFile(null); // Fecha o modal
+
+    } catch (error: any) {
+      console.error('Erro ao salvar metadados:', error);
+      alert(`Erro: ${error.message}`);
     } finally {
-      setEditModalFile(null);
-      fetchFiles(true); // Re-fetch para garantir consistência
+      setIsUpdatingAll(false);
     }
   };
 
@@ -637,24 +989,71 @@ export default function FileList() {
   if (loading) {
     return (
       <div className="flex flex-col h-full min-h-0">
-        <div 
-          className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden flex flex-col flex-1 min-h-0"
-          style={{ minHeight: 300 }}
-        >
-          <div className="flex w-full px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10 flex-shrink-0" style={{userSelect:'none'}}>
-            {columns.map((col, idx) => (
+        <div className="flex items-center mb-6 gap-4 flex-shrink-0">
+          <div className="flex-1 relative">
+            <div className="w-full h-12 rounded-xl bg-zinc-800/50 border border-zinc-700/50 animate-pulse"></div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="w-20 h-6 bg-zinc-700/50 rounded animate-pulse"></div>
+            <div className="w-32 h-10 bg-zinc-800/50 border border-zinc-700/50 rounded-lg animate-pulse"></div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto space-y-3">
+          {Array.from({ length: 6 }).map((_, index) => {
+            // Larguras fixas predefinidas para evitar hydration mismatch
+            const titleWidths = ['75%', '85%', '68%', '92%', '78%', '82%'];
+            const subtitleWidths = ['55%', '48%', '62%', '45%', '58%', '52%'];
+            
+            return (
               <div
-                key={col.key}
-                style={{ width: col.width, minWidth: col.width }}
-                className="flex items-center h-12 px-2 overflow-hidden whitespace-nowrap text-ellipsis"
+                key={index}
+                className="backdrop-blur-md border border-emerald-500/20 rounded-xl p-4 animate-pulse"
+                style={{
+                  background: `linear-gradient(135deg, 
+                    rgba(16, 185, 129, 0.08) 0%, 
+                    rgba(5, 150, 105, 0.12) 30%, 
+                    rgba(0, 0, 0, 0.6) 70%, 
+                    rgba(15, 23, 42, 0.7) 100%
+                  )`,
+                  boxShadow: '0 4px 16px rgba(16, 185, 129, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                }}
               >
-                <span className="truncate uppercase tracking-wide text-xs font-semibold">{col.label}</span>
+                <div className="flex items-center gap-6">
+                  <div className="relative flex-shrink-0">
+                    <div className="w-16 h-16 bg-zinc-700/30 rounded-xl"></div>
+                  </div>
+                  
+                  <div className="flex-1 min-w-0">
+                    <div 
+                      className="h-5 bg-zinc-700/30 rounded mb-2" 
+                      style={{ width: titleWidths[index] }}
+                    ></div>
+                    <div 
+                      className="h-4 bg-zinc-700/20 rounded mb-3" 
+                      style={{ width: subtitleWidths[index] }}
+                    ></div>
+                    
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <div className="h-7 w-16 bg-emerald-500/20 rounded-md"></div>
+                      <div className="h-7 w-12 bg-emerald-500/20 rounded-md"></div>
+                      <div className="h-7 w-20 bg-white/10 rounded-md"></div>
+                      <div className="h-7 w-14 bg-blue-500/20 rounded-md"></div>
+                    </div>
+                    
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      <div className="h-6 w-24 bg-white/10 rounded-md"></div>
+                      <div className="h-6 w-20 bg-white/15 rounded-md"></div>
+                    </div>
+                  </div>
+
+                  <button className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-zinc-700/20 rounded-full">
+                    <div className="w-5 h-5 bg-zinc-600/30 rounded"></div>
+                  </button>
+                </div>
               </div>
-            ))}
-          </div>
-          <div className="flex-1 flex items-center justify-center animate-fade-in" style={{ minHeight: 200 }}>
-            <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-          </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -669,27 +1068,27 @@ export default function FileList() {
     );
   }
 
-  return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center mb-4 gap-2 flex-shrink-0">
-        {/* <h2 className="text-xl font-semibold text-white">Arquivos Baixados</h2> */}
-        <div className="flex items-center justify-between w-full gap-2">
-          {/* Campo de busca à esquerda */}
-          <input
-            type="text"
-            placeholder="Buscar por título ou artista..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="flex-1 px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white text-sm focus:outline-none"
-            style={{ minWidth: 200 }}
-          />
-          {/* Agrupar por à direita */}
-          <div className="flex gap-2 items-center ml-4">
-            <label className="text-sm text-zinc-300 mr-1">Agrupar por:</label>
+      return (
+      <div className="flex flex-col h-full min-h-0">
+        <div className="flex items-center mb-4 gap-3 flex-shrink-0">
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              placeholder="Buscar por título ou artista..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full pl-4 pr-10 py-2.5 rounded-lg bg-zinc-800/50 border border-zinc-700/50 text-white placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-emerald-500/50 focus:border-emerald-500/50 backdrop-blur-sm transition-all duration-200 text-sm"
+            />
+            <svg className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-zinc-400 font-medium whitespace-nowrap">Agrupar por:</label>
             <select
               value={groupByField}
               onChange={e => setGroupByField(e.target.value)}
-              className="px-2 py-1 rounded bg-zinc-700 text-white text-sm focus:outline-none"
+              className="px-3 py-2 rounded-md bg-zinc-800/50 border border-zinc-700/50 text-white text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500/50 backdrop-blur-sm min-w-[100px]"
             >
               {groupableFields.map(opt => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -697,66 +1096,132 @@ export default function FileList() {
             </select>
           </div>
         </div>
-      </div>
-      
-      <div 
-        className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden flex flex-col flex-1 min-h-0"
-      >
-        <div className="flex w-full px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10 flex-shrink-0" style={{userSelect:'none'}}>
-          {columns.map((col, idx) => (
-            <div
-              key={col.key}
-              style={{ width: col.width, minWidth: col.width }}
-              className="flex items-center h-12 px-2 overflow-hidden whitespace-nowrap text-ellipsis"
-            >
-              <span className="truncate uppercase tracking-wide text-xs font-semibold">{col.label}{sortBy === col.key && (sortOrder === 'asc' ? '↑' : '↓')}</span>
+
+      {/* Lista de arquivos - Layout mobile (cards) */}
+      <div className="block sm:hidden flex-1 overflow-y-auto space-y-3">
+        {(groupedFiles[groupByField] || []).length === 0 ? (
+          <div className="text-center py-12">
+            <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
+              <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+              </svg>
             </div>
-          ))}
-        </div>
-        <div 
-          className="flex-1 min-h-0 overflow-y-auto custom-scroll"
-          style={{ maxHeight: '100%' }}
-        >
-          {Object.entries(groupedFiles).map(([group, files]) => (
-            <div key={group} className="animate-fade-in">
-              {groupByField && group !== '' && (
-                <div className="sticky top-0 bg-zinc-900 z-10 px-2 py-2 border-b border-zinc-700 flex items-center justify-between">
-                  <h3 className="text-sm font-medium text-white mr-2">{group}</h3>
-                  {groupByField === 'album' && (
-                    <button
-                      className="p-1 rounded hover:bg-blue-700 transition-colors text-blue-400 ml-auto"
-                      title="Atualizar metadados da release"
-                      onClick={() => handleUpdateRelease(group)}
-                      style={{ minWidth: 32 }}
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582M20 20v-5h-.581M5.21 17.293A9 9 0 1 0 6 6.26m1 5.74V9h3" />
-                      </svg>
-                    </button>
+            <p className="text-zinc-400 text-lg font-medium">Nenhuma música encontrada</p>
+            <p className="text-zinc-500 text-sm mt-1">Baixe algumas músicas para começar</p>
+          </div>
+        ) : (
+          groupedFiles[groupByField]?.map((file, index) => (
+            <div
+              key={file.name}
+              className={`glass-card backdrop-blur-sm border border-emerald-500/20 hover:border-emerald-500/40 rounded-lg p-3 transition-all duration-300 cursor-pointer hover:shadow-lg hover:shadow-emerald-500/20 ${
+                playerState.currentFile?.name === file.name ? 'border-emerald-500/60 bg-emerald-500/10' : ''
+              }`}
+              onClick={() => handlePlay(file)}
+              style={{
+                background: `linear-gradient(135deg, 
+                  rgba(16, 185, 129, 0.05) 0%, 
+                  rgba(5, 150, 105, 0.08) 40%, 
+                  rgba(16, 185, 129, 0.03) 100%
+                )`,
+                boxShadow: '0 4px 12px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <div className="relative flex-shrink-0">
+                  <Image
+                    src={getThumbnailUrl(file.name)}
+                    alt={file.title || file.displayName}
+                    width={48}
+                    height={48}
+                    className="object-cover w-12 h-12 bg-zinc-800 rounded-lg border border-zinc-700/50"
+                  />
+                  {playerState.currentFile?.name === file.name && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-xl">
+                      {playerState.isPlaying ? (
+                        <svg className="w-6 h-6 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
+                          <rect x="7" y="6" width="3" height="12" rx="1" />
+                          <rect x="14" y="6" width="3" height="12" rx="1" />
+                        </svg>
+                      ) : (
+                        <svg className="w-6 h-6 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
+                          <polygon points="8,5 19,12 8,19" />
+                        </svg>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
-              {files.map((file, index) => (
-                <FileRow
-                  key={file.path}
-                  file={file}
-                  index={files.length - index - 1}
-                  files={files}
-                  columns={columns}
-                  onPlay={handlePlay}
-                  onContextMenu={handleContextMenu}
-                  metadataStatus={metadataStatus}
-                  updateMetadataForFile={updateMetadataForFile}
-                  setEditModalFile={setEditModalFile}
-                  isPlaying={!!(playerState.currentFile && playerState.currentFile.name === file.name)}
-                  fetchFiles={fetchFiles}
-                />
-              ))}
+                
+                <div className="flex-1 min-w-0">
+                  <div className="text-white font-bold text-sm leading-tight truncate">
+                    {file.title || file.displayName}
+                  </div>
+                  <div className="text-emerald-400 text-xs truncate font-medium">
+                    {file.artist || 'Artista desconhecido'}
+                  </div>
+                  
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {file.bpm && (
+                      <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-xs font-medium">
+                        {file.bpm} BPM
+                      </span>
+                    )}
+                    {file.key && (
+                      <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-xs font-medium">
+                        {file.key}
+                      </span>
+                    )}
+                    {file.genre && (
+                      <span className="bg-zinc-700/50 text-zinc-300 px-2 py-0.5 rounded text-xs">
+                        {file.genre}
+                      </span>
+                    )}
+                  </div>
+                  
+                  {file.label && (
+                    <div className="text-zinc-400 text-xs mt-1 truncate">
+                      {file.label}
+                    </div>
+                  )}
+                </div>
+
+                <button className="flex-shrink-0 w-10 h-10 flex items-center justify-center text-zinc-400 hover:text-emerald-400 transition-colors">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                  </svg>
+                </button>
+              </div>
             </div>
-          ))}
-        </div>
+          ))
+        )}
       </div>
-      
+
+      {/* Lista de arquivos - Layout desktop (cards como mobile) */}
+      <div className="hidden sm:block flex-1 overflow-y-auto space-y-3">
+        {groupedFiles[groupByField]?.length === 0 ? (
+          <div className="text-center py-12">
+            <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
+              <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+              </svg>
+            </div>
+            <p className="text-zinc-400 text-lg font-medium">Nenhuma música encontrada</p>
+            <p className="text-zinc-500 text-sm mt-1">Baixe algumas músicas para começar</p>
+          </div>
+        ) : (
+          groupedFiles[groupByField]?.map((file, index) => (
+            <DynamicFileItem 
+              key={file.name}
+              file={file}
+              isPlaying={playerState.currentFile?.name === file.name}
+              isPlayerPlaying={playerState.isPlaying}
+              onPlay={() => handlePlay(file)}
+              extractDominantColor={extractDominantColor}
+              dominantColors={dominantColors}
+            />
+          ))
+        )}
+      </div>
+
       {showQueue && queue.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <DownloadQueue onClose={() => setShowQueue(false)} />
@@ -921,25 +1386,38 @@ function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
   const menu = (
     <div
       ref={menuRef}
-      className="z-[9999] bg-zinc-900 border border-zinc-700 rounded shadow-lg min-w-[160px] py-1 animate-fade-in"
-      style={{ position: 'absolute', top: menuPosition.top, left: menuPosition.left }}
+      className="z-[9999] backdrop-blur-md border border-emerald-500/20 rounded-lg shadow-xl min-w-[140px] py-1.5 animate-fade-in"
+      style={{ 
+        position: 'absolute', 
+        top: menuPosition.top, 
+        left: menuPosition.left,
+        background: `linear-gradient(135deg, 
+          rgba(16, 185, 129, 0.1) 0%, 
+          rgba(5, 150, 105, 0.15) 30%, 
+          rgba(0, 0, 0, 0.8) 70%, 
+          rgba(15, 23, 42, 0.9) 100%
+        )`,
+        boxShadow: '0 8px 32px rgba(16, 185, 129, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+      }}
     >
       <button
-        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-blue-400"
+        className="w-full text-left px-3 py-2 text-xs hover:bg-emerald-500/10 text-emerald-300 font-medium transition-colors rounded-md mx-1"
         onClick={() => { onUpdate(file.name, 'loading'); setOpen(false); }}
-      >Atualizar</button>
+      >
+        ↻ Atualizar Metadados
+      </button>
       <button
-        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-green-400"
+        className="w-full text-left px-3 py-2 text-xs hover:bg-blue-500/10 text-blue-300 font-medium transition-colors rounded-md mx-1"
         onClick={() => { onEdit(file); setOpen(false); }}
-      >Editar</button>
+      >
+        ✎ Editar
+      </button>
       <button
-        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-purple-400"
-        onClick={() => { window.open(`/api/downloads/${encodeURIComponent(file.name)}`, '_blank'); setOpen(false); }}
-      >Baixar</button>
-      <button
-        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-red-400"
+        className="w-full text-left px-3 py-2 text-xs hover:bg-red-500/10 text-red-300 font-medium transition-colors rounded-md mx-1"
         onClick={async () => { if (window.confirm('Remover este arquivo?')) { await removeFile(file.name, fetchFiles); setOpen(false); } }}
-      >Remover</button>
+      >
+        🗑 Remover
+      </button>
     </div>
   );
 
@@ -947,13 +1425,12 @@ function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
     <div className="relative inline-block">
       <button
         ref={buttonRef}
-        className="p-2 rounded-full hover:bg-zinc-700 transition-colors text-zinc-300 flex items-center justify-center"
+        className="w-8 h-8 rounded-lg hover:bg-emerald-500/10 transition-colors text-zinc-400 hover:text-emerald-400 flex items-center justify-center border border-transparent hover:border-emerald-500/20"
         onClick={() => setOpen((v) => !v)}
         title="Ações"
         type="button"
       >
-        {/* Vertical Dots (Heroicons style) */}
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
           <circle cx="12" cy="6" r="1.5" />
           <circle cx="12" cy="12" r="1.5" />
           <circle cx="12" cy="18" r="1.5" />

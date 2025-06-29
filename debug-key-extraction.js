@@ -20,7 +20,7 @@ async function debugKeyExtraction() {
     console.log(`📦 [Debug] Puppeteer importado com sucesso`);
     
     browser = await puppeteer.default.launch({ 
-      headless: true,
+      headless: false, // Browser visível para debug
       args: [
         '--no-sandbox', 
         '--disable-setuid-sandbox',

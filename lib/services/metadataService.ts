@@ -64,7 +64,7 @@ class BeatportProviderV2 implements MetadataProvider {
       
       console.log(`🔧 [Beatport] Configurando opções do browser...`);
       const browserOptions = { 
-        headless: true,
+        headless: false, // Browser visível para debug
         timeout: 10000,
         protocolTimeout: 15000,
         args: [
@@ -97,8 +97,11 @@ class BeatportProviderV2 implements MetadataProvider {
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
       await page.setViewport({ width: 1920, height: 1080 });
       
+      // Limpar o título para uma busca mais eficaz
+      const cleanedTitle = title.replace(/\s*\(.*?(mix|edit|remix)\)/i, '').trim();
+      
       // Buscar na página de search
-      const searchUrl = `https://www.beatport.com/search?q=${encodeURIComponent(`${artist} ${title}`)}`;
+      const searchUrl = `https://www.beatport.com/search?q=${encodeURIComponent(`${artist} ${cleanedTitle}`)}`;
       await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
       await new Promise(resolve => setTimeout(resolve, 500));
       
@@ -154,19 +157,19 @@ class BeatportProviderV2 implements MetadataProvider {
         console.log(`   ============================================\n`);
         
         return bestMatch;
-      }, title, artist);
+      }, cleanedTitle, artist);
       
       console.log(`🔗 [Beatport] Track URL encontrada: ${trackUrl}`);
       
       if (!trackUrl) {
-        console.log(`❌ [Beatport] Nenhuma URL de track encontrada para "${title}" - "${artist}"`);
+        console.log(`❌ [Beatport] Nenhuma URL de track encontrada para "${cleanedTitle}" - "${artist}"`);
         await browser.close();
         return null;
       }
       
       // LOG da URL encontrada para validação
       console.log(`\n🎯 [Beatport] VALIDAÇÃO DE URL ENCONTRADA:`);
-      console.log(`   🔍 Busca: "${title}" - "${artist}"`);
+      console.log(`   🔍 Busca: "${cleanedTitle}" - "${artist}"`);
       console.log(`   🌐 URL: ${trackUrl}`);
       console.log(`   📋 Copie esta URL para validar manualmente no browser`);
       console.log(`   ======================================================\n`);
@@ -272,7 +275,7 @@ class BeatportProviderV2 implements MetadataProvider {
       
       // LOG DETALHADO DOS METADADOS EXTRAÍDOS
       console.log('[DEBUG NODE] Key extraído:', metadata.key);
-      if (metadata && (metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.artist)) {
+      if (metadata && (metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.artist || metadata.year)) {
         console.log(`\n✅ [Beatport] METADADOS EXTRAÍDOS COM SUCESSO:`);
         console.log(`   🌐 URL Beatport: ${trackUrl}`);
         console.log(`   👨‍🎤 Artist: ${metadata.artist || 'N/A'}`);
@@ -370,7 +373,7 @@ export class MetadataAggregator {
         console.log(`      • Genre: ${aggregated.genre || 'N/A'}`);
         console.log(`      • Label: ${aggregated.label || 'N/A'}`);
         console.log(`      • Year: ${aggregated.year || 'N/A'}`);
-        const hasUsefulData = aggregated.bpm || aggregated.key || aggregated.genre || aggregated.label;
+        const hasUsefulData = aggregated.bpm || aggregated.key || aggregated.genre || aggregated.label || aggregated.year;
         console.log(`   ✨ Metadados úteis encontrados: ${hasUsefulData ? 'SIM' : 'NÃO'}`);
         if (hasUsefulData) {
           console.log('🎉 [MetadataAggregator] BEATPORT FUNCIONOU! Dados obtidos com sucesso!');

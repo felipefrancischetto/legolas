@@ -11,16 +11,16 @@ class BeatportProviderV2Fixed {
   async search(title, artist) {
     const puppeteer = require('puppeteer');
     const browser = await puppeteer.launch({ 
-      headless: true,
+      headless: false, // Browser visível
+      devtools: false,
       args: [
         '--no-sandbox', 
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
         '--disable-web-security',
         '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--disable-gpu',
-        '--window-size=1920,1080'
+        '--window-size=1920,1080',
+        '--start-maximized'
       ]
     });
     
@@ -76,7 +76,9 @@ class BeatportProviderV2Fixed {
       }, title, artist);
       
       if (!trackUrl) {
-        await browser.close();
+        // Browser permanece aberto para debug
+        console.log('🌐 Nenhum track encontrado. Browser mantido aberto para inspeção.');
+        // await browser.close();
         return null;
       }
       

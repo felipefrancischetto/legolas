@@ -5,7 +5,7 @@ import { mkdir, access, unlink, readdir, readFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { constants } from 'fs';
 import NodeID3 from 'node-id3';
-import { sendProgressEvent } from '../download-progress/route';
+import { sendProgressEvent } from '@/lib/utils/progressEventService';
 
 const execAsync = promisify(exec);
 

@@ -180,7 +180,7 @@ class BeatportProviderV2 implements MetadataProvider {
       
       await browser.close();
       
-      if (metadata && (metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.artist)) {
+      if (metadata && (metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.artist || metadata.year)) {
         return metadata;
       }
       
@@ -226,7 +226,7 @@ export class IndividualMetadataAggregator {
           sources: ['BeatportV2']
         };
         
-        const hasUsefulData = aggregated.bpm || aggregated.key || aggregated.genre || aggregated.label;
+        const hasUsefulData = aggregated.bpm || aggregated.key || aggregated.genre || aggregated.label || aggregated.year;
         if (hasUsefulData) {
           return aggregated;
         } else {

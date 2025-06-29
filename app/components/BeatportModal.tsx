@@ -30,40 +30,57 @@ export default function BeatportModal({ isOpen, onClose }: BeatportModalProps) {
     }
   };
 
+  if (!isOpen) return null;
+
   return (
-    <BaseModal
-      isOpen={isOpen}
-      onClose={onClose}
-      title="Importar do Beatport"
-    >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="url" className="block text-sm font-medium text-gray-300 mb-1">
-            URL do Beatport
-          </label>
-          <input
-            type="url"
-            id="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://www.beatport.com/track/..."
-            className="w-full px-4 py-2 rounded-md bg-zinc-800 border border-zinc-700 text-white placeholder-gray-400 focus:border-zinc-600 focus:ring-zinc-600 transition-all duration-200"
-            required
-          />
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 sm:p-2">
+      <div className="bg-zinc-900 rounded-lg p-6 w-full max-w-md shadow-lg relative animate-fade-in sm:p-4 sm:max-w-full sm:mx-2">
+        <div className="flex justify-between items-center mb-4 sm:mb-3">
+          <h2 className="text-xl font-semibold text-white sm:text-lg">Beatport Integration</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-white transition-colors p-1"
+          >
+            <svg className="w-6 h-6 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
-
-        {error && (
-          <div className="text-red-400 text-sm">{error}</div>
-        )}
-
-        <button
-          type="submit"
-          disabled={loading || !url.trim()}
-          className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all font-medium shadow disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? 'Processando...' : 'Importar'}
-        </button>
-      </form>
-    </BaseModal>
+        
+        <div className="space-y-4 sm:space-y-3">
+          <p className="text-gray-300 text-sm sm:text-xs">
+            Conecte sua conta do Beatport para enriquecer automaticamente os metadados das suas músicas.
+          </p>
+          
+          <div className="bg-zinc-800 rounded-lg p-4 sm:p-3">
+            <h3 className="text-white font-medium mb-2 sm:text-sm sm:mb-1">Recursos:</h3>
+            <ul className="text-gray-300 text-sm space-y-1 sm:text-xs">
+              <li>• Metadados completos e precisos</li>
+              <li>• Informações de BPM e key</li>
+              <li>• Dados de gravadora e lançamento</li>
+              <li>• Capas de alta qualidade</li>
+            </ul>
+          </div>
+          
+          <div className="flex gap-3 sm:gap-2 sm:flex-col">
+            <button
+              onClick={onClose}
+              className="flex-1 px-4 py-2 bg-zinc-700 text-white rounded-md hover:bg-zinc-600 transition-colors sm:px-3 sm:py-1.5 sm:text-sm"
+            >
+              Fechar
+            </button>
+            <button
+              onClick={() => {
+                // Implementar conexão com Beatport
+                alert('Recurso em desenvolvimento');
+              }}
+              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors sm:px-3 sm:py-1.5 sm:text-sm"
+            >
+              Conectar
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 } 

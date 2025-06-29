@@ -29,7 +29,7 @@ interface MetadataRequest {
   newFileName?: string;
   
   // Tipo de operação
-  operation?: 'search' | 'update' | 'release' | 'individual';
+  operation?: 'search' | 'update' | 'release' | 'individual' | 'enhance';
 }
 
 export async function POST(request: NextRequest) {
@@ -44,13 +44,16 @@ export async function POST(request: NextRequest) {
         return await handleMetadataSearch(params);
       
       case 'update':
-        return await handleMetadataUpdate(params);
+        return await handleMetadataUpdate(params, request);
       
       case 'release':
         return await handleReleaseMetadata(params);
       
       case 'individual':
         return await handleIndividualMetadata(params);
+      
+      case 'enhance':
+        return await handleMetadataEnhance(params);
       
       default:
         return NextResponse.json({ 
@@ -108,9 +111,8 @@ async function handleMetadataSearch(params: MetadataRequest) {
   const startTime = Date.now();
   
   // Buscar metadados usando o agregador
-  const metadata = await metadataAggregator.searchMetadata(title, artist, { 
-    useBeatport,
-    skipMetadata
+  const metadata = await metadataAggregator.searchMetadata(title, artist || '', { 
+    useBeatport
   });
 
   const duration = Date.now() - startTime;
@@ -126,7 +128,7 @@ async function handleMetadataSearch(params: MetadataRequest) {
   });
 }
 
-async function handleMetadataUpdate(params: MetadataRequest) {
+async function handleMetadataUpdate(params: MetadataRequest, request: NextRequest) {
   const { 
     fileName, title, artist, album, year, genre, label, bpm, key, duration, comment, newFileName 
   } = params;
@@ -312,7 +314,7 @@ async function handleReleaseMetadata(params: MetadataRequest) {
   // Importar puppeteer dinamicamente
   const puppeteer = await import('puppeteer');
   const browser = await puppeteer.default.launch({
-    headless: false,
+            headless: false, // Browser visível para debug
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -537,4 +539,102 @@ async function handleIndividualMetadata(params: MetadataRequest) {
     success: true, 
     metadata 
   });
+}
+
+async function handleMetadataEnhance(params: MetadataRequest) {
+  const { fileName, useBeatport = true } = params;
+  if (!fileName) {
+    return NextResponse.json({ 
+      success: false, 
+      error: 'fileName is required for enhance operation' 
+    }, { status: 400 });
+  }
+
+  const downloadsFolder = await getDownloadsPath();
+  const filePath = join(downloadsFolder, fileName);
+  if (!(await fileExists(filePath))) {
+    return NextResponse.json({ 
+      success: false, 
+      error: 'File not found' 
+    }, { status: 404 });
+  }
+
+  // Tentar extrair título/artista dos metadados atuais
+  let tags: any = {};
+  try {
+    tags = NodeID3.read(filePath);
+  } catch {}
+  const fallbackTitle = tags.title || fileName.replace(/\.flac$/i, '');
+  const fallbackArtist = tags.artist || '';
+
+  // Buscar metadados aprimorados
+  const metadata = await metadataAggregator.searchMetadata(
+    fallbackTitle,
+    fallbackArtist,
+    { useBeatport }
+  );
+
+  // Gravar metadados se encontrados
+  if (metadata && (metadata.title || metadata.artist || metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.year)) {
+    const ext = filePath.split('.').pop()?.toLowerCase();
+    const safeYear = sanitizeYear(metadata.year || '');
+
+    if (ext === 'mp3') {
+      const tags: any = {};
+      if (metadata.title) tags.title = metadata.title;
+      if (metadata.artist) tags.artist = metadata.artist;
+      if (metadata.album) tags.album = metadata.album;
+      if (safeYear) tags.year = safeYear;
+      if (metadata.genre) tags.genre = metadata.genre;
+      if (metadata.label) tags.publisher = metadata.label;
+      if (metadata.bpm) tags.TBPM = metadata.bpm.toString();
+      if (metadata.key) tags.initialKey = metadata.key;
+      if (metadata.duration) tags.length = metadata.duration.toString();
+      tags.comment = { language: 'por', text: `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${metadata.album || 'N/A'} -- Label: ${metadata.label || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}` };
+      const success = NodeID3.write(tags, filePath);
+      if (!success) {
+        return NextResponse.json({ success: false, error: 'Failed to write MP3 metadata' }, { status: 500 });
+      }
+    } else if (ext === 'flac') {
+      // Montar argumentos do ffmpeg
+      const args = ['-y', '-i', filePath];
+      if (metadata.title) args.push('-metadata', `title=${metadata.title}`);
+      if (metadata.artist) args.push('-metadata', `artist=${metadata.artist}`);
+      if (metadata.album) args.push('-metadata', `album=${metadata.album}`);
+      if (safeYear) args.push('-metadata', `date=${safeYear}`);
+      if (metadata.genre) args.push('-metadata', `genre=${metadata.genre}`);
+      if (metadata.label) args.push('-metadata', `publisher=${metadata.label}`);
+      if (metadata.bpm) args.push('-metadata', `bpm=${metadata.bpm}`);
+      if (metadata.key) args.push('-metadata', `key=${metadata.key}`);
+      if (metadata.duration) args.push('-metadata', `duration=${metadata.duration}`);
+      args.push('-metadata', `comment=Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${metadata.album || 'N/A'} -- Label: ${metadata.label || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`);
+      // Arquivo temporário de saída
+      const tmpDir = mkdtempSync(os.tmpdir() + '/flacmeta-');
+      const outPath = `${tmpDir}/out.flac`;
+      args.push('-c', 'copy', outPath);
+      // Executar ffmpeg
+      await new Promise((resolve, reject) => {
+        const ffmpeg = spawn('ffmpeg', args);
+        let stderr = '';
+        ffmpeg.stderr.on('data', (data) => { stderr += data.toString(); });
+        ffmpeg.on('close', (code) => {
+          if (code === 0 && existsSync(outPath)) {
+            try {
+              renameSync(outPath, filePath);
+              resolve(true);
+            } catch (e) {
+              reject(e);
+            }
+          } else {
+            reject(new Error('ffmpeg error: ' + stderr));
+          }
+        });
+      });
+    } else {
+      return NextResponse.json({ success: false, error: 'File format not supported for metadata editing' }, { status: 400 });
+    }
+    return NextResponse.json({ success: true, metadata, message: 'Metadata enhanced and written successfully' });
+  } else {
+    return NextResponse.json({ success: false, error: 'No useful metadata found to enhance' }, { status: 404 });
+  }
 } 

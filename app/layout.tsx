@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, Barrio } from "next/font/google";
 import "./globals.css";
 import { DownloadProvider } from './contexts/DownloadContext';
 import { FileProvider } from './contexts/FileContext';
@@ -7,6 +7,11 @@ import { UIProvider } from './contexts/UIContext';
 import { PlayerProvider } from './contexts/PlayerContext';
 
 const inter = Inter({ subsets: ["latin"] });
+const barrio = Barrio({ 
+  weight: "400",
+  subsets: ["latin"],
+  variable: "--font-barrio"
+});
 
 export const metadata: Metadata = {
   title: "Legolas",
@@ -20,7 +25,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="pt-BR">
-      <body className={inter.className}>
+      <body className={`${inter.className} ${barrio.variable}`}>
         <DownloadProvider>
           <FileProvider>
             <UIProvider>

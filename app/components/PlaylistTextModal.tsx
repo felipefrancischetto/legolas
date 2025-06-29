@@ -54,33 +54,36 @@ export default function PlaylistTextModal({ isOpen, onClose }: PlaylistTextModal
       isOpen={isOpen}
       onClose={onClose}
       title="Importar Playlist"
-      maxWidth="max-w-4xl"
+      maxWidth="max-w-2xl"
     >
-      <div className="flex-1 overflow-y-auto pr-2">
-        <div className="mb-4">
+      <div className="space-y-4 sm:space-y-3">
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2 sm:text-xs sm:mb-1">
+            Cole o texto da playlist aqui:
+          </label>
           <textarea
             value={playlistText}
             onChange={handleTextChange}
-            placeholder="Cole aqui o texto da playlist..."
-            className="w-full h-32 p-3 bg-zinc-800 text-white rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full h-64 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none custom-scroll sm:h-48 sm:px-2 sm:py-1.5 sm:text-sm"
+            placeholder="Cole aqui o texto da playlist com nomes de artistas e músicas..."
           />
         </div>
-
-        {error && (
-          <div className="text-red-400 text-center py-4">{error}</div>
-        )}
-
-        {parsedTracks.length > 0 && (
-          <div className="flex justify-end mb-4">
-            <button
-              onClick={handleDownloadAll}
-              disabled={loading}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? 'Processando...' : 'Baixar Todas'}
-            </button>
-          </div>
-        )}
+        
+        <div className="flex gap-3 sm:gap-2 sm:flex-col">
+          <button
+            onClick={onClose}
+            className="flex-1 px-4 py-2 bg-zinc-700 text-white rounded-md hover:bg-zinc-600 transition-colors sm:px-3 sm:py-1.5 sm:text-sm"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={handleDownloadAll}
+            disabled={loading || !playlistText.trim()}
+            className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors sm:px-3 sm:py-1.5 sm:text-sm"
+          >
+            {loading ? 'Processando...' : 'Baixar Todas'}
+          </button>
+        </div>
       </div>
     </BaseModal>
   );
