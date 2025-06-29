@@ -2,6 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Animações das ondas sonoras */
+@keyframes soundwave-0 {
+  0% { transform: scaleY(0.1); }
+  100% { transform: scaleY(1.3); }
+}
+@keyframes soundwave-1 {
+  0% { transform: scaleY(0.6); }
+  100% { transform: scaleY(0.2); }
+}
+@keyframes soundwave-2 {
+  0% { transform: scaleY(0.9); }
+  100% { transform: scaleY(1.5); }
+}
+@keyframes soundwave-3 {
+  0% { transform: scaleY(0.2); }
+  100% { transform: scaleY(1.1); }
+}
+@keyframes soundwave-4 {
+  0% { transform: scaleY(0.7); }
+  100% { transform: scaleY(0.3); }
+}
+@keyframes soundwave-5 {
+  0% { transform: scaleY(0.3); }
+  100% { transform: scaleY(1.4); }
+}
+
 /* Google Fonts - Barrio */
 .font-barrio {
   font-family: var(--font-barrio);

@@ -7,16 +7,19 @@ import { useFile } from '../contexts/FileContext';
 import { usePlayer } from '../contexts/PlayerContext';
 import DownloadQueue from './DownloadQueue';
 import DownloadStatusIndicator from './DownloadStatusIndicator';
+import PlaylistTextModal from './PlaylistTextModal';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faFolderOpen } from '@fortawesome/free-solid-svg-icons';
 import { getThumbnailUrl } from '../utils/thumbnailCache';
 import { getCachedDominantColor } from '../utils/colorExtractor';
+import { useSettings } from '../hooks/useSettings';
 
 interface DownloadFormProps {
   minimized: boolean;
   setMinimized: (minimized: boolean) => void;
   showQueue: boolean;
   setShowQueue: (showQueue: boolean) => void;
+  setSettingsModalOpen: (open: boolean) => void;
 }
 
 interface VideoInfo {
@@ -35,13 +38,14 @@ interface VideoInfo {
   }>;
 }
 
-export default function DownloadForm({ minimized, setMinimized, showQueue, setShowQueue }: DownloadFormProps) {
+export default function DownloadForm({ minimized, setMinimized, showQueue, setShowQueue, setSettingsModalOpen }: DownloadFormProps) {
   const [url, setUrl] = useState('');
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [selectedTracks, setSelectedTracks] = useState<number[]>([]);
   const [format, setFormat] = useState('flac');
   const [enrichWithBeatport, setEnrichWithBeatport] = useState(true); // Sempre ativo por padrão
   const [currentDownloadId, setCurrentDownloadId] = useState<string | null>(null);
+  const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const [themeColors, setThemeColors] = useState({
     primary: 'rgb(16, 185, 129)',
     primaryLight: 'rgba(16, 185, 129, 0.9)',
@@ -61,14 +65,27 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
   } = useDownload();
   const { selectDownloadsFolder } = useFile();
   const { playerState } = usePlayer();
+  const { settings } = useSettings();
 
   // Obter dados do download atual
   const currentDownload = currentDownloadId ? getCurrentDownload(currentDownloadId) : null;
   const playlistProgressData = currentDownloadId ? getPlaylistProgressData(currentDownloadId) : null;
 
-  // Extrair cores do tema baseadas na música atual
+  // Extrair cores do tema baseadas na música atual (respeitando configurações)
   useEffect(() => {
     const extractThemeColors = async () => {
+      // Usar cores padrão se cores dinâmicas estiverem desabilitadas
+      if (settings.disableDynamicColors) {
+        setThemeColors({
+          primary: 'rgb(16, 185, 129)',
+          primaryLight: 'rgba(16, 185, 129, 0.9)',
+          primaryDark: 'rgba(16, 185, 129, 0.7)',
+          background: 'rgba(16, 185, 129, 0.15)',
+          border: 'rgba(16, 185, 129, 0.4)'
+        });
+        return;
+      }
+
       if (playerState.currentFile) {
         try {
           const thumbnailUrl = getThumbnailUrl(playerState.currentFile.name);
@@ -83,12 +100,19 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         } catch (error) {
           console.warn('Erro ao extrair cores do tema:', error);
           // Manter cores padrão em caso de erro
+          setThemeColors({
+            primary: 'rgb(16, 185, 129)',
+            primaryLight: 'rgba(16, 185, 129, 0.9)',
+            primaryDark: 'rgba(16, 185, 129, 0.7)',
+            background: 'rgba(16, 185, 129, 0.15)',
+            border: 'rgba(16, 185, 129, 0.4)'
+          });
         }
       }
     };
 
     extractThemeColors();
-  }, [playerState.currentFile?.name]);
+  }, [playerState.currentFile?.name, settings.disableDynamicColors]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -234,7 +258,7 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
     <div className="w-full mx-auto transition-all duration-300">
       {/* Status de download usando dados do contexto */}
       {currentDownload && (
-        <div className="mb-6">
+        <div className="mb-3">
           <DownloadStatusIndicator
             type={currentDownload.isPlaylist ? 'playlist' : 'individual'}
             status={currentDownload.status}
@@ -287,14 +311,17 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         }}
       >
         {/* Header com controles de minimizar */}
-        <div className="flex items-center justify-between p-4 md:p-3 sm:p-2 border-b border-white/10">
+        <div className="flex items-center justify-between p-3 md:p-2 sm:p-2 border-b border-white/10">
           <div className="flex items-center gap-3 md:gap-2">
-            <div 
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: themeColors.primary }}
+            <Image
+              src="/legolas_thumb.png"
+              alt="Legolas"
+              width={24}
+              height={24}
+              className="object-contain w-6 h-6 md:w-5 md:h-5 sm:w-4 sm:h-4"
             />
-            <h3 className="text-lg font-semibold text-white md:text-base sm:text-sm">
-              Motor de Download
+            <h3 className="text-lg font-semibold bg-gradient-to-r from-white via-gray-200 to-emerald-200 bg-clip-text text-transparent md:text-base sm:text-sm">
+              Legolas
             </h3>
             {videoInfo && (
               <span 
@@ -308,8 +335,39 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
               </span>
             )}
           </div>
-          
+
           <div className="flex items-center gap-2">
+            <button
+              className="rounded-full p-2 transition-all duration-200 hover:scale-105" 
+              onClick={() => setSettingsModalOpen(true)}
+              aria-label="Configurações"
+              type="button"
+              style={{
+                backgroundColor: themeColors.background,
+                color: themeColors.primary,
+                border: `1px solid ${themeColors.border}`
+              }}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+            <button
+              className="rounded-full p-2 transition-all duration-200 hover:scale-105" 
+              onClick={() => setShowPlaylistModal(true)}
+              aria-label="Importar playlist"
+              type="button"
+              style={{
+                backgroundColor: themeColors.background,
+                color: themeColors.primary,
+                border: `1px solid ${themeColors.border}`
+              }}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </button>
             <button
               className="rounded-full p-2 transition-all duration-200 hover:scale-105" 
               onClick={() => setShowQueue(!showQueue)}
@@ -350,8 +408,8 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         </div>
 
         {/* Formulário principal */}
-        <div className={`transition-all duration-300 ${minimized ? 'h-0 overflow-hidden' : 'p-6 md:p-4 sm:p-3'}`}>
-          <form onSubmit={handleSubmit} className="space-y-6 md:space-y-4 sm:space-y-3">
+        <div className={`transition-all duration-300 ${minimized ? 'h-0 overflow-hidden' : 'p-4 md:p-3 sm:p-2'}`}>
+          <form onSubmit={handleSubmit} className="space-y-4 md:space-y-3 sm:space-y-2">
             {/* Linha principal - URL e controles */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-3 sm:gap-2">
               {/* Campo URL */}
@@ -481,12 +539,12 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
 
       {/* Preview do vídeo/playlist */}
       {videoInfo && !minimized && (
-        <div className="mt-4 rounded-xl border border-white/10 overflow-hidden backdrop-blur-sm"
+        <div className="mt-2 rounded-xl border border-white/10 overflow-hidden backdrop-blur-sm"
           style={{
             background: 'linear-gradient(135deg, rgba(39, 39, 42, 0.6) 0%, rgba(24, 24, 27, 0.7) 100%)'
           }}
         >
-          <div className="p-4 md:p-3 sm:p-2">
+          <div className="p-3 md:p-2 sm:p-2">
             <div className="flex items-start gap-4 md:gap-3 sm:gap-2">
               {videoInfo.thumbnail && (
                 <Image
@@ -512,6 +570,13 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
           </div>
         </div>
       )}
+
+      {/* Modal de Importar Playlist */}
+      <PlaylistTextModal
+        isOpen={showPlaylistModal}
+        onClose={() => setShowPlaylistModal(false)}
+        themeColors={themeColors}
+      />
     </div>
   );
 } 

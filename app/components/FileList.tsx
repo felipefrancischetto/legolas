@@ -9,6 +9,8 @@ import { useUI } from '../contexts/UIContext';
 import { usePlayer } from '../contexts/PlayerContext';
 import { getThumbnailUrl } from '../utils/thumbnailCache';
 import { getCachedDominantColor } from '../utils/colorExtractor';
+import { useSettings } from '../hooks/useSettings';
+import SoundWave from './SoundWave';
 import ReactDOM from 'react-dom';
 
 interface FileInfo {
@@ -65,8 +67,8 @@ const ThumbnailImage = memo(({ file, fileExists }: { file: FileInfo, fileExists:
       <Image
         src={thumbnailUrl}
         alt={file.title || file.displayName}
-        width={48}
-        height={48}
+        width={36}
+        height={36}
         className="object-cover w-full h-full rounded"
         onError={() => setError(true)}
         loading="lazy"
@@ -149,20 +151,21 @@ const FileRow = memo(({
   return (
     <div
       key={file.path}
-      className={`flex items-center hover:bg-zinc-700/50 transition-all duration-200 group w-full h-[80px] animate-fade-in text-xs cursor-pointer ${isPlaying ? 'ring-2 ring-blue-400 bg-blue-900/20' : ''}`}
+      className={`flex items-center hover:bg-zinc-700/50 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs cursor-pointer ${isPlaying ? 'ring-2 ring-blue-400 bg-blue-900/20' : ''}`}
       style={{ 
-        minHeight: 80, 
-        margin: '4px 0px',
+        minHeight: 50, 
+        margin: '2px 0px',
         background: isPlaying ? 'rgba(59, 130, 246, 0.2)' : dominantColor,
         backdropFilter: 'blur(8px)',
-        border: `1px solid ${dominantColor.replace('0.15', '0.3')}`
+        border: `1px solid ${dominantColor.replace('0.15', '0.3')}`,
+        borderRadius: '6px'
       }}
       onClick={e => onContextMenu(e, file)}
     >
       {/* Primeira coluna: check sutil se completo */}
-      <div style={{ width: 18, minWidth: 18 }} className="flex items-center justify-center h-12 px-0">
+      <div style={{ width: 18, minWidth: 18 }} className="flex items-center justify-center h-full px-0">
         {isComplete && (
-          <svg className="w-4 h-4 text-green-400 opacity-60" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <svg className="w-3 h-3 text-green-400 opacity-60" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
         )}
@@ -176,40 +179,40 @@ const FileRow = memo(({
               <div className="flex items-center overflow-hidden">
                 <button
                   onClick={(e) => { e.stopPropagation(); onPlay(file); }}
-                  className="w-12 h-12 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110 mr-2 sm:w-8 sm:h-8"
-                  style={{ margin: '4px' }}
+                  className="w-9 h-9 flex-shrink-0 bg-zinc-700 rounded overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-105 mr-2"
+                  style={{ margin: '2px' }}
                 >
                   <ThumbnailImage file={file} fileExists={fileExists} />
                   <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M8 5v14l11-7z" />
                     </svg>
                   </div>
                 </button>
-                <span className="font-bold text-white truncate block max-w-full break-words sm:text-xs">{file.title || file.displayName}</span>
+                <span className="font-semibold text-white truncate block max-w-full break-words text-sm leading-tight">{file.title || file.displayName}</span>
               </div>
             );
             break;
           case 'artist':
-            content = <span className="text-xs text-blue-400 truncate block max-w-full break-words sm:text-xs">{file.artist || '-'}</span>;
+            content = <span className="text-sm text-blue-400 truncate block max-w-full break-words font-medium leading-tight">{file.artist || '-'}</span>;
             break;
           case 'label':
-            content = <span className="truncate block max-w-full" title={file.label || ''}>{file.label || '-'}</span>;
+            content = <span className="text-xs truncate block max-w-full leading-tight" title={file.label || ''}>{file.label || '-'}</span>;
             break;
           case 'album':
-            content = <span className="text-xs text-gray-400 truncate block max-w-full" title={ file.album || ''}>{file.album || file.album || ''}</span>;
+            content = <span className="text-xs text-gray-400 truncate block max-w-full leading-tight" title={ file.album || ''}>{file.album || file.album || ''}</span>;
             break;
           case 'genre':
-            content = <span className="truncate block max-w-full" title={file.genre || ''}>{file.genre || '-'}</span>;
+            content = <span className="text-xs truncate block max-w-full leading-tight" title={file.genre || ''}>{file.genre || '-'}</span>;
             break;
           case 'bpm':
-            content = <span className="text-xs text-gray-400 truncate block max-w-full">{file.bpm ? `${file.bpm}` : '-'}</span>;
+            content = <span className="text-xs text-gray-400 truncate block max-w-full leading-tight font-mono">{file.bpm ? `${file.bpm}` : '-'}</span>;
             break;
           case 'key':
-            content = <span className="text-xs text-gray-400 truncate block max-w-full">{file.key || '-'}</span>;
+            content = <span className="text-xs text-gray-400 truncate block max-w-full leading-tight font-mono">{file.key || '-'}</span>;
             break;
           case 'ano':
-            content = <span className="truncate block max-w-full">{file.ano ? String(file.ano).slice(0, 4) : '-'}</span>;
+            content = <span className="text-xs truncate block max-w-full leading-tight">{file.ano ? String(file.ano).slice(0, 4) : '-'}</span>;
             break;
           case 'acoes':
             content = (
@@ -225,7 +228,7 @@ const FileRow = memo(({
             content = null;
         }
         return (
-          <div key={col.key} style={{ width: col.width, minWidth: col.width }} className="px-2 flex items-center h-12 justify-start text-left overflow-hidden whitespace-nowrap text-ellipsis">
+          <div key={col.key} style={{ width: col.width, minWidth: col.width }} className="px-2 flex items-center h-full justify-start text-left overflow-hidden whitespace-nowrap text-ellipsis">
             {content}
           </div>
         );
@@ -296,7 +299,7 @@ function DynamicFileItem({
 
   return (
     <div
-      className="backdrop-blur-md border rounded-lg p-3 transition-all duration-300 cursor-pointer hover:shadow-lg"
+      className="backdrop-blur-md border rounded-lg p-2 transition-all duration-300 cursor-pointer hover:shadow-lg h-[50px] flex items-center"
       onClick={onPlay}
       style={{
         borderColor: itemColor.rgba(isPlaying ? 0.6 : 0.3),
@@ -318,24 +321,25 @@ function DynamicFileItem({
           : `0 4px 16px ${itemColor.rgba(0.08)}, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
       }}
     >
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3 w-full">
         <div className="relative flex-shrink-0">
           <Image
             src={getThumbnailUrl(file.name)}
             alt={file.title || file.displayName}
-            width={56}
-            height={56}
-            className="object-cover w-14 h-14 bg-zinc-800 rounded-lg border border-zinc-700/50 shadow-lg"
+            width={36}
+            height={36}
+            className="object-cover w-9 h-9 bg-zinc-800 rounded border border-zinc-700/50"
           />
           {isPlaying && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-lg backdrop-blur-sm">
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded backdrop-blur-sm">
               {isPlayerPlaying ? (
-                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24" style={{ color: `rgb(${itemColor.rgb})` }}>
-                  <rect x="7" y="6" width="3" height="12" rx="1" />
-                  <rect x="14" y="6" width="3" height="12" rx="1" />
-                </svg>
+                <SoundWave 
+                  color={`rgb(${itemColor.rgb})`}
+                  size="small"
+                  isPlaying={true}
+                />
               ) : (
-                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24" style={{ color: `rgb(${itemColor.rgb})` }}>
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" style={{ color: `rgb(${itemColor.rgb})` }}>
                   <polygon points="8,5 19,12 8,19" />
                 </svg>
               )}
@@ -344,63 +348,48 @@ function DynamicFileItem({
         </div>
         
         <div className="flex-1 min-w-0">
-          <div className="text-white font-bold text-base leading-tight truncate">
+          <div className="text-white font-semibold text-sm leading-tight truncate">
             {file.title || file.displayName}
           </div>
-          <div className="text-sm truncate font-medium" style={{ color: `rgb(${itemColor.rgb})` }}>
+          <div className="text-xs truncate font-medium leading-tight" style={{ color: `rgb(${itemColor.rgb})` }}>
             {file.artist || 'Artista desconhecido'}
           </div>
-          
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {file.bpm && (
-              <span 
-                className="px-2 py-0.5 rounded text-xs font-bold border backdrop-blur-sm"
-                style={{ 
-                  backgroundColor: itemColor.rgba(0.25),
-                  color: `rgb(${itemColor.rgb})`,
-                  borderColor: itemColor.rgba(0.2)
-                }}
-              >
-                {file.bpm} BPM
-              </span>
-            )}
-            {file.key && (
-              <span 
-                className="px-2 py-0.5 rounded text-xs font-bold border backdrop-blur-sm"
-                style={{ 
-                  backgroundColor: itemColor.rgba(0.25),
-                  color: `rgb(${itemColor.rgb})`,
-                  borderColor: itemColor.rgba(0.2)
-                }}
-              >
-                {file.key}
-              </span>
-            )}
-            {file.genre && (
-              <span className="bg-white/10 text-zinc-200 px-2 py-0.5 rounded text-xs font-medium border border-white/15 backdrop-blur-sm">
-                {file.genre}
-              </span>
-            )}
-            {(file as any).ano && (
-              <span className="bg-blue-500/20 text-blue-200 px-2 py-0.5 rounded text-xs font-medium border border-blue-400/20 backdrop-blur-sm">
-                {String((file as any).ano).slice(0, 4)}
-              </span>
-            )}
-          </div>
-          
-          {(file.label || file.album) && (
-            <div className="flex flex-wrap gap-1.5 mt-1.5">
-              {file.label && (
-                <span className="text-zinc-300 text-xs bg-white/8 px-2 py-0.5 rounded border border-white/10 backdrop-blur-sm">
-                  {file.label}
-                </span>
-              )}
-              {file.album && (
-                <span className="text-zinc-200 text-xs bg-white/10 px-2 py-0.5 rounded border border-white/15 backdrop-blur-sm">
-                  {file.album}
-                </span>
-              )}
-            </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {file.bpm && (
+            <span 
+              className="px-1.5 py-0.5 rounded text-xs font-bold border backdrop-blur-sm"
+              style={{ 
+                backgroundColor: itemColor.rgba(0.25),
+                color: `rgb(${itemColor.rgb})`,
+                borderColor: itemColor.rgba(0.2)
+              }}
+            >
+              {file.bpm}
+            </span>
+          )}
+          {file.key && (
+            <span 
+              className="px-1.5 py-0.5 rounded text-xs font-bold border backdrop-blur-sm"
+              style={{ 
+                backgroundColor: itemColor.rgba(0.25),
+                color: `rgb(${itemColor.rgb})`,
+                borderColor: itemColor.rgba(0.2)
+              }}
+            >
+              {file.key}
+            </span>
+          )}
+          {file.genre && (
+            <span className="bg-white/10 text-zinc-200 px-1.5 py-0.5 rounded text-xs font-medium border border-white/15 backdrop-blur-sm max-w-[80px] truncate">
+              {file.genre}
+            </span>
+          )}
+          {(file as any).ano && (
+            <span className="bg-blue-500/20 text-blue-200 px-1.5 py-0.5 rounded text-xs font-medium border border-blue-400/20 backdrop-blur-sm">
+              {String((file as any).ano).slice(0, 4)}
+            </span>
           )}
         </div>
 
@@ -455,6 +444,7 @@ export default function FileList() {
 
   const { play, resume, playerState } = usePlayer();
   const { queue, updateQueueItem } = useDownload();
+  const { settings } = useSettings();
   const resizingCol = useRef<number | null>(null);
   const startX = useRef<number>(0);
   const startWidth = useRef<number>(0);
@@ -637,8 +627,14 @@ export default function FileList() {
   const [dominantColors, setDominantColors] = useState<{ [fileName: string]: { rgb: string, rgba: (opacity: number) => string } }>({});
   const [mobileActionMenus, setMobileActionMenus] = useState<{ [fileName: string]: boolean }>({});
 
-  // Função para extrair cor dominante
+  // Função para extrair cor dominante (respeitando configurações)
   const extractDominantColor = useCallback(async (fileName: string, imageUrl: string) => {
+    // Usar cor padrão se cores dinâmicas estiverem desabilitadas
+    if (settings.disableDynamicColors) {
+      const fallbackColor = { rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` };
+      return fallbackColor;
+    }
+
     if (dominantColors[fileName]) return dominantColors[fileName];
 
     // Verificar se estamos no cliente
@@ -720,7 +716,7 @@ export default function FileList() {
       setDominantColors(prev => ({ ...prev, [fileName]: fallbackColor }));
       return fallbackColor;
     }
-  }, [dominantColors]);
+  }, [dominantColors, settings.disableDynamicColors]);
 
   // Função para ajustar cor para melhor contraste na UI
   const adjustColorForUI = (r: number, g: number, b: number): string => {
@@ -1170,7 +1166,7 @@ export default function FileList() {
         </div>
 
       {/* Lista de arquivos - Layout mobile (cards) */}
-      <div className="block sm:hidden flex-1 overflow-y-auto space-y-3">
+      <div className="block sm:hidden flex-1 overflow-y-auto space-y-1">
         {Object.keys(groupedFiles).length === 0 || Object.values(groupedFiles).every(group => group.length === 0) ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
@@ -1183,14 +1179,14 @@ export default function FileList() {
           </div>
         ) : (
           Object.entries(groupedFiles).map(([groupName, groupFiles]) => (
-            <div key={groupName} className="space-y-3">
+            <div key={groupName} className="space-y-1">
               {/* Cabeçalho do grupo (se houver agrupamento) */}
               {groupByField && groupName !== '' && (
-                <div className="sticky top-0 z-10 bg-black/40 backdrop-blur-sm rounded-lg p-3 border border-white/10">
-                  <h3 className="text-lg font-semibold text-white">
+                <div className="sticky top-0 z-10 bg-black/40 backdrop-blur-sm rounded-lg p-2 border border-white/10 mb-1">
+                  <h3 className="text-base font-semibold text-white">
                     {groupableFields.find(f => f.value === groupByField)?.label}: {groupName}
                   </h3>
-                  <p className="text-sm text-zinc-400">
+                  <p className="text-xs text-zinc-400">
                     {groupFiles.length} {groupFiles.length === 1 ? 'música' : 'músicas'}
                   </p>
                 </div>
@@ -1200,7 +1196,7 @@ export default function FileList() {
               {groupFiles.map((file, index) => (
                 <div
                   key={file.name}
-                  className={`glass-card backdrop-blur-sm border border-emerald-500/20 hover:border-emerald-500/40 rounded-lg p-3 transition-all duration-300 cursor-pointer hover:shadow-lg hover:shadow-emerald-500/20 ${
+                  className={`glass-card backdrop-blur-sm border border-emerald-500/20 hover:border-emerald-500/40 rounded-lg p-2 transition-all duration-300 cursor-pointer hover:shadow-lg hover:shadow-emerald-500/20 h-[50px] flex items-center ${
                     playerState.currentFile?.name === file.name ? 'border-emerald-500/60 bg-emerald-500/10' : ''
                   }`}
                   onClick={() => handlePlay(file)}
@@ -1213,24 +1209,25 @@ export default function FileList() {
                     boxShadow: '0 4px 12px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
                   }}
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 w-full">
                     <div className="relative flex-shrink-0">
                       <Image
                         src={getThumbnailUrl(file.name)}
                         alt={file.title || file.displayName}
-                        width={48}
-                        height={48}
-                        className="object-cover w-12 h-12 bg-zinc-800 rounded-lg border border-zinc-700/50"
+                        width={36}
+                        height={36}
+                        className="object-cover w-9 h-9 bg-zinc-800 rounded border border-zinc-700/50"
                       />
                       {playerState.currentFile?.name === file.name && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-xl">
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded">
                           {playerState.isPlaying ? (
-                            <svg className="w-6 h-6 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
-                              <rect x="7" y="6" width="3" height="12" rx="1" />
-                              <rect x="14" y="6" width="3" height="12" rx="1" />
-                            </svg>
+                            <SoundWave 
+                              color="rgb(16, 185, 129)"
+                              size="small"
+                              isPlaying={true}
+                            />
                           ) : (
-                            <svg className="w-6 h-6 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
+                            <svg className="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
                               <polygon points="8,5 19,12 8,19" />
                             </svg>
                           )}
@@ -1239,44 +1236,40 @@ export default function FileList() {
                     </div>
                     
                     <div className="flex-1 min-w-0">
-                      <div className="text-white font-bold text-sm leading-tight truncate">
+                      <div className="text-white font-semibold text-sm leading-tight truncate">
                         {file.title || file.displayName}
                       </div>
-                      <div className="text-emerald-400 text-xs truncate font-medium">
+                      <div className="text-emerald-400 text-xs truncate font-medium leading-tight">
                         {file.artist || 'Artista desconhecido'}
                       </div>
-                      
-                      <div className="flex flex-wrap gap-1.5 mt-1.5">
-                        {file.bpm && (
-                          <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-xs font-medium">
-                            {file.bpm} BPM
-                          </span>
-                        )}
-                        {file.key && (
-                          <span className="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-xs font-medium">
-                            {file.key}
-                          </span>
-                        )}
-                        {file.genre && (
-                          <span className="bg-zinc-700/50 text-zinc-300 px-2 py-0.5 rounded text-xs">
-                            {file.genre}
-                          </span>
-                        )}
-                      </div>
-                      
-                      {file.label && (
-                        <div className="text-zinc-400 text-xs mt-1 truncate">
-                          {file.label}
-                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {file.bpm && (
+                        <span className="bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded text-xs font-medium">
+                          {file.bpm}
+                        </span>
+                      )}
+                      {file.key && (
+                        <span className="bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded text-xs font-medium">
+                          {file.key}
+                        </span>
+                      )}
+                      {file.genre && (
+                        <span className="bg-zinc-700/50 text-zinc-300 px-1.5 py-0.5 rounded text-xs max-w-[60px] truncate">
+                          {file.genre}
+                        </span>
                       )}
                     </div>
 
-                    <MobileActionMenu 
-                      file={file}
-                      onUpdate={updateMetadataForFile}
-                      onEdit={setEditModalFile}
-                      fetchFiles={fetchFiles}
-                    />
+                    <div className="flex-shrink-0 ml-2">
+                      <MobileActionMenu 
+                        file={file}
+                        onUpdate={updateMetadataForFile}
+                        onEdit={setEditModalFile}
+                        fetchFiles={fetchFiles}
+                      />
+                    </div>
                   </div>
                 </div>
               ))}
@@ -1286,7 +1279,7 @@ export default function FileList() {
       </div>
 
       {/* Lista de arquivos - Layout desktop (cards como mobile) */}
-      <div className="hidden sm:block flex-1 overflow-y-auto space-y-3">
+      <div className="hidden sm:block flex-1 overflow-y-auto space-y-1">
         {Object.keys(groupedFiles).length === 0 || Object.values(groupedFiles).every(group => group.length === 0) ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
@@ -1299,14 +1292,14 @@ export default function FileList() {
           </div>
         ) : (
           Object.entries(groupedFiles).map(([groupName, groupFiles]) => (
-            <div key={groupName} className="space-y-3">
+            <div key={groupName} className="space-y-1">
               {/* Cabeçalho do grupo (se houver agrupamento) */}
               {groupByField && groupName !== '' && (
-                <div className="sticky top-0 z-10 bg-black/40 backdrop-blur-sm rounded-lg p-3 border border-white/10">
-                  <h3 className="text-lg font-semibold text-white">
+                <div className="sticky top-0 z-10 bg-black/40 backdrop-blur-sm rounded-lg p-2 border border-white/10 mb-1">
+                  <h3 className="text-base font-semibold text-white">
                     {groupableFields.find(f => f.value === groupByField)?.label}: {groupName}
                   </h3>
-                  <p className="text-sm text-zinc-400">
+                  <p className="text-xs text-zinc-400">
                     {groupFiles.length} {groupFiles.length === 1 ? 'música' : 'músicas'}
                   </p>
                 </div>
