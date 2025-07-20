@@ -25,15 +25,14 @@ export default function Home() {
   const [downloadFormMinimized, setDownloadFormMinimized] = useState(true);
   const [showQueue, setShowQueue] = useState(false);
   
-  console.log('🎵 [Page] playerOpen:', playerOpen);
+      // Player open state updated
   
   return (
     <div className="min-h-screen bg-black text-white overflow-hidden">
       <div className="flex flex-col h-screen">
 
-
         {/* Motor de busca/download - fixo no topo */}
-        <div className="flex-shrink-0 max-w-7xl mx-auto w-full px-6 pt-3 md:px-4 md:pt-2 sm:px-3 sm:pt-1">
+        <div className="flex-shrink-0 mx-auto w-full">
           <DownloadForm 
             minimized={downloadFormMinimized} 
             setMinimized={setDownloadFormMinimized}
@@ -44,7 +43,7 @@ export default function Home() {
         </div>
 
         {/* Container da lista de arquivos */}
-        <div className="flex-1 min-h-0 max-w-7xl mx-auto w-full px-6 pt-1 md:px-4 md:pt-1 sm:px-3 sm:pt-0">
+        <div className="flex-1 min-h-0 max-w-7xl mx-auto w-full px-6 md:px-4 sm:px-3">
           <div className="h-full overflow-hidden">
             <FileList />
           </div>

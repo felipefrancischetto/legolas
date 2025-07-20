@@ -584,12 +584,30 @@ export class PlaylistDownloadService {
     cleanArtist = cleanArtistName(cleanArtist);
     logger.info(`[DEBUG] cleanTitle: ${cleanTitle}, cleanArtist: ${cleanArtist}`);
 
-    // NOVO: Normalizar para padrão 'Artista - Título' antes de buscar metadados
+    // **MELHORADO: Normalizar para padrão 'Artista - Título' antes de buscar metadados**
     function extractArtistAndTitle(str: string) {
-      const match = str.match(/^(.+?)\s*-\s*(.+)$/);
-      if (match) {
-        return { artist: match[1].trim(), title: match[2].trim() };
+      // Padrão "Artist - Title"
+      const dashMatch = str.match(/^(.+?)\s*-\s*(.+)$/);
+      if (dashMatch) {
+        return { artist: dashMatch[1].trim(), title: dashMatch[2].trim() };
       }
+      
+      // Padrão "Title feat. Artist"
+      const featMatch = str.match(/(.+?)\s+(?:feat\.?|featuring|ft\.?|by)\s+(.+?)(?:\s*\(|$)/i);
+      if (featMatch) {
+        return { artist: featMatch[2].trim(), title: featMatch[1].trim() };
+      }
+      
+      // Padrão "Title (Artist)"
+      const parenMatch = str.match(/(.+?)\s*\(([^)]+?)\)$/);
+      if (parenMatch) {
+        const possibleArtist = parenMatch[2].trim();
+        // Verificar se não é um tipo de mix/edit
+        if (!/(remix|edit|mix|version|vocal|dub|bootleg|rework|extended|club|radio|original)/i.test(possibleArtist)) {
+          return { artist: possibleArtist, title: parenMatch[1].trim() };
+        }
+      }
+      
       return { artist: '', title: str };
     }
 
@@ -600,36 +618,77 @@ export class PlaylistDownloadService {
     if (extracted.artist && extracted.title) {
       normArtist = extracted.artist;
       normTitle = extracted.title;
+      logger.info(`[DEBUG] Extraído do título: artist='${normArtist}', title='${normTitle}'`);
+    } else {
+      logger.info(`[DEBUG] Usando dados originais: artist='${normArtist}', title='${normTitle}'`);
     }
 
-    logger.info(`[DEBUG] Normalized for metadata search: artist='${normArtist}', title='${normTitle}'`);
-
-    // Buscar metadados usando padrão normalizado
-    const metadata = await metadataAggregator.searchMetadata(
-      normTitle,
-      normArtist,
-      { useBeatport }
-    );
+    // **MELHORADO: Tentar múltiplas variações de busca**
+    let metadata = null;
+    
+    // Primeira tentativa: com dados normalizados
+    if (normArtist && normTitle) {
+      logger.info(`[DEBUG] Tentativa 1: Buscando com dados normalizados`);
+      metadata = await metadataAggregator.searchMetadata(
+        normTitle,
+        normArtist,
+        { useBeatport }
+      );
+    }
+    
+    // Segunda tentativa: se não encontrou, tentar com dados originais
+    if (!metadata || (!metadata.bpm && !metadata.key && !metadata.genre && !metadata.label)) {
+      logger.info(`[DEBUG] Tentativa 2: Buscando com dados originais`);
+      const originalMetadata = await metadataAggregator.searchMetadata(
+        cleanTitle,
+        cleanArtist,
+        { useBeatport }
+      );
+      
+      // Mesclar resultados se necessário
+      if (originalMetadata && (originalMetadata.bpm || originalMetadata.key || originalMetadata.genre || originalMetadata.label)) {
+        metadata = { ...metadata, ...originalMetadata };
+        logger.info(`[DEBUG] Dados originais forneceram metadados adicionais`);
+      }
+    }
+    
+    // Terceira tentativa: limpar ainda mais o título (remover versões)
+    if (!metadata || (!metadata.bpm && !metadata.key && !metadata.genre && !metadata.label)) {
+      const strippedTitle = normTitle.replace(/\s*\([^)]*\)/g, '').trim();
+      if (strippedTitle !== normTitle) {
+        logger.info(`[DEBUG] Tentativa 3: Buscando com título limpo: '${strippedTitle}'`);
+        const strippedMetadata = await metadataAggregator.searchMetadata(
+          strippedTitle,
+          normArtist,
+          { useBeatport }
+        );
+        
+        if (strippedMetadata && (strippedMetadata.bpm || strippedMetadata.key || strippedMetadata.genre || strippedMetadata.label)) {
+          metadata = { ...metadata, ...strippedMetadata };
+          logger.info(`[DEBUG] Título limpo forneceu metadados adicionais`);
+        }
+      }
+    }
     logger.info(`[DEBUG] metadataAggregator.searchMetadata retornou: ${JSON.stringify(metadata)}`);
 
     // Check if we got useful enhanced data
-    const hasEnhancedData = metadata.bpm || metadata.key || metadata.label || 
-                           metadata.genre || metadata.album || metadata.artist || metadata.year;
+    const hasEnhancedData = metadata && (metadata.bpm || metadata.key || metadata.label || 
+                           metadata.genre || metadata.album || metadata.artist || metadata.year);
 
     if (!hasEnhancedData) {
       logger.warn(`[DEBUG] No enhanced metadata found for: ${normTitle} - ${normArtist}`);
       return { success: false, fromBeatport: false };
     }
 
-    const fromBeatport = metadata.sources?.includes('Beatport') || false;
+    const fromBeatport = metadata?.sources?.includes('Beatport') || false;
 
     // Usar artista/título do Beatport se disponíveis
-    let finalArtist = metadata.artist || normArtist || artist;
-    let finalTitle = metadata.title || normTitle;
+    let finalArtist = metadata?.artist || normArtist || artist;
+    let finalTitle = metadata?.title || normTitle;
     finalArtist = cleanArtistName(finalArtist);
     finalTitle = finalTitle.trim();
-    logger.info(`[DEBUG] Final artist determined: "${finalArtist}" (from Beatport: ${!!metadata.artist})`);
-    logger.info(`[DEBUG] Final title determined: "${finalTitle}" (from Beatport: ${!!metadata.title})`);
+    logger.info(`[DEBUG] Final artist determined: "${finalArtist}" (from Beatport: ${!!metadata?.artist})`);
+    logger.info(`[DEBUG] Final title determined: "${finalTitle}" (from Beatport: ${!!metadata?.title})`);
 
     // Evitar duplicidade de sufixos/remix/version
     function removeDuplicateSuffix(title: string) {
@@ -650,7 +709,7 @@ export class PlaylistDownloadService {
     if (version && !finalTitle.endsWith(`(${version})`)) {
       fileBase += ` (${version})`;
     }
-    if (metadata.label) {
+    if (metadata?.label) {
       const deduplicatedLabel = deduplicateLabel(metadata.label);
       if (deduplicatedLabel) {
         fileBase += ` [${deduplicatedLabel}]`;
@@ -676,21 +735,21 @@ export class PlaylistDownloadService {
 
     if (fileExtension === 'mp3') {
       // Use NodeID3 for MP3 files
-      const deduplicatedLabel = metadata.label ? deduplicateLabel(metadata.label) : '';
-      const enhancedTags = {
-        title: metadata.title || finalTitle,
-        artist: finalArtist,
-        album: existingTags.album || '',
-        year: metadata.year?.toString() || existingTags.year || '',
-        genre: metadata.genre || existingTags.genre || '',
-        publisher: deduplicatedLabel || existingTags.publisher || '',
-        bpm: metadata.bpm?.toString() || '',
-        initialkey: metadata.key || '',
-        comment: {
-          language: 'por',
-          text: `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${deduplicatedLabel || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`
-        }
-      };
+      const deduplicatedLabel = metadata?.label ? deduplicateLabel(metadata.label) : '';
+              const enhancedTags = {
+          title: metadata?.title || finalTitle,
+          artist: finalArtist,
+          album: existingTags.album || '',
+          year: metadata?.year?.toString() || existingTags.year || '',
+          genre: metadata?.genre || existingTags.genre || '',
+          publisher: deduplicatedLabel || existingTags.publisher || '',
+          bpm: metadata?.bpm?.toString() || '',
+          initialkey: metadata?.key || '',
+          comment: {
+            language: 'por',
+            text: `Enhanced metadata -- BPM: ${metadata?.bpm || 'N/A'} -- Key: ${metadata?.key || 'N/A'} -- Genre: ${metadata?.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${deduplicatedLabel || 'N/A'} -- Published: ${metadata?.publishedDate || 'N/A'} -- Sources: ${metadata?.sources?.join(', ') || 'None'}`
+          }
+        };
       logger.info(`[DEBUG] enhancedTags a serem escritos: ${JSON.stringify(enhancedTags)}`);
       const writeResult = NodeID3.write(enhancedTags, filePath);
       success = writeResult === true;
@@ -757,6 +816,9 @@ export class PlaylistDownloadService {
       if (metadata.year) {
         ffmpegArgs.push('-metadata', `"date=${metadata.year}"`);
       }
+      if (metadata.publishedDate) {
+        ffmpegArgs.push('-metadata', `"publisher_date=${escapeMetadataValue(metadata.publishedDate)}"`);
+      }
       if (metadata.genre) {
         // Use both 'genre' and 'Genre' for better compatibility
         const escapedGenre = escapeMetadataValue(metadata.genre);
@@ -764,11 +826,12 @@ export class PlaylistDownloadService {
         ffmpegArgs.push('-metadata', `"Genre=${escapedGenre}"`);
       }
       if (metadata.label) {
-        // Use only 'publisher' field to avoid duplication, and deduplicate the label
+        // Use both 'publisher' and 'label' fields for better compatibility
         const deduplicatedLabel = deduplicateLabel(metadata.label);
         if (deduplicatedLabel) {
           const escapedLabel = escapeMetadataValue(deduplicatedLabel);
           ffmpegArgs.push('-metadata', `"publisher=${escapedLabel}"`);
+          ffmpegArgs.push('-metadata', `"label=${escapedLabel}"`);
         }
       }
       if (metadata.bpm) {
@@ -787,7 +850,7 @@ export class PlaylistDownloadService {
 
       // Add comment with source info (escape pipes to avoid shell interpretation)
       const deduplicatedLabel = metadata.label ? deduplicateLabel(metadata.label) : '';
-      const commentText = `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${deduplicatedLabel || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`;
+      const commentText = `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${deduplicatedLabel || 'N/A'} -- Published: ${metadata.publishedDate || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`;
       ffmpegArgs.push('-metadata', `"comment=${escapeMetadataValue(commentText)}"`);
 
       // Specify FLAC format explicitly and output to temp file
@@ -859,6 +922,13 @@ export class PlaylistDownloadService {
       .replace(/\s*\[Lyric.*?\]/gi, '')
       .replace(/\s*\(Visualizer\)/gi, '')
       .replace(/\s*\[Visualizer\]/gi, '')
+      // **MELHORADO: Preservar Extended Mix, Remix, Edit, etc. mas limpar duplicatas**
+      .replace(/\s*\(Extended Mix\)\s*\(Extended Mix\)/gi, ' (Extended Mix)')
+      .replace(/\s*\(Remix\)\s*\(Remix\)/gi, ' (Remix)')
+      .replace(/\s*\(Edit\)\s*\(Edit\)/gi, ' (Edit)')
+      .replace(/\s*\(Original Mix\)\s*\(Original Mix\)/gi, ' (Original Mix)')
+      .replace(/\s*\(Club Mix\)\s*\(Club Mix\)/gi, ' (Club Mix)')
+      .replace(/\s*\(Radio Edit\)\s*\(Radio Edit\)/gi, ' (Radio Edit)')
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -868,34 +938,48 @@ export class PlaylistDownloadService {
       return existingArtist;
     }
 
-    // Try to extract artist from title patterns like "Artist - Title"
-    const dashMatch = title.match(/^([^-]+)\s*-\s*(.+)$/);
+    // **MELHORADO: Extrair artista de padrões mais complexos**
+    
+    // 1. Padrão "Artist - Title"
+    const dashMatch = title.match(/^([^-]+?)\s*-\s*(.+)$/);
     if (dashMatch) {
       const possibleArtist = dashMatch[1].trim();
-      // Only use if it looks like an artist name (not too long, contains letters)
+      // Verificar se parece um nome de artista válido
+      if (possibleArtist.length <= 50 && /[a-zA-Z]/.test(possibleArtist) && 
+          !/(remix|edit|mix|version|vocal|dub|bootleg|rework|extended|club|radio)/i.test(possibleArtist)) {
+        return possibleArtist;
+      }
+    }
+
+    // 2. Padrão "Title feat. Artist" ou "Title by Artist"
+    const featMatch = title.match(/(.+?)\s+(?:feat\.?|featuring|ft\.?|by)\s+([^-]+?)(?:\s*\(|$)/i);
+    if (featMatch) {
+      const possibleArtist = featMatch[2].trim();
       if (possibleArtist.length <= 50 && /[a-zA-Z]/.test(possibleArtist)) {
         return possibleArtist;
       }
     }
 
-    // Try patterns like "Title by Artist" or "Title feat. Artist"
-    const byMatch = title.match(/(.+)\s+(?:by|feat\.?|featuring)\s+([^-]+)$/i);
-    if (byMatch) {
-      const possibleArtist = byMatch[2].trim();
-      if (possibleArtist.length <= 50 && /[a-zA-Z]/.test(possibleArtist)) {
-        return possibleArtist;
-      }
-    }
-
-    // Try parentheses pattern "Title (Artist)"
-    const parenMatch = title.match(/(.+)\s*\(([^)]+)\)$/);
+    // 3. Padrão "Title (Artist)" - mas evitar remixes/edits
+    const parenMatch = title.match(/(.+?)\s*\(([^)]+?)\)$/);
     if (parenMatch) {
       const possibleArtist = parenMatch[2].trim();
-      // Only if it doesn't look like a remix or edit
+      // Verificar se não é um tipo de mix/edit
       if (possibleArtist.length <= 50 && 
           /[a-zA-Z]/.test(possibleArtist) && 
-          !/(remix|edit|mix|version|vocal|dub|bootleg|rework)/i.test(possibleArtist)) {
+          !/(remix|edit|mix|version|vocal|dub|bootleg|rework|extended|club|radio|original)/i.test(possibleArtist)) {
         return possibleArtist;
+      }
+    }
+
+    // 4. Padrão "Artist & Artist" ou "Artist vs Artist"
+    const collabMatch = title.match(/^([^&\-]+?)\s*(?:&|vs|feat\.?|featuring)\s+([^&\-]+?)(?:\s*\(|$)/i);
+    if (collabMatch) {
+      const artist1 = collabMatch[1].trim();
+      const artist2 = collabMatch[2].trim();
+      if (artist1.length <= 30 && artist2.length <= 30 && 
+          /[a-zA-Z]/.test(artist1) && /[a-zA-Z]/.test(artist2)) {
+        return `${artist1} & ${artist2}`;
       }
     }
 

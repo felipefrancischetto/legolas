@@ -42,6 +42,56 @@
   animation: shimmer 2s infinite;
 }
 
+/* Animações para spinners musicais */
+@keyframes musicWave {
+  0%, 100% { 
+    transform: scaleY(0.3); 
+    opacity: 0.8; 
+  }
+  50% { 
+    transform: scaleY(1.2); 
+    opacity: 1; 
+  }
+}
+
+@keyframes musicPulse {
+  0%, 100% { 
+    transform: scale(1); 
+    opacity: 0.7; 
+  }
+  50% { 
+    transform: scale(1.1); 
+    opacity: 1; 
+  }
+}
+
+@keyframes musicBeat {
+  0%, 100% { 
+    transform: scaleY(0.2) scaleX(1); 
+  }
+  25% { 
+    transform: scaleY(1.4) scaleX(0.9); 
+  }
+  50% { 
+    transform: scaleY(0.8) scaleX(1.1); 
+  }
+  75% { 
+    transform: scaleY(1.2) scaleX(0.95); 
+  }
+}
+
+.animate-music-wave {
+  animation: musicWave 1s ease-in-out infinite;
+}
+
+.animate-music-pulse {
+  animation: musicPulse 2s ease-in-out infinite;
+}
+
+.animate-music-beat {
+  animation: musicBeat 0.8s ease-in-out infinite;
+}
+
 /* Google Fonts - Barrio */
 .font-barrio {
   font-family: var(--font-barrio);
@@ -307,66 +357,139 @@ body {
   }
 }
 
-/* Scroll global - mais fino e elegante */
+/* Scrollbar moderna e minimalista */
 * {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(107, 114, 128, 0.6) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
 *::-webkit-scrollbar {
-  width: 2px;
-  height: 2px;
-  background: transparent;
+  width: 4px !important;
+  height: 4px !important;
+  background: transparent !important;
 }
 
 *::-webkit-scrollbar-track {
-  background: transparent;
-  border-radius: 1px;
+  background: transparent !important;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: rgba(107, 114, 128, 0.6);
-  border-radius: 1px;
-  border: none;
+  background: rgba(255, 255, 255, 0.15) !important;
+  border: none !important;
+  transition: background 0.2s ease, opacity 0.3s ease !important;
+  opacity: 0.7 !important;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(107, 114, 128, 0.8);
+  background: rgba(255, 255, 255, 0.4) !important;
+  opacity: 1 !important;
 }
 
 *::-webkit-scrollbar-corner {
-  background: transparent;
+  background: transparent !important;
+  border-radius: 0 !important;
+}
+
+/* Scrollbar aparece ao fazer hover no container */
+*:hover::-webkit-scrollbar-thumb {
+  opacity: 1 !important;
+}
+
+*:not(:hover)::-webkit-scrollbar-thumb {
+  opacity: 0.3 !important;
 }
 
 .custom-scroll {
-  scrollbar-color: rgba(107, 114, 128, 0.7) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
 }
 .custom-scroll::-webkit-scrollbar {
-  width: 3px;
-  height: 3px;
+  width: 6px;
+  height: 6px;
   background: transparent;
 }
 .custom-scroll::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.1);
-  border-radius: 1px;
+  background: transparent;
+  border-radius: 0;
 }
 .custom-scroll::-webkit-scrollbar-thumb {
-  background: rgba(107, 114, 128, 0.7);
-  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.25);
   border: none;
+  transition: background 0.2s ease, opacity 0.3s ease;
+  opacity: 0.6;
 }
 .custom-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(107, 114, 128, 0.9);
+  background: rgba(255, 255, 255, 0.5);
+  opacity: 1;
 }
 .custom-scroll::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-/* Overflow e scroll responsivos */
+/* Scrollbar aparece ao fazer hover no container */
+.custom-scroll:hover::-webkit-scrollbar-thumb {
+  opacity: 1;
+}
+
+/* Scroll minimalista para listas */
+.custom-scroll-square {
+  scrollbar-color: rgb(16, 185, 129) transparent;
+}
+
+
+.custom-scroll-square::-webkit-scrollbar {
+  width: 6px !important;
+  height: 6px !important;
+  background: transparent !important;
+}
+
+.custom-scroll-square::-webkit-scrollbar-track {
+  background: transparent !important;
+  border-radius: 0 !important;
+}
+
+.custom-scroll-square::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2) !important;
+  border: none !important;
+  transition: background 0.2s ease, opacity 0.3s ease !important;
+  opacity: 0.5 !important;
+}
+
+.custom-scroll-square::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4) !important;
+  opacity: 1 !important;
+}
+
+.custom-scroll-square::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+
+/* Scrollbar aparece ao fazer hover no container */
+.custom-scroll-square:hover::-webkit-scrollbar-thumb {
+  opacity: 1 !important;
+}
+
+/* Scroll responsivo */
 @media (max-width: 640px) {
   .custom-scroll::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
+    width: 8px;
+    height: 8px;
+  }
+  
+  .custom-scroll-square::-webkit-scrollbar {
+    width: 8px !important;
+    height: 8px !important;
+  }
+  
+  /* Scroll maior para mobile */
+  *::-webkit-scrollbar {
+    width: 6px !important;
+    height: 6px !important;
+  }
+  
+  *::-webkit-scrollbar-thumb {
+  }
+  
+  *::-webkit-scrollbar-track {
+    border-radius: 0 !important;
   }
 }
 

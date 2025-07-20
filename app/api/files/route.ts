@@ -58,6 +58,9 @@ async function extractAudioMetadata(filePath: string) {
       }
     }
 
+    // Extrair label de múltiplas fontes
+    const label = tags.publisher || tags.Publisher || tags.label || tags.Label || tags.LABEL || null;
+
     return {
       title: tags.title || tags.TITLE || null,
       artist: artist,
@@ -66,9 +69,10 @@ async function extractAudioMetadata(filePath: string) {
       key: key,
       genre: genre,
       album: tags.album || tags.Album || tags.ALBUM || null,
-      label: tags.publisher || tags.Publisher || tags.label || tags.Label || tags.LABEL || null,
+      label: label,
       thumbnail: thumbnailUrl,
-      ano: tags.year || tags.date || tags.YEAR || tags.DATE || null
+      ano: tags.year || tags.date || tags.YEAR || tags.DATE || null,
+      publishedDate: tags.publisher_date || tags.PUBLISHER_DATE || tags.publishedDate || tags.PUBLISHED_DATE || null
     };
   } catch (error) {
     console.error('Erro ao extrair metadados:', error);

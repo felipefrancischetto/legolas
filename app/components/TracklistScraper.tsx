@@ -3,6 +3,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ScrapingResult, ScrapingOptions, ScrapeResponse, Track } from '@/lib/types';
+import LoadingSpinner from './LoadingSpinner';
 
 interface TracklistScraperProps {
   onResult?: (result: ScrapingResult) => void;
@@ -186,9 +187,7 @@ export default function TracklistScraper({ onResult }: TracklistScraperProps) {
                 disabled={loading}
               />
               <div className="absolute right-3 top-1/2 transform -translate-y-1/2 sm:right-2">
-                {loading && (
-                  <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin sm:w-4 sm:h-4"></div>
-                )}
+                <LoadingSpinner size="sm" variant="dots" isLoading={loading} />
               </div>
             </div>
           </div>
@@ -200,7 +199,7 @@ export default function TracklistScraper({ onResult }: TracklistScraperProps) {
           >
             {loading ? (
               <div className="flex items-center justify-center gap-2">
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin sm:w-4 sm:h-4"></div>
+                <LoadingSpinner size="sm" color="white" variant="wave" isLoading={loading} />
                 <span>Processando...</span>
               </div>
             ) : (

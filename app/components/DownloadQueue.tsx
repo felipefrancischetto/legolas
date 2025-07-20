@@ -1,9 +1,8 @@
 'use client';
 
 import { useDownload } from '../contexts/DownloadContext';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { getCachedDominantColor } from '../utils/colorExtractor';
-import { useEffect } from 'react';
 
 interface DownloadQueueProps {
   onClose: () => void;
@@ -22,20 +21,49 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
 
   const [filter, setFilter] = useState<'all' | 'active' | 'completed' | 'failed'>('all');
   const [modalColor, setModalColor] = useState<string>('rgba(0, 0, 0, 0.9)');
+  
+  // Cache para evitar recálculos desnecessários
+  const queueHashRef = useRef<string>('');
+  const historyHashRef = useRef<string>('');
+  const allDownloadsRef = useRef<any[]>([]);
 
-  // Combina queue e history para mostrar todos os downloads
+  // Função otimizada para gerar hash simples
+  const generateHash = (items: any[]) => {
+    return items.reduce((acc, item) => acc + item.id + item.status, '');
+  };
+
+  // Combina queue e history de forma otimizada
   const allDownloads = useMemo(() => {
+    const queueHash = generateHash(queue);
+    const historyHash = generateHash(history);
+    
+    // Só recalcular se realmente mudou
+    if (queueHash === queueHashRef.current && historyHash === historyHashRef.current) {
+      return allDownloadsRef.current;
+    }
+    
+    queueHashRef.current = queueHash;
+    historyHashRef.current = historyHash;
+    
     const queueItems = queue.map(item => ({ ...item, source: 'queue' as const }));
     const historyItems = history.map(item => ({ ...item, source: 'history' as const }));
-    return [...queueItems, ...historyItems].sort((a, b) => {
-      const aTime = (a as any).timestamp || (a as any).createdAt || 0;
-      const bTime = (b as any).timestamp || (b as any).createdAt || 0;
-      return new Date(bTime).getTime() - new Date(aTime).getTime();
+    
+    // Usar sort estável e mais eficiente
+    const combined = [...queueItems, ...historyItems];
+    combined.sort((a, b) => {
+      const aTime = (a as any).timestamp || (a as any).startTime || Date.now();
+      const bTime = (b as any).timestamp || (b as any).startTime || Date.now();
+      return bTime - aTime; // Mais recente primeiro
     });
+    
+    allDownloadsRef.current = combined;
+    return combined;
   }, [queue, history]);
 
-  // Filtra downloads baseado no filtro selecionado
+  // Filtra downloads baseado no filtro selecionado - otimizado
   const filteredDownloads = useMemo(() => {
+    if (filter === 'all') return allDownloads;
+    
     switch (filter) {
       case 'active':
         return allDownloads.filter(item => 
@@ -50,7 +78,7 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
     }
   }, [allDownloads, filter]);
 
-  // Estatísticas
+  // Estatísticas memoizadas
   const stats = useMemo(() => {
     const active = allDownloads.filter(item => 
       ['pending', 'queued', 'downloading'].includes(item.status)
@@ -61,22 +89,39 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
     return { active, completed, failed, total: allDownloads.length };
   }, [allDownloads]);
 
-  // Extrai cor do primeiro item para tema do modal
+  // Extrai cor do primeiro item para tema do modal - otimizado
   useEffect(() => {
+    let isCancelled = false;
+    
     if (allDownloads.length > 0 && (allDownloads[0] as any).thumbnail) {
       const extractColor = async () => {
         try {
+          await new Promise(resolve => setTimeout(resolve, 100)); // Throttle
+          
+          if (isCancelled) return;
+          
           const colorData = await getCachedDominantColor((allDownloads[0] as any).thumbnail);
-          setModalColor(colorData.rgba(0.15));
+          
+          if (!isCancelled) {
+            setModalColor(colorData.rgba(0.15));
+          }
         } catch (error) {
-          setModalColor('rgba(0, 0, 0, 0.9)');
+          if (!isCancelled) {
+            setModalColor('rgba(0, 0, 0, 0.9)');
+          }
         }
       };
+      
       extractColor();
     }
+    
+    return () => {
+      isCancelled = true;
+    };
   }, [allDownloads]);
 
-  const getStatusColor = (status: string) => {
+  // Funções memoizadas para evitar re-renders
+  const getStatusColor = useCallback((status: string) => {
     switch (status) {
       case 'completed': return 'bg-green-500';
       case 'downloading': return 'bg-blue-500 animate-pulse';
@@ -85,9 +130,9 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
       case 'queued': return 'bg-gray-500';
       default: return 'bg-gray-400';
     }
-  };
+  }, []);
 
-  const getStatusBadgeColor = (status: string) => {
+  const getStatusBadgeColor = useCallback((status: string) => {
     switch (status) {
       case 'completed': return 'bg-green-600/20 text-green-400 border border-green-500/30';
       case 'downloading': return 'bg-blue-600/20 text-blue-400 border border-blue-500/30';
@@ -96,9 +141,9 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
       case 'queued': return 'bg-gray-600/20 text-gray-400 border border-gray-500/30';
       default: return 'bg-gray-600/20 text-gray-400 border border-gray-500/30';
     }
-  };
+  }, []);
 
-  const getStatusText = (status: string) => {
+  const getStatusText = useCallback((status: string) => {
     switch (status) {
       case 'completed': return 'Concluído';
       case 'downloading': return 'Baixando';
@@ -107,9 +152,9 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
       case 'queued': return 'Na Fila';
       default: return 'Desconhecido';
     }
-  };
+  }, []);
 
-  const handleRetry = async (item: any) => {
+  const handleRetry = useCallback(async (item: any) => {
     if (item.source === 'queue') {
       await retryDownload(item.id);
     } else {
@@ -119,20 +164,19 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
         url: item.url,
         title: item.title,
         isPlaylist: item.isPlaylist || false,
-        format: item.format || 'mp3',
-        enrichWithBeatport: item.enrichWithBeatport || false
+        status: 'pending' as const,
+        steps: []
       });
     }
-  };
+  }, [retryDownload]);
 
-  const handleRemove = (item: any) => {
+  const handleRemove = useCallback((item: any) => {
     if (item.source === 'queue') {
       removeFromQueue(item.id);
     }
-    // Items do histórico não podem ser removidos individualmente
-  };
+  }, [removeFromQueue]);
 
-  const formatDate = (timestamp: string | number) => {
+  const formatDate = useCallback((timestamp: string | number) => {
     const date = new Date(timestamp);
     return date.toLocaleString('pt-BR', {
       day: '2-digit',
@@ -141,13 +185,13 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
       hour: '2-digit',
       minute: '2-digit'
     });
-  };
+  }, []);
 
-  const formatDuration = (seconds: number) => {
+  const formatDuration = useCallback((seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
+  }, []);
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -245,58 +289,58 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
               >
                 {/* Header do Item */}
                 <div className="flex items-start justify-between mb-3">
-                                     <div className="flex items-start gap-3 flex-1 min-w-0">
-                     {/* Thumbnail */}
-                     {(item as any).thumbnail && (
-                       <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-800 flex-shrink-0">
-                         <img 
-                           src={(item as any).thumbnail} 
-                           alt={item.title}
-                           className="w-full h-full object-cover"
-                           onError={(e) => {
-                             (e.target as HTMLImageElement).style.display = 'none';
-                           }}
-                         />
-                       </div>
-                     )}
-                     
-                     {/* Info */}
-                     <div className="flex-1 min-w-0">
-                       <div className="flex items-center gap-2 mb-1">
-                         <div className={`w-3 h-3 rounded-full flex-shrink-0 ${getStatusColor(item.status)}`} />
-                         <h3 className="font-semibold text-white truncate text-lg">{item.title}</h3>
-                         {item.isPlaylist && (
-                           <span className="bg-purple-500/20 text-purple-400 px-2 py-1 rounded text-xs border border-purple-500/30">
-                             Playlist
-                           </span>
-                         )}
-                         {item.source === 'history' && (
-                           <span className="bg-gray-500/20 text-gray-400 px-2 py-1 rounded text-xs border border-gray-500/30">
-                             Histórico
-                           </span>
-                         )}
-                       </div>
-                       
-                       <div className="flex items-center gap-4 text-sm text-gray-400">
-                         {(item as any).format && (
-                           <span className="bg-gray-600/20 px-2 py-1 rounded text-xs">
-                             {(item as any).format.toUpperCase()}
-                           </span>
-                         )}
-                         {(item as any).enrichWithBeatport && (
-                           <span className="bg-orange-500/20 text-orange-400 px-2 py-1 rounded text-xs border border-orange-500/30">
-                             📀 Beatport
-                           </span>
-                         )}
-                         {(item as any).timestamp && (
-                           <span>{formatDate((item as any).timestamp)}</span>
-                         )}
-                         {(item as any).duration && (
-                           <span>{formatDuration((item as any).duration)}</span>
-                         )}
-                       </div>
-                     </div>
-                   </div>
+                  <div className="flex items-start gap-3 flex-1 min-w-0">
+                    {/* Thumbnail */}
+                    {(item as any).thumbnail && (
+                      <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-800 flex-shrink-0">
+                        <img 
+                          src={(item as any).thumbnail} 
+                          alt={item.title}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
+                      </div>
+                    )}
+                    
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className={`w-3 h-3 rounded-full flex-shrink-0 ${getStatusColor(item.status)}`} />
+                        <h3 className="font-semibold text-white truncate text-lg">{item.title}</h3>
+                        {item.isPlaylist && (
+                          <span className="bg-purple-500/20 text-purple-400 px-2 py-1 rounded text-xs border border-purple-500/30">
+                            Playlist
+                          </span>
+                        )}
+                        {item.source === 'history' && (
+                          <span className="bg-gray-500/20 text-gray-400 px-2 py-1 rounded text-xs border border-gray-500/30">
+                            Histórico
+                          </span>
+                        )}
+                      </div>
+                      
+                      <div className="flex items-center gap-4 text-sm text-gray-400">
+                        {(item as any).format && (
+                          <span className="bg-gray-600/20 px-2 py-1 rounded text-xs">
+                            {(item as any).format.toUpperCase()}
+                          </span>
+                        )}
+                        {(item as any).enrichWithBeatport && (
+                          <span className="bg-orange-500/20 text-orange-400 px-2 py-1 rounded text-xs border border-orange-500/30">
+                            📀 Beatport
+                          </span>
+                        )}
+                        {(item as any).timestamp && (
+                          <span>{formatDate((item as any).timestamp)}</span>
+                        )}
+                        {(item as any).duration && (
+                          <span>{formatDuration((item as any).duration)}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
 
                   {/* Status e Ações */}
                   <div className="flex items-center gap-3">

@@ -66,7 +66,7 @@ export default function DetailedProgressDisplay({
         return [...updatedPrev, newStep];
       });
     }
-  }, [currentStep, currentSubstep, progress, detail, externalSteps]);
+  }, [currentStep, currentSubstep, externalSteps]); // Removido 'detail' e 'progress' que podem mudar constantemente
 
   const getStepType = (step: string): string => {
     if (step.includes('Conectado') || step.includes('Preparando')) return 'init';

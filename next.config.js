@@ -5,18 +5,18 @@ const nextConfig = {
       bodySizeLimit: '50mb'
     },
     // Otimizações para streaming de áudio
-    turbo: {
-      rules: {
-        '*.flac': {
-          loaders: ['raw-loader'],
-          as: '*.flac'
-        },
-        '*.mp3': {
-          loaders: ['raw-loader'],
-          as: '*.mp3'
-        }
-      }
-    }
+    // turbo: {
+    //   rules: {
+    //     '*.flac': {
+    //       loaders: ['raw-loader'],
+    //       as: '*.flac'
+    //     },
+    //     '*.mp3': {
+    //       loaders: ['raw-loader'],
+    //       as: '*.mp3'
+    //     }
+    //   }
+    // }
   },
   
   // Configurações de servidor otimizadas para áudio

@@ -31,10 +31,10 @@ export default function DownloadHistory() {
             <div className="flex-1 min-w-0">
               <p className="text-sm text-white truncate sm:text-xs">{item.title}</p>
               <p className="text-xs text-gray-400 sm:text-[10px]">
-                {formatDistanceToNow(new Date(item.downloadedAt), {
+                {item.endTime ? formatDistanceToNow(new Date(item.endTime), {
                   addSuffix: true,
                   locale: ptBR,
-                })}
+                }) : 'Agora'}
               </p>
             </div>
 

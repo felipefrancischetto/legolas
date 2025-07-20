@@ -246,6 +246,7 @@ export async function GET(request: NextRequest) {
         console.log(`      • Genre: ${metadata.genre || 'N/A'}`);
         console.log(`      • Label: ${metadata.label || 'N/A'}`);
         console.log(`      • Year: ${metadata.year || 'N/A'}`);
+        console.log(`      • Published Date: ${metadata.publishedDate || 'N/A'}`);
         console.log(`      • Album: ${metadata.album || 'N/A'}`);
         
         // Evento: Metadados encontrados
@@ -335,7 +336,7 @@ export async function GET(request: NextRequest) {
           label: deduplicateLabel(metadata.label || ''),
           bpm: metadata.bpm?.toString() || '',
           key: metadata.key || '',
-          comment: `BPM: ${metadata.bpm || 'N/A'} | Key: ${metadata.key || 'N/A'} | Sources: ${metadata.sources?.join(', ') || 'None'}`
+          comment: `BPM: ${metadata.bpm || 'N/A'} | Key: ${metadata.key || 'N/A'} | Published: ${metadata.publishedDate || 'N/A'} | Sources: ${metadata.sources?.join(', ') || 'None'}`
         };
         
         console.log(`   🏷️  Tags que serão escritas no arquivo:`);
@@ -395,8 +396,12 @@ export async function GET(request: NextRequest) {
             // Adicionar metadados opcionais apenas se existirem
             if (tags.album) ffmpegCmd += ` -metadata "album=${escapeValue(tags.album)}"`;
             if (tags.year) ffmpegCmd += ` -metadata "date=${tags.year}"`;
+            if (metadata.publishedDate) ffmpegCmd += ` -metadata "publisher_date=${escapeValue(metadata.publishedDate)}"`;
             if (tags.genre) ffmpegCmd += ` -metadata "genre=${escapeValue(tags.genre)}"`;
-            if (tags.label) ffmpegCmd += ` -metadata "publisher=${escapeValue(tags.label)}"`;
+            if (tags.label) {
+              ffmpegCmd += ` -metadata "publisher=${escapeValue(tags.label)}"`;
+              ffmpegCmd += ` -metadata "label=${escapeValue(tags.label)}"`;
+            }
             if (tags.bpm) ffmpegCmd += ` -metadata "bpm=${tags.bpm}"`;
             if (tags.key) ffmpegCmd += ` -metadata "initialkey=${escapeValue(tags.key)}"`;
             if (tags.comment) ffmpegCmd += ` -metadata "comment=${escapeValue(tags.comment)}"`;
@@ -596,6 +601,119 @@ export async function GET(request: NextRequest) {
     
     // 🔧 Enviar evento de erro via SSE se downloadId estiver disponível
     const errorMessage = error instanceof Error ? error.message : 'Erro ao processar o vídeo';
+    
+    if (downloadId) {
+      console.log(`❌ Enviando evento ERROR para downloadId: ${downloadId}`);
+      sendProgressEvent(downloadId, {
+        type: 'error',
+        step: 'Erro no download',
+        progress: 0,
+        detail: errorMessage
+      });
+    }
+    
+    return NextResponse.json(
+      { error: errorMessage },
+      { status: 500 }
+    );
+  }
+} 
+
+export async function POST(request: NextRequest) {
+  let downloadId: string | null = null;
+  
+  try {
+    const body = await request.json();
+    const { url, downloadId: bodyDownloadId, format = 'flac', useBeatport = false, isPlaylist = false } = body;
+    
+    downloadId = bodyDownloadId;
+    
+    if (!url) {
+      return NextResponse.json(
+        { error: 'URL é obrigatória' },
+        { status: 400 }
+      );
+    }
+
+    console.log('Iniciando download via POST para URL:', url, 'Formato:', format, 'Beatport:', useBeatport, 'Playlist:', isPlaylist, 'DownloadID:', downloadId);
+
+    // Enviar evento inicial
+    if (downloadId) {
+      console.log(`🎯 Enviando evento inicial para downloadId: ${downloadId}`);
+      sendProgressEvent(downloadId, {
+        type: 'init',
+        step: 'Preparando download...',
+        progress: 5,
+        detail: `Formato: ${format.toUpperCase()}, Beatport: ${useBeatport ? 'Ativado' : 'Desativado'}, Playlist: ${isPlaylist ? 'Sim' : 'Não'}`
+      });
+    }
+
+    // Se for playlist, usar o serviço de playlist
+    if (isPlaylist) {
+      const { playlistDownloadService } = await import('@/lib/services/playlistDownloadService');
+      
+      console.log('🎵 Iniciando download de playlist com serviço dedicado...');
+      
+      const result = await playlistDownloadService.downloadPlaylist(url, {
+        format: format as 'mp3' | 'flac' | 'wav',
+        enhanceMetadata: true,
+        maxConcurrent: 3,
+        useBeatport,
+        downloadId: downloadId || undefined
+      });
+
+      if (result.success) {
+        return NextResponse.json({
+          status: 'concluído',
+          message: 'Download da playlist concluído com sucesso',
+          details: {
+            totalTracks: result.totalTracks,
+            processedTracks: result.processedTracks,
+            enhancedTracks: result.enhancedTracks,
+            enhancementRate: result.totalTracks > 0 ? 
+              Math.round((result.enhancedTracks / result.totalTracks) * 100) : 0,
+            downloadPath: result.downloadPath,
+            errors: result.errors,
+            beatportMode: useBeatport
+          }
+        });
+      } else {
+        return NextResponse.json({
+          status: 'erro',
+          message: 'Erro no download da playlist',
+          details: {
+            totalTracks: result.totalTracks,
+            processedTracks: result.processedTracks,
+            enhancedTracks: result.enhancedTracks,
+            errors: result.errors,
+            beatportMode: useBeatport
+          }
+        }, { status: 500 });
+      }
+    } else {
+      // Para downloads individuais, usar o fluxo existente do GET
+      const searchParams = new URLSearchParams();
+      searchParams.set('url', url);
+      searchParams.set('format', format);
+      searchParams.set('useBeatport', useBeatport.toString());
+      if (downloadId) {
+        searchParams.set('downloadId', downloadId);
+      }
+      
+      // Criar uma nova requisição GET com os parâmetros
+      const getRequest = new NextRequest(
+        new URL(`/api/download?${searchParams.toString()}`, request.url),
+        { method: 'GET' }
+      );
+      
+      // Chamar o método GET existente
+      return await GET(getRequest);
+    }
+
+  } catch (error) {
+    console.error('Erro detalhado ao processar download via POST:', error);
+    
+    const errorMessage = error instanceof Error ? error.message : 'Erro ao processar o download';
     
     if (downloadId) {
       console.log(`❌ Enviando evento ERROR para downloadId: ${downloadId}`);

@@ -6,6 +6,7 @@ export interface EnhancedMetadata {
   artist: string;
   album?: string;
   year?: number;
+  publishedDate?: string; // **NOVO: Data de publicação por extenso**
   genre?: string;
   label?: string;
   bpm?: number;
@@ -97,8 +98,14 @@ class BeatportProviderV2 implements MetadataProvider {
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
       await page.setViewport({ width: 1920, height: 1080 });
       
-      // Limpar o título para uma busca mais eficaz
-      const cleanedTitle = title.replace(/\s*\(.*?(mix|edit|remix)\)/i, '').trim();
+      // **MELHORADO: Limpeza do título para busca mais eficaz**
+      let cleanedTitle = title;
+      
+      // Remover versões apenas para busca, mas preservar para o resultado final
+      const versionMatch = title.match(/\(([^)]*?(?:mix|edit|remix|version)[^)]*)\)/i);
+      if (versionMatch) {
+        cleanedTitle = title.replace(/\s*\([^)]*?(?:mix|edit|remix|version)[^)]*\)/gi, '').trim();
+      }
       
       // Buscar na página de search
       const searchUrl = `https://www.beatport.com/search?q=${encodeURIComponent(`${artist} ${cleanedTitle}`)}`;
@@ -130,16 +137,39 @@ class BeatportProviderV2 implements MetadataProvider {
           
           let score = 0;
           
-          // Deve conter o título
-          if (text.includes(titleLower)) score += 100;
+          // **MELHORADO: Algoritmo de scoring mais flexível**
           
-          // Deve conter o artista
-          if (text.includes(artistLower)) score += 50;
+          // Deve conter o título (ou parte dele)
+          const titleWords = titleLower.split(/\s+/).filter(word => word.length > 2);
+          let titleMatches = 0;
+          titleWords.forEach(word => {
+            if (text.includes(word)) titleMatches++;
+          });
+          if (titleMatches > 0) {
+            score += (titleMatches / titleWords.length) * 100;
+          }
+          
+          // Deve conter o artista (ou parte dele)
+          const artistWords = artistLower.split(/\s+/).filter(word => word.length > 2);
+          let artistMatches = 0;
+          artistWords.forEach(word => {
+            if (text.includes(word)) artistMatches++;
+          });
+          if (artistMatches > 0) {
+            score += (artistMatches / artistWords.length) * 50;
+          }
           
           // Bonus para match completo
-          if (text.includes(titleLower) && text.includes(artistLower)) score += 200;
+          if (titleMatches > 0 && artistMatches > 0) score += 100;
           
-          console.log(`   ${i + 1}. "${link.textContent?.trim()}" (Score: ${score})`);
+          // Bonus para match exato
+          if (text.includes(titleLower)) score += 50;
+          if (text.includes(artistLower)) score += 25;
+          
+          // Penalidade para títulos muito diferentes
+          if (text.length > titleLower.length * 2) score -= 20;
+          
+          console.log(`   ${i + 1}. "${link.textContent?.trim()}" (Score: ${score}, Title: ${titleMatches}/${titleWords.length}, Artist: ${artistMatches}/${artistWords.length})`);
           
           if (score > bestScore) {
             bestScore = score;
@@ -191,20 +221,104 @@ class BeatportProviderV2 implements MetadataProvider {
           artist: string;
           duration: number;
           year: number;
+          publishedDate: string; // **NOVO: Data de publicação por extenso**
           bpm: number;
           key: string;
           genre: string;
           label: string;
         }> = {};
-        // Título da música
+        // **MELHORADO: Título da música - preservar versões importantes**
         const titleEl = document.querySelector('h1[data-testid="track-title"], h1');
         if (titleEl) {
-          result.title = titleEl.textContent?.trim().replace(/\s+(Original Mix|Extended Mix|Club Mix|Radio Edit).*$/i, '');
+          const rawTitle = titleEl.textContent?.trim() || '';
+          // Preservar Extended Mix, Remix, Edit, etc. mas remover duplicatas
+          result.title = rawTitle
+            .replace(/\s*\(Extended Mix\)\s*\(Extended Mix\)/gi, ' (Extended Mix)')
+            .replace(/\s*\(Remix\)\s*\(Remix\)/gi, ' (Remix)')
+            .replace(/\s*\(Edit\)\s*\(Edit\)/gi, ' (Edit)')
+            .replace(/\s*\(Original Mix\)\s*\(Original Mix\)/gi, ' (Original Mix)')
+            .replace(/\s*\(Club Mix\)\s*\(Club Mix\)/gi, ' (Club Mix)')
+            .replace(/\s*\(Radio Edit\)\s*\(Radio Edit\)/gi, ' (Radio Edit)')
+            .replace(/\s+/g, ' ')
+            .trim();
         }
-        // Artista
-        const artistEl = document.querySelector('a[data-testid="artist-link"], a[href*="/artist/"]');
-        if (artistEl) {
-          result.artist = artistEl.textContent?.trim();
+        // **CORRIGIDO: Extração de artistas específicos da música atual**
+        console.log('🔍 [Beatport] Iniciando extração de artistas...');
+        
+        // Primeiro, tentar encontrar o container específico da música
+        const trackContainer = document.querySelector('[data-testid="track-header"], .track-header, .track-info');
+        let artistElements: NodeListOf<Element> = document.querySelectorAll('div'); // Inicializar com seletor válido
+        
+        console.log(`🔍 [Beatport] Track container encontrado: ${!!trackContainer}`);
+        
+        if (trackContainer) {
+          // Buscar artistas apenas dentro do container da música
+          artistElements = trackContainer.querySelectorAll('a[data-testid="artist-link"], a[href*="/artist/"], .artist-link');
+          console.log(`🔍 [Beatport] Artistas no container específico: ${artistElements.length}`);
+        } else {
+          // Fallback: buscar por artistas próximos ao título
+          const titleEl = document.querySelector('h1[data-testid="track-title"], h1');
+          console.log(`🔍 [Beatport] Título encontrado: ${!!titleEl}`);
+          
+          if (titleEl) {
+            // Buscar artistas que estão próximos ao título (dentro do mesmo container ou próximo)
+            let parent = titleEl.parentElement;
+            let depth = 0;
+            while (parent && depth < 3) {
+              if (parent.querySelectorAll) {
+                artistElements = parent.querySelectorAll('a[data-testid="artist-link"], a[href*="/artist/"], .artist-link');
+                console.log(`🔍 [Beatport] Profundidade ${depth}: ${artistElements.length} artistas encontrados`);
+                if (artistElements.length > 0) break;
+              }
+              parent = parent.parentElement;
+              depth++;
+            }
+          }
+        }
+        
+        // **CORRIGIDO: Fallback mais específico - NÃO usar todos os artistas da página**
+        if (artistElements.length === 0) {
+          console.log('⚠️ [Beatport] Nenhum artista específico encontrado, tentando fallback específico...');
+          
+          // Tentar buscar artistas apenas na área do título da música
+          const titleArea = document.querySelector('h1[data-testid="track-title"], h1')?.closest('div');
+          if (titleArea) {
+            artistElements = titleArea.querySelectorAll('a[href*="/artist/"]');
+            console.log(`🔍 [Beatport] Artistas na área do título: ${artistElements.length}`);
+          }
+          
+          // Se ainda não encontrou, tentar buscar por artistas que contenham o nome do artista original
+          if (artistElements.length === 0) {
+            console.log('⚠️ [Beatport] Nenhum artista específico encontrado, usando artista original');
+            // Não definir result.artist aqui, deixar que use o artista original
+          }
+        }
+        
+        // **NOVO: Se ainda não encontrou artistas específicos, usar o artista original**
+        if (artistElements.length === 0) {
+          console.log('⚠️ [Beatport] Nenhum artista encontrado, usando artista original');
+          // Não definir result.artist aqui, deixar que use o artista original
+        }
+        
+        if (artistElements.length > 0) {
+          const artists = Array.from(artistElements)
+            .map(el => el.textContent?.trim())
+            .filter(artist => artist && artist.length > 0);
+          
+          console.log(`🔍 [Beatport] Artistas encontrados: [${artists.map(a => `"${a}"`).join(', ')}]`);
+          
+          // **SIMPLIFICADO: Usar apenas os primeiros artistas encontrados (máximo 2)**
+          if (artists.length === 1) {
+            result.artist = artists[0];
+            console.log(`✅ [Beatport] Artista definido: "${result.artist}"`);
+          } else if (artists.length > 1) {
+            // **CORRIGIDO: Juntar múltiplos artistas com vírgula em vez de "&"**
+            result.artist = artists.slice(0, 2).join(', '); // Máximo 2 artistas
+            console.log(`✅ [Beatport] Artistas definidos: "${result.artist}"`);
+          } else {
+            console.log(`⚠️ [Beatport] Nenhum artista encontrado, usando artista original: "${artist}"`);
+            // Não definir result.artist, deixar que use o artista original
+          }
         }
         // Estratégia: tentar pegar o MetaWrapper logo após o título
         let metaWrapper = null;
@@ -234,12 +348,34 @@ class BeatportProviderV2 implements MetadataProvider {
               const [min, sec] = value.split(':').map(Number);
               result.duration = min * 60 + sec;
               foundFields++;
-            } else if (label.includes('lançamento')) {
-              result.year = parseInt(value.split('-')[0]);
-              foundFields++;
+            } else if (label.includes('lançamento') || label.includes('release')) {
+              // **MELHORADO: Processamento de datas mais robusto**
+              const dateValue = value.trim();
+              
+              console.log(`📅 [Beatport] Data encontrada: "${dateValue}"`);
+              
+              // **NOVO: Salvar data de publicação por extenso**
+              result.publishedDate = dateValue;
+              console.log(`📅 [Beatport] Data de publicação salva: "${result.publishedDate}"`);
+              
+              // Tentar diferentes formatos de data para extrair o ano
+              const yearMatch = dateValue.match(/(\d{4})/);
+              if (yearMatch) {
+                const year = parseInt(yearMatch[1]);
+                // Validar se é um ano razoável (entre 1900 e ano atual + 1)
+                const currentYear = new Date().getFullYear();
+                if (year >= 1900 && year <= currentYear + 1) {
+                  result.year = year;
+                  foundFields++;
+                  console.log(`📅 [Beatport] Ano extraído: ${result.year}`);
+                }
+              }
             } else if (label.includes('bpm')) {
-              result.bpm = parseInt(value);
-              foundFields++;
+              const bpmValue = parseInt(value);
+              if (bpmValue > 0 && bpmValue <= 200) {
+                result.bpm = bpmValue;
+                foundFields++;
+              }
             } else if (label.includes('tom') || label.includes('key')) {
               result.key = value;
               foundFields++;
@@ -285,6 +421,7 @@ class BeatportProviderV2 implements MetadataProvider {
         console.log(`   🎭 Genre: ${metadata.genre || 'N/A'}`);
         console.log(`   🏷️ Label: ${metadata.label || 'N/A'}`);
         console.log(`   📅 Year: ${metadata.year ?? 'N/A'}`);
+        console.log(`   📅 Published Date: ${metadata.publishedDate || 'N/A'}`);
         console.log(`   =========================================================`);
         console.log(`   🔗 VALIDAÇÃO: Copie a URL acima e verifique se os dados conferem!`);
         console.log(`   =========================================================\n`);
@@ -352,6 +489,7 @@ export class MetadataAggregator {
         console.log(`      • Genre: ${result.genre || 'N/A'}`);
         console.log(`      • Label: ${result.label || 'N/A'}`);
         console.log(`      • Year: ${result.year || 'N/A'}`);
+        console.log(`      • Published Date: ${result.publishedDate || 'N/A'}`);
         
         const aggregated: EnhancedMetadata = {
           title: result.title || title,
@@ -362,6 +500,7 @@ export class MetadataAggregator {
           bpm: result.bpm,
           key: result.key,
           year: result.year,
+          publishedDate: result.publishedDate, // **NOVO: Incluir data de publicação**
           sources: ['BeatportV2']
         };
         
@@ -373,6 +512,7 @@ export class MetadataAggregator {
         console.log(`      • Genre: ${aggregated.genre || 'N/A'}`);
         console.log(`      • Label: ${aggregated.label || 'N/A'}`);
         console.log(`      • Year: ${aggregated.year || 'N/A'}`);
+        console.log(`      • Published Date: ${aggregated.publishedDate || 'N/A'}`);
         const hasUsefulData = aggregated.bpm || aggregated.key || aggregated.genre || aggregated.label || aggregated.year;
         console.log(`   ✨ Metadados úteis encontrados: ${hasUsefulData ? 'SIM' : 'NÃO'}`);
         if (hasUsefulData) {

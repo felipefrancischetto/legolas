@@ -10,6 +10,8 @@ import { getCachedDominantColor } from '../utils/colorExtractor';
 import { useFile } from '../contexts/FileContext';
 import { useSettings } from '../hooks/useSettings';
 import AlbumModal from './AlbumModal';
+import LoadingSpinner from './LoadingSpinner';
+import { SkeletonAudioPlayer } from './SkeletonComponents';
 
 export default function AudioPlayer() {
   const waveformDesktopRef = useRef<HTMLDivElement>(null);
@@ -25,7 +27,10 @@ export default function AudioPlayer() {
   const [showAlbumModal, setShowAlbumModal] = useState(false);
   const [playerDominantColor, setPlayerDominantColor] = useState('rgba(16, 185, 129, 0.2)');
   const [isWaveReady, setIsWaveReady] = useState(false);
+
   const lastInitializedFile = useRef<string | null>(null);
+  const isInitializing = useRef(false); // Para evitar múltiplas inicializações simultâneas
+  const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Para debounce
 
   const { playerState, setPlayerState, pause, resume, setVolume, setIsMuted, play } = usePlayer();
   const { setPlayerOpen, playerMinimized, setPlayerMinimized } = useUI();
@@ -103,7 +108,7 @@ export default function AudioPlayer() {
     if (!currentFile) return;
 
     const audioUrl = `/api/downloads/${encodeURIComponent(currentFile.name)}`;
-    console.log('🎵 Inicializando áudio:', audioUrl);
+            // Inicializando áudio
     
     const audio = new Audio();
     audio.preload = 'metadata';
@@ -127,7 +132,7 @@ export default function AudioPlayer() {
       
       // Aplicar progresso inicial salvo (apenas uma vez quando carrega)
       if (currentTime > 0 && Math.abs(audio.currentTime - currentTime) > 1) {
-        console.log('🔄 [AudioPlayer] Aplicando progresso inicial:', currentTime);
+        // Aplicando progresso inicial
         audio.currentTime = currentTime;
       }
       
@@ -270,7 +275,6 @@ export default function AudioPlayer() {
       const timeDiff = Math.abs(currentTime - currentWavePos);
       
       if (percentageDiff > 0.005 || timeDiff > 0.2) {
-        console.log('🎵 [AudioPlayer] Sincronizando WaveSurfer:', percentage.toFixed(3), '(diff:', percentageDiff.toFixed(3), ')');
         wavesurferRef.current.seekTo(percentage);
       }
     } catch (error) {
@@ -281,154 +285,257 @@ export default function AudioPlayer() {
     // Inicializar WaveSurfer otimizado
   useEffect(() => {
     if (!currentFile || !isClient) return;
-    
-    // Evitar re-inicialização desnecessária
-    if (lastInitializedFile.current === currentFile.name && wavesurferRef.current) {
-      return;
-    }
-    
+
+    // Delay fixo para garantir que o container está visível
     let isCancelled = false;
-    
-    const initWaveSurfer = async () => {
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    timeoutId = setTimeout(() => {
       if (isCancelled) return;
-      
-      // Aguardar um pouco menos para ser mais responsivo
-      await new Promise(resolve => setTimeout(resolve, 50));
-      if (isCancelled) return;
-      
-      const containerRef = isMobile ? waveformMobileRef.current : waveformDesktopRef.current;
-      if (!containerRef) return;
 
-      try {
-        // Só limpar se já não estiver vazio
-        if (containerRef.children.length > 0) {
-          containerRef.innerHTML = '';
+      // Evitar re-inicialização desnecessária
+      if (lastInitializedFile.current === currentFile.name && wavesurferRef.current) {
+        console.log('⚠️ WaveSurfer já inicializado para:', currentFile.name);
+        return;
+      }
+
+      // Evitar múltiplas inicializações simultâneas
+      if (isInitializing.current) {
+        console.log('⚠️ WaveSurfer já está sendo inicializado, cancelando nova tentativa');
+        return;
+      }
+
+      isInitializing.current = true;
+
+      const initWaveSurfer = async () => {
+        const containerRef = isMobile ? waveformMobileRef.current : waveformDesktopRef.current;
+        if (!containerRef) {
+          console.warn('❌ Container do WaveSurfer não encontrado');
+          isInitializing.current = false;
+          return;
         }
-        
-        // Obter cores do tema - verificar configuração primeiro
-        let waveColor = 'rgba(16, 185, 129, 0.4)';
-        let progressColor = 'rgba(16, 185, 129, 0.8)';
-        let cursorColor = 'rgba(16, 185, 129, 0.6)';
-        
-        // Só extrair cores se não estiver desabilitado
-        if (!settings.disableDynamicColors) {
-          try {
-            const thumbnailUrl = getThumbnailUrl(currentFile.name);
-            const colorData = await getCachedDominantColor(thumbnailUrl);
-            waveColor = `rgba(${colorData.r}, ${colorData.g}, ${colorData.b}, 0.4)`;
-            progressColor = `rgba(${colorData.r}, ${colorData.g}, ${colorData.b}, 0.8)`;
-            cursorColor = `rgba(${colorData.r}, ${colorData.g}, ${colorData.b}, 0.6)`;
-          } catch (error) {
-            console.warn('Usando cores padrão para WaveSurfer');
-          }
-        }
-
-        if (isCancelled) return;
-
-        const wavesurfer = WaveSurfer.create({
-          container: containerRef,
-          waveColor,
-          progressColor,
-          cursorColor,
-          height: isMobile ? 80 : 70,
-          barWidth: 3,
-          barGap: 1,
-          barRadius: 2,
-          normalize: true,
-          interact: false, // Desabilitar interação do WaveSurfer para evitar conflitos
-          fillParent: true,
-          hideScrollbar: true,
-          backend: 'WebAudio', // Usar WebAudio para melhor performance
-          mediaControls: false,
-          autoplay: false
-        });
-
-        if (isCancelled) {
-          wavesurfer.destroy();
+        if (containerRef.offsetWidth === 0 || containerRef.offsetHeight === 0) {
+          console.warn('❌ Container do WaveSurfer não tem dimensões válidas');
+          isInitializing.current = false;
           return;
         }
 
-        wavesurfer.on('ready', () => {
-          if (!isCancelled) {
-            console.log('✅ WaveSurfer pronto - duração:', wavesurfer.getDuration()?.toFixed(2) + 's');
-            setIsWaveReady(true);
-            lastInitializedFile.current = currentFile.name;
-            
-            // Sincronizar com posição atual se necessário (imediato para melhor sincronização)
-            if (currentTime > 0 && duration > 0) {
-              const initialPercentage = currentTime / duration;
-              console.log('🎵 [AudioPlayer] Aplicando posição inicial no WaveSurfer:', (initialPercentage * 100).toFixed(1) + '%');
-              try {
-                wavesurfer.seekTo(initialPercentage);
-              } catch (e) {
-                console.warn('Erro na sincronização inicial do WaveSurfer:', e);
+        // Verificar se o container tem dimensões válidas
+        const rect = containerRef.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) {
+          console.warn('❌ Container do WaveSurfer não está visível');
+          return;
+        }
+
+        try {
+          // Só limpar se já não estiver vazio
+          if (containerRef.children.length > 0) {
+            containerRef.innerHTML = '';
+          }
+          
+          // Obter cores do tema - verificar configuração primeiro
+          let waveColor = 'rgba(16, 185, 129, 0.4)';
+          let progressColor = 'rgba(16, 185, 129, 0.8)';
+          let cursorColor = 'rgba(16, 185, 129, 0.6)';
+          
+          // Só extrair cores se não estiver desabilitado
+          if (!settings.disableDynamicColors) {
+            try {
+              const thumbnailUrl = getThumbnailUrl(currentFile.name);
+              const colorData = await getCachedDominantColor(thumbnailUrl);
+              waveColor = `rgba(${colorData.r}, ${colorData.g}, ${colorData.b}, 0.4)`;
+              progressColor = `rgba(${colorData.r}, ${colorData.g}, ${colorData.b}, 0.8)`;
+              cursorColor = `rgba(${colorData.r}, ${colorData.g}, ${colorData.b}, 0.6)`;
+            } catch (error) {
+              console.warn('Usando cores padrão para WaveSurfer');
+            }
+          }
+
+          if (isCancelled) return;
+
+          console.log('🎨 Configurando WaveSurfer com cores:', { waveColor, progressColor, cursorColor });
+          
+          const wavesurfer = WaveSurfer.create({
+            container: containerRef,
+            waveColor,
+            progressColor,
+            cursorColor,
+            height: isMobile ? 80 : 70,
+            barWidth: 2,
+            barGap: 1,
+            barRadius: 1,
+            normalize: true,
+            interact: false,
+            fillParent: true,
+            hideScrollbar: false,
+            backend: 'WebAudio',
+            mediaControls: false,
+            autoplay: false
+          });
+          
+          console.log('✅ WaveSurfer criado:', wavesurfer);
+
+          if (isCancelled) {
+            wavesurfer.destroy();
+            return;
+          }
+
+          wavesurfer.on('ready', () => {
+            if (!isCancelled) {
+              const duration = wavesurfer.getDuration();
+              console.log('✅ WaveSurfer pronto - duração:', duration?.toFixed(2) + 's');
+              console.log('✅ WaveSurfer container:', containerRef);
+              console.log('✅ WaveSurfer canvas:', containerRef.querySelector('canvas'));
+              setIsWaveReady(true);
+              lastInitializedFile.current = currentFile.name;
+              isInitializing.current = false;
+              
+              // Sincronizar com posição atual se necessário
+              if (currentTime > 0 && duration > 0) {
+                const initialPercentage = currentTime / duration;
+                try {
+                  wavesurfer.seekTo(initialPercentage);
+                  console.log('✅ WaveSurfer sincronizado com posição:', initialPercentage);
+                } catch (e) {
+                  console.warn('Erro na sincronização inicial do WaveSurfer:', e);
+                }
               }
             }
-          }
-        });
+          });
 
-        wavesurfer.on('error', (err) => {
-          if (!isCancelled) {
-            console.warn('⚠️ WaveSurfer erro (ignorando):', err);
-            // Mesmo com erro, marcar como pronto para não travar a UI
-            setIsWaveReady(true);
-          }
-        });
-
-        // Desabilitar eventos que podem interferir com o playback
-        wavesurfer.on('play', () => {
-          // Não fazer nada - deixar o áudio nativo controlar
-        });
-
-        wavesurfer.on('pause', () => {
-          // Não fazer nada - deixar o áudio nativo controlar
-        });
-
-        // Evitar que o WaveSurfer controle o playback
-        if (wavesurfer.getMediaElement) {
-          try {
-            const mediaElement = wavesurfer.getMediaElement();
-            if (mediaElement) {
-              mediaElement.pause();
-              // Desabilitar eventos de time update do media element para evitar conflitos
-              mediaElement.removeAttribute('controls');
-              mediaElement.muted = true;
+          wavesurfer.on('loading', (progress) => {
+            if (!isCancelled) {
+              console.log('📊 WaveSurfer carregando:', progress + '%');
             }
-          } catch (e) {
-            // Ignorar se não conseguir acessar o media element
+          });
+
+          wavesurfer.on('decode', () => {
+            if (!isCancelled) {
+              console.log('🔍 WaveSurfer decodificando áudio...');
+            }
+          });
+
+          wavesurfer.on('error', (err) => {
+            if (!isCancelled) {
+              console.warn('⚠️ WaveSurfer erro:', err);
+              console.warn('⚠️ Detalhes do erro:', {
+                message: err.message,
+                stack: err.stack,
+                container: containerRef,
+                audioUrl
+              });
+              // Mesmo com erro, marcar como pronto para não travar a UI
+              setIsWaveReady(true);
+              isInitializing.current = false;
+            }
+          });
+
+          // Desabilitar eventos que podem interferir com o playback
+          wavesurfer.on('play', () => {
+            // Não fazer nada - deixar o áudio nativo controlar
+          });
+
+          wavesurfer.on('pause', () => {
+            // Não fazer nada - deixar o áudio nativo controlar
+          });
+
+          // Evitar que o WaveSurfer controle o playback
+          if (wavesurfer.getMediaElement) {
+            try {
+              const mediaElement = wavesurfer.getMediaElement();
+              if (mediaElement) {
+                mediaElement.pause();
+                // Desabilitar eventos de time update do media element para evitar conflitos
+                mediaElement.removeAttribute('controls');
+                mediaElement.muted = true;
+              }
+            } catch (e) {
+              // Ignorar se não conseguir acessar o media element
+            }
           }
+
+          wavesurferRef.current = wavesurfer;
+          
+        } catch (error) {
+          if (!isCancelled) {
+            console.warn('⚠️ Erro ao inicializar WaveSurfer:', error);
+            setIsWaveReady(true); // Marcar como pronto mesmo com erro
+            isInitializing.current = false; // Finalizar inicialização mesmo com erro
+          }
+        }
+
+        // Cancelar carregamento pendente se houver
+        if (loadingTimeoutRef.current) {
+          clearTimeout(loadingTimeoutRef.current);
+          loadingTimeoutRef.current = null;
         }
 
         // Carregar áudio no WaveSurfer de forma assíncrona
         const audioUrl = `/api/downloads/${encodeURIComponent(currentFile.name)}`;
         
-                 // Usar setTimeout para não bloquear a UI e evitar carregamentos múltiplos
-         // Delay balanceado para boa sincronização sem impactar performance
-         setTimeout(() => {
-           if (!isCancelled && wavesurfer) {
-             try {
-               wavesurfer.load(audioUrl);
-             } catch (error) {
-               console.warn('Erro ao carregar no WaveSurfer, usando fallback:', error);
-               setIsWaveReady(true);
-             }
-           }
-         }, 300); // Delay reduzido para 300ms para melhor responsividade
+        console.log('📡 Preparando carregamento do WaveSurfer para:', currentFile.name);
+        console.log('📡 URL do áudio:', audioUrl);
         
-        wavesurferRef.current = wavesurfer;
+        // Testar se a URL do áudio está acessível
+        fetch(audioUrl, { method: 'HEAD' })
+          .then(response => {
+            console.log('📡 Status da URL do áudio:', response.status, response.statusText);
+            console.log('📡 Headers da resposta:', Object.fromEntries(response.headers.entries()));
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+          })
+          .catch(error => {
+            console.warn('⚠️ Erro ao verificar URL do áudio:', error);
+          });
         
-      } catch (error) {
-        if (!isCancelled) {
-          console.warn('⚠️ Erro ao inicializar WaveSurfer:', error);
-          setIsWaveReady(true); // Marcar como pronto mesmo com erro
+                      // Carregar áudio imediatamente após criar o WaveSurfer
+        try {
+          console.log('🎵 Carregando WaveSurfer:', currentFile.name);
+          console.log('🎵 WaveSurfer instance:', wavesurferRef.current);
+          console.log('🎵 Container atual:', containerRef);
+          console.log('🎵 URL do áudio:', audioUrl);
+          
+          // Verificar se o container ainda está válido
+          if (containerRef && containerRef.offsetWidth > 0 && containerRef.offsetHeight > 0 && wavesurferRef.current) {
+            wavesurferRef.current.load(audioUrl);
+            console.log('🎵 Comando load enviado para WaveSurfer');
+            
+            // Não precisamos de timeout aqui, já temos o timeout de fallback global
+            
+          } else {
+            console.warn('⚠️ Container inválido no momento do carregamento');
+            setIsWaveReady(true);
+            isInitializing.current = false;
+          }
+        } catch (error) {
+          console.warn('Erro ao carregar WaveSurfer:', error);
+          if (!isCancelled) {
+            setIsWaveReady(true);
+            isInitializing.current = false;
+          }
         }
-      }
-    };
+        
+                  // Não precisamos mais do loadingTimeoutRef aqui
+      };
 
-    initWaveSurfer();
+      initWaveSurfer();
+    }, 500);
 
     return () => {
       isCancelled = true;
+      isInitializing.current = false; // Resetar flag de inicialização
+      console.log('🔄 Destruindo WaveSurfer para:', currentFile?.name);
+      
+      // Cancelar timeouts pendentes
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+        loadingTimeoutRef.current = null;
+      }
+      
       setIsWaveReady(false);
       lastInitializedFile.current = null;
       
@@ -441,7 +548,26 @@ export default function AudioPlayer() {
         wavesurferRef.current = null;
       }
     };
-  }, [currentFile?.name, isMobile, isClient, settings.disableDynamicColors]);
+  }, [currentFile?.name, isMobile, isClient]); // Removido settings.disableDynamicColors para evitar re-execuções
+
+  // Timeout de fallback para evitar loading infinito da wave
+  useEffect(() => {
+    let timeout: NodeJS.Timeout | null = null;
+    
+    if (!isWaveReady && currentFile) {
+      console.log('⏰ Iniciando timeout de fallback para wave (30s)');
+      timeout = setTimeout(() => {
+        console.warn('⚠️ Timeout da wave - forçando isWaveReady para true');
+        setIsWaveReady(true);
+      }, 30000); // 30 segundos para FLAC
+    }
+    
+    return () => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    };
+  }, [isWaveReady, currentFile?.name]);
 
   // Handlers otimizados
   const togglePlay = useCallback(() => {
@@ -463,108 +589,53 @@ export default function AudioPlayer() {
   }, [isMuted, setIsMuted]);
 
   const seekToPosition = useCallback((clientX: number, element: HTMLElement) => {
-    if (!audioRef.current || duration === 0) {
-      console.log('🎵 [AudioPlayer] Seek cancelado - áudio ou duração inválida');
-      return;
-    }
+    if (!audioRef.current || duration === 0) return;
     
     const audio = audioRef.current;
-    
-    // Verificar se o áudio está pronto para seek
-    if (!isReady || audio.readyState < 2) {
-      console.warn('🎵 [AudioPlayer] Áudio não está pronto para seek. ReadyState:', audio.readyState);
-      return;
-    }
+    if (!isReady || audio.readyState < 1) return;
     
     const rect = element.getBoundingClientRect();
     const clickX = clientX - rect.left;
     const percentage = Math.max(0, Math.min(1, clickX / rect.width));
     const newTime = percentage * duration;
     
-    console.log('🎵 [AudioPlayer] === SEEK DETALHADO ===');
-    console.log('🎵 [AudioPlayer] Destino:', newTime.toFixed(2) + 's (' + Math.round(percentage * 100) + '%)');
-    console.log('🎵 [AudioPlayer] Audio readyState:', audio.readyState);
-    console.log('🎵 [AudioPlayer] Audio paused:', audio.paused);
-    console.log('🎵 [AudioPlayer] Audio duration:', audio.duration);
-    console.log('🎵 [AudioPlayer] Antes do seek:', audio.currentTime.toFixed(2) + 's');
+    if (isNaN(newTime) || newTime < 0 || newTime > duration) return;
     
-    // Validar se o valor é razoável
-    if (isNaN(newTime) || newTime < 0 || newTime > duration) {
-      console.warn('🎵 [AudioPlayer] Tempo inválido calculado:', newTime);
-      return;
-    }
-    
-    // Bloquear updates
+    // Bloquear updates durante o seek
     isSeekingRef.current = true;
     
     try {
-      // Método mais robusto - pausar, seek, depois reproduzir se necessário
-      const wasPlaying = !audio.paused;
+      // Aplicar o seek diretamente
+      audio.currentTime = newTime;
       
-      // Se estiver tocando, pausar temporariamente
-      if (wasPlaying) {
-        audio.pause();
-        console.log('🎵 [AudioPlayer] Áudio pausado para seek');
+      // Atualizar estado imediatamente
+      setPlayerState(prev => ({ ...prev, currentTime: newTime }));
+      
+      // Sincronizar WaveSurfer se disponível
+      if (wavesurferRef.current && isWaveReady && duration > 0) {
+        try {
+          const wavePercentage = newTime / duration;
+          wavesurferRef.current.seekTo(wavePercentage);
+        } catch (waveError) {
+          console.warn('Erro ao sincronizar WaveSurfer:', waveError);
+        }
       }
       
-      // Aguardar um frame para garantir que o pause foi processado
-      requestAnimationFrame(() => {
-        try {
-          // Definir o novo tempo
-          audio.currentTime = newTime;
-          console.log('🎵 [AudioPlayer] currentTime definido para:', newTime.toFixed(2) + 's');
-          
-          // Verificar se foi aplicado
-          setTimeout(() => {
-            const actualTime = audio.currentTime;
-            console.log('🎵 [AudioPlayer] Verificação: tempo real =', actualTime.toFixed(2) + 's');
-            
-            // Atualizar estado da UI
-            setPlayerState(prev => ({ ...prev, currentTime: actualTime }));
-            
-            // Se estava tocando, retomar reprodução
-            if (wasPlaying) {
-              audio.play().then(() => {
-                console.log('🎵 [AudioPlayer] Reprodução retomada após seek');
-              }).catch(err => {
-                console.warn('🎵 [AudioPlayer] Erro ao retomar reprodução:', err);
-              });
-            }
-            
-            // WaveSurfer sync - sincronização imediata para melhor precisão
-            if (wavesurferRef.current && isWaveReady && duration > 0) {
-              try {
-                const actualPercentage = actualTime / duration;
-                wavesurferRef.current.seekTo(actualPercentage);
-                console.log('🎵 [AudioPlayer] WaveSurfer sincronizado para:', (actualPercentage * 100).toFixed(1) + '%');
-              } catch (waveError) {
-                console.warn('🎵 [AudioPlayer] Erro ao sincronizar WaveSurfer:', waveError);
-              }
-            }
-            
-          }, 50);
-          
-        } catch (seekError) {
-          console.error('🎵 [AudioPlayer] Erro durante o seek:', seekError);
-        }
-      });
-      
     } catch (e) {
-      console.error('🎵 [AudioPlayer] Erro no processo de seek:', e);
+      console.error('Erro no seek:', e);
     }
     
-    // Liberar bloqueio após tempo mais curto para melhor responsividade
+    // Liberar bloqueio após um tempo mínimo
     setTimeout(() => {
       isSeekingRef.current = false;
-      console.log('🎵 [AudioPlayer] === SEEK FINALIZADO ===');
-    }, 300);
+    }, 100);
     
   }, [duration, setPlayerState, isWaveReady, isReady]);
 
   const handleProgressClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    console.log('🎵 [AudioPlayer] Progress bar clicked at:', e.clientX);
+            // Progress bar clicked
     
     // Aplicar seek imediatamente sem delay
     seekToPosition(e.clientX, e.currentTarget);
@@ -574,7 +645,7 @@ export default function AudioPlayer() {
     e.preventDefault();
     e.stopPropagation();
     
-    console.log('🎵 [AudioPlayer] Iniciando drag do progresso');
+            // Iniciando drag do progresso
     isDraggingRef.current = true;
     isSeekingRef.current = true; // Marcar seeking também durante drag
     
@@ -588,7 +659,7 @@ export default function AudioPlayer() {
     };
 
     const handleMouseUp = (e: MouseEvent) => {
-      console.log('🎵 [AudioPlayer] Finalizando drag do progresso');
+              // Finalizando drag do progresso
       e.preventDefault();
       
       isDraggingRef.current = false;
@@ -602,7 +673,7 @@ export default function AudioPlayer() {
       // Aguardar o mesmo tempo que o seek simples para consistência
       setTimeout(() => {
         isSeekingRef.current = false;
-        console.log('🎵 [AudioPlayer] DRAG FINALIZADO - liberando handleTimeUpdate');
+        // DRAG FINALIZADO - liberando handleTimeUpdate
       }, 300);
     };
 
@@ -702,8 +773,13 @@ export default function AudioPlayer() {
     };
   }, [playerDominantColor]);
 
-  // Não renderizar no servidor ou sem arquivo
-  if (!isClient || !currentFile) return null;
+  // Não renderizar no servidor
+  if (!isClient) return null;
+  
+  // Mostrar skeleton quando carregando ou sem arquivo
+  if (!currentFile || isLoading) {
+    return <SkeletonAudioPlayer variant={isMobile ? 'mobile' : 'desktop'} />;
+  }
 
   // Renderizar erro
   if (error) {
@@ -737,22 +813,16 @@ export default function AudioPlayer() {
               boxShadow: `0 4px 16px ${themeColors.background}, inset 0 1px 0 rgba(255, 255, 255, 0.05)`
             }}
           >
-            <div ref={waveformDesktopRef} className="w-full" style={{ height: 70 }} />
-            {!isWaveReady && !isLoading && (
+            <div ref={waveformDesktopRef} className="w-full" style={{ height: 70, minHeight: 70, minWidth: 100 }} />
+            {!isWaveReady && (
               <div className="absolute inset-0 flex items-center justify-center">
-                <div 
-                  className="animate-spin rounded-full h-8 w-8 border-b-2 border-t-2 border-t-transparent" 
-                  style={{ borderBottomColor: themeColors.primary }}
-                />
+                <LoadingSpinner size="lg" themeColors={themeColors} isLoading={!isWaveReady} />
               </div>
             )}
             
             {isLoading && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/40 z-10 rounded-lg backdrop-blur-sm">
-                <div 
-                  className="animate-spin rounded-full h-7 w-7 border-b-2 border-t-2 border-t-transparent" 
-                  style={{ borderBottomColor: themeColors.primary }}
-                />
+                <LoadingSpinner size="md" themeColors={themeColors} isLoading={isLoading} />
               </div>
             )}
           </div>
@@ -760,7 +830,7 @@ export default function AudioPlayer() {
           {/* Progress Bar */}
           <div className="absolute left-0 right-0 z-30" style={{ top: '-8px' }}>
             <div 
-              className="w-full h-2 cursor-pointer relative shadow-lg backdrop-blur-sm"
+              className="w-full h-4 cursor-pointer relative shadow-lg backdrop-blur-sm py-1"
               onClick={handleProgressClick}
               onMouseDown={handleProgressMouseDown}
               style={{
@@ -1018,28 +1088,22 @@ export default function AudioPlayer() {
                 background: `rgba(0, 0, 0, 0.2)`
               }}
             >
-              <div ref={waveformMobileRef} className="w-full h-full" />
-              {!isWaveReady && !isLoading && (
+              <div ref={waveformMobileRef} className="w-full h-full" style={{ minHeight: 80, minWidth: 100 }} />
+              {!isWaveReady && (
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <div 
-                    className="animate-spin rounded-full h-8 w-8 border-b-2 border-t-2 border-t-transparent" 
-                    style={{ borderBottomColor: themeColors.primary }}
-                  />
+                  <LoadingSpinner size="lg" themeColors={themeColors} isLoading={!isWaveReady} />
                 </div>
               )}
               {isLoading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-10 rounded-xl backdrop-blur-sm">
-                  <div 
-                    className="animate-spin rounded-full h-7 w-7 border-b-2 border-t-2 border-t-transparent"
-                    style={{ borderBottomColor: themeColors.primary }}
-                  />
+                  <LoadingSpinner size="md" themeColors={themeColors} isLoading={isLoading} />
                 </div>
               )}
               
               {/* Mobile Progress Overlay */}
               <div className="absolute bottom-3 left-3 right-3 z-30">
                 <div 
-                  className="w-full h-2 cursor-pointer rounded-full relative shadow-lg backdrop-blur-sm border-2"
+                  className="w-full h-6 cursor-pointer rounded-full relative shadow-lg backdrop-blur-sm border-2 py-2"
                   onClick={handleProgressClick}
                   onMouseDown={handleProgressMouseDown}
                   style={{
@@ -1049,7 +1113,7 @@ export default function AudioPlayer() {
                   }}
                   onTouchStart={(e) => {
                     e.preventDefault();
-                    console.log('🎵 [AudioPlayer] Touch start no progresso');
+                                          // Touch start no progresso
                     
                     isDraggingRef.current = true;
                     isSeekingRef.current = true;
@@ -1066,7 +1130,7 @@ export default function AudioPlayer() {
                     };
                     
                     const handleTouchEnd = (e: TouchEvent) => {
-                      console.log('🎵 [AudioPlayer] Touch end no progresso');
+                                              // Touch end no progresso
                       e.preventDefault();
                       
                       isDraggingRef.current = false;
@@ -1076,7 +1140,7 @@ export default function AudioPlayer() {
                       
                       setTimeout(() => {
                         isSeekingRef.current = false;
-                        console.log('🎵 [AudioPlayer] TOUCH FINALIZADO - liberando handleTimeUpdate');
+                        // TOUCH FINALIZADO - liberando handleTimeUpdate
                       }, 300);
                     };
                     

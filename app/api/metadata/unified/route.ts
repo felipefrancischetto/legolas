@@ -27,6 +27,7 @@ interface MetadataRequest {
   duration?: string | number;
   comment?: string;
   newFileName?: string;
+  catalogNumber?: string;
   
   // Tipo de operação
   operation?: 'search' | 'update' | 'release' | 'individual' | 'enhance';
@@ -130,7 +131,7 @@ async function handleMetadataSearch(params: MetadataRequest) {
 
 async function handleMetadataUpdate(params: MetadataRequest, request: NextRequest) {
   const { 
-    fileName, title, artist, album, year, genre, label, bpm, key, duration, comment, newFileName 
+    fileName, title, artist, album, year, genre, label, bpm, key, duration, comment, newFileName, catalogNumber 
   } = params;
 
   if (!fileName) {
@@ -173,7 +174,7 @@ async function handleMetadataUpdate(params: MetadataRequest, request: NextReques
   }
 
   // Atualizar metadados se fornecidos
-  if (title || artist || album || year || genre || label || bpm || key || duration || comment) {
+  if (title || artist || album || year || genre || label || bpm || key || duration || comment || catalogNumber) {
     const ext = filePath.split('.').pop()?.toLowerCase();
     const safeYear = sanitizeYear(year || '');
 
@@ -189,6 +190,7 @@ async function handleMetadataUpdate(params: MetadataRequest, request: NextReques
       if (key) tags.initialKey = key;
       if (duration) tags.length = duration.toString();
       if (comment) tags.comment = { language: 'por', text: comment };
+      if (catalogNumber) tags.catalogNumber = catalogNumber;
 
       const success = NodeID3.write(tags, filePath);
       if (!success) {
@@ -210,6 +212,7 @@ async function handleMetadataUpdate(params: MetadataRequest, request: NextReques
       if (key) args.push('-metadata', `key=${key}`);
       if (duration) args.push('-metadata', `duration=${duration}`);
       if (comment) args.push('-metadata', `comment=${comment}`);
+      if (catalogNumber) args.push('-metadata', `catalogNumber=${catalogNumber}`);
       
       // Arquivo temporário de saída
       const tmpDir = mkdtempSync(os.tmpdir() + '/flacmeta-');

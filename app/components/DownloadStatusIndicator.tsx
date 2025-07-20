@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import DetailedProgressDisplay from './DetailedProgressDisplay';
 import { getCachedDominantColor } from '../utils/colorExtractor';
+import LoadingSpinner from './LoadingSpinner';
 
 interface DownloadStatusIndicatorProps {
   type: 'individual' | 'playlist';
@@ -68,6 +69,8 @@ export default function DownloadStatusIndicator({
         }
       };
       extractColor();
+    } else {
+      setDominantColor('rgba(75, 85, 99, 0.2)');
     }
   }, [thumbnail]);
 
@@ -166,14 +169,6 @@ export default function DownloadStatusIndicator({
   };
 
   const colors = getStatusColors();
-
-  // Animação de loading
-  const LoadingSpinner = ({ className = "w-4 h-4" }: { className?: string }) => (
-    <svg className={`${className} animate-spin`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" className="opacity-25" />
-      <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" className="opacity-75" />
-    </svg>
-  );
 
   // Status específico para playlist
   const renderPlaylistStatus = () => {
@@ -308,7 +303,12 @@ export default function DownloadStatusIndicator({
                   )}
                 </div>
                 <div className="flex items-center gap-2 mt-1 sm:gap-1">
-                  {(status === 'downloading' || loading) && <LoadingSpinner className="w-3 h-3 sm:w-2 sm:h-2" />}
+                  <LoadingSpinner 
+                    size="xs" 
+                    className="sm:w-2 sm:h-2" 
+                    isLoading={status === 'downloading' || loading}
+                    timeout={60000}
+                  />
                   {isConnected && (
                     <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse sm:w-1 sm:h-1" title="Conectado ao servidor" />
                   )}
@@ -398,7 +398,12 @@ export default function DownloadStatusIndicator({
             {/* Status atual */}
             <div className="space-y-1">
               <div className="flex items-center gap-2 sm:gap-1">
-                {(status === 'downloading' || loading) && <LoadingSpinner className="sm:w-3 sm:h-3" />}
+                <LoadingSpinner 
+                  size="sm" 
+                  className="sm:w-3 sm:h-3" 
+                  isLoading={status === 'downloading' || loading}
+                  timeout={60000}
+                />
                 {isConnected && (
                   <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse sm:w-1.5 sm:h-1.5" title="Conectado ao servidor" />
                 )}

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { useDownload } from '../contexts/DownloadContext';
+import LoadingSpinner from './LoadingSpinner';
 
 interface Track {
   title: string;
@@ -76,7 +77,7 @@ export default function PlaylistTracklistModal({ isOpen, onClose, playlistUrl }:
         <div className="flex-1 overflow-y-auto pr-2 custom-scroll sm:pr-1">
           {loading ? (
             <div className="flex justify-center items-center h-32 sm:h-24">
-              <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin sm:w-6 sm:h-6"></div>
+              <LoadingSpinner size="lg" color="white" isLoading={loading} />
             </div>
           ) : error ? (
             <div className="text-red-400 text-center py-4 sm:py-3 sm:text-sm">{error}</div>

@@ -1,5 +1,7 @@
 "use client";
 
+import LoadingSpinner from './LoadingSpinner';
+
 interface SoundWaveProps {
   color?: string;
   size?: 'small' | 'medium' | 'large';
@@ -15,9 +17,9 @@ export default function SoundWave({
 }: SoundWaveProps) {
   
   const sizeConfig = {
-    small: { width: 20, barWidth: 2.5, barCount: 4, gap: 1.5, spinnerSize: 14 },
-    medium: { width: 26, barWidth: 3, barCount: 5, gap: 2, spinnerSize: 18 },
-    large: { width: 32, barWidth: 4, barCount: 6, gap: 2.5, spinnerSize: 22 }
+    small: { width: 20, barWidth: 2.5, barCount: 4, gap: 1.5, spinnerSize: 'xs' as const },
+    medium: { width: 26, barWidth: 3, barCount: 5, gap: 2, spinnerSize: 'sm' as const },
+    large: { width: 92, barWidth: 7, barCount: 6, gap: 3, spinnerSize: 'md' as const }
   };
 
   const config = sizeConfig[size];
@@ -32,13 +34,11 @@ export default function SoundWave({
           height: config.width
         }}
       >
-        <div 
-          className="animate-spin rounded-full border-b-2 border-t-2 border-t-transparent" 
-          style={{ 
-            width: config.spinnerSize,
-            height: config.spinnerSize,
-            borderBottomColor: color
-          }}
+        <LoadingSpinner 
+          size={config.spinnerSize}
+          color={color}
+          variant="music"
+          isLoading={isLoading}
         />
       </div>
     );
@@ -68,7 +68,6 @@ export default function SoundWave({
       {Array.from({ length: config.barCount }).map((_, index) => (
         <div
           key={index}
-          className="rounded-full"
           style={{
             width: `${config.barWidth}px`,
             backgroundColor: color,

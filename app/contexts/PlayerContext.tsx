@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, ReactNode, useCallback, useMemo } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode, useRef } from 'react';
 
 interface FileInfo {
   name: string;
@@ -13,6 +13,8 @@ interface FileInfo {
   thumbnail?: string;
   bpm?: number;
   key?: string;
+  genre?: string;
+  album?: string;
   downloadedAt?: string;
   metadata?: {
     album?: string;
@@ -20,7 +22,14 @@ interface FileInfo {
     genero?: string;
     descricao?: string;
   };
+  fileCreatedAt?: string;
+  isBeatportFormat?: boolean;
   label?: string;
+  ano?: string;
+  status?: string;
+  remixer?: string;
+  catalogNumber?: string;
+  catalog?: string;
 }
 
 interface PlayerState {
@@ -50,6 +59,11 @@ interface PlayerContextType {
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
+  // Refs para controlar throttling e evitar loops
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSavedState = useRef<PlayerState | null>(null);
+  const lastSaveTime = useRef<number>(0);
+  
   const [playerState, setPlayerState] = useState<PlayerState>(() => {
     // Inicialização otimizada apenas uma vez
     if (typeof window === 'undefined') {
@@ -90,7 +104,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           const parsedTime = parseFloat(savedCurrentTime);
           if (!isNaN(parsedTime) && parsedTime >= 0) {
             initialCurrentTime = parsedTime;
-            console.log('🔄 [PlayerContext] Progresso restaurado do localStorage:', parsedTime, 'para:', initialCurrentFile.name);
           }
         }
       }
@@ -111,33 +124,97 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     };
   });
 
+  // Função otimizada para salvar no localStorage com throttling melhorado
+  const saveToLocalStorage = useCallback((newState: PlayerState) => {
+    if (typeof window === 'undefined') return;
+
+    // Evitar salvar o mesmo estado novamente
+    if (lastSavedState.current && 
+        lastSavedState.current.currentFile?.name === newState.currentFile?.name &&
+        Math.abs(lastSavedState.current.currentTime - newState.currentTime) < 1 &&
+        lastSavedState.current.volume === newState.volume) {
+      return;
+    }
+
+    // Limpar timeout anterior
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    
+    // Debounce para evitar salvamento excessivo
+    saveTimeoutRef.current = setTimeout(() => {
+      try {
+        if (newState.currentFile) {
+          // Salvar arquivo atual
+          const currentFileJson = JSON.stringify(newState.currentFile);
+          const lastSavedFile = localStorage.getItem('audioPlayerCurrentFile');
+          
+          if (currentFileJson !== lastSavedFile) {
+            localStorage.setItem('audioPlayerCurrentFile', currentFileJson);
+          }
+          
+          // Salvar tempo atual com throttling
+          const now = Date.now();
+          const timeDiff = Math.abs(newState.currentTime - lastSaveTime.current);
+          
+          if (timeDiff > 2 || now - lastSaveTime.current > 10000) {
+            localStorage.setItem('audioPlayerCurrentTime_' + newState.currentFile.name, newState.currentTime.toString());
+            lastSaveTime.current = newState.currentTime;
+          }
+        } else {
+          localStorage.removeItem('audioPlayerCurrentFile');
+        }
+        
+        // Salvar volume apenas se mudou
+        const currentVolume = localStorage.getItem('audioPlayerVolume');
+        if (currentVolume !== newState.volume.toString()) {
+          localStorage.setItem('audioPlayerVolume', newState.volume.toString());
+        }
+        
+        // Atualizar estado salvo
+        lastSavedState.current = { ...newState };
+        
+      } catch (error) {
+        console.warn('Erro ao salvar no localStorage:', error);
+      }
+    }, 2000); // Debounce aumentado para 2 segundos
+  }, []);
+
   // Função otimizada para atualizar estado com menos re-renders
   const updatePlayerState = useCallback((state: Partial<PlayerState> | ((prev: PlayerState) => Partial<PlayerState>)) => {
     setPlayerState(prev => {
       const partial = typeof state === 'function' ? state(prev) : state;
-      const newState = { ...prev, ...partial };
-
+      
       // Otimização: só atualiza se realmente mudou
       let hasChanged = false;
+      const newState = { ...prev };
+      
       for (const key in partial) {
-        if (prev[key as keyof PlayerState] !== newState[key as keyof PlayerState]) {
+        const newValue = partial[key as keyof PlayerState];
+        const prevValue = prev[key as keyof PlayerState];
+        
+        // Comparação mais precisa para currentTime
+        if (key === 'currentTime') {
+          if (Math.abs((newValue as number) - (prevValue as number)) > 0.1) {
+            hasChanged = true;
+            (newState as any)[key] = newValue;
+          }
+        } else if (newValue !== prevValue) {
           hasChanged = true;
-          break;
+          (newState as any)[key] = newValue;
         }
       }
 
       if (!hasChanged) return prev;
 
-      // Se mudou de música, zera o progresso, senão mantém
+      // Se mudou de música, verificar progresso salvo
       if (partial.currentFile && partial.currentFile !== prev.currentFile) {
-        // Nova música - verificar se há progresso salvo no localStorage
         try {
           const savedTime = localStorage.getItem('audioPlayerCurrentTime_' + partial.currentFile.name);
           if (savedTime) {
             const parsedTime = parseFloat(savedTime);
             if (!isNaN(parsedTime) && parsedTime >= 0) {
               newState.currentTime = parsedTime;
-              console.log('🔄 [PlayerContext] Progresso restaurado para nova música:', parsedTime);
             } else {
               newState.currentTime = 0;
             }
@@ -150,77 +227,49 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
       }
 
-             // Salva no localStorage de forma otimizada com throttling
-       if (typeof window !== 'undefined') {
-         const saveToStorage = () => {
-           try {
-             if (newState.currentFile) {
-               localStorage.setItem('audioPlayerCurrentFile', JSON.stringify(newState.currentFile));
-               
-               // Só salva o progresso se houver mudança significativa (evita spam)
-               const currentTimeChanged = Math.abs(newState.currentTime - prev.currentTime) > 0.5;
-               if (currentTimeChanged || partial.currentFile !== prev.currentFile) {
-                 localStorage.setItem('audioPlayerCurrentTime_' + newState.currentFile.name, newState.currentTime.toString());
-                 console.log('💾 [PlayerContext] Progresso salvo:', newState.currentTime, 'para:', newState.currentFile.name);
-               }
-             } else {
-               localStorage.removeItem('audioPlayerCurrentFile');
-             }
-             
-             if (newState.volume !== prev.volume) {
-               localStorage.setItem('audioPlayerVolume', newState.volume.toString());
-             }
-           } catch (error) {
-             console.warn('Erro ao salvar no localStorage:', error);
-           }
-         };
-
-         // Usar requestIdleCallback se disponível, senão setTimeout
-         if (typeof requestIdleCallback !== 'undefined') {
-           requestIdleCallback(saveToStorage);
-         } else {
-           setTimeout(saveToStorage, 0);
-         }
-       }
-
       return newState;
     });
   }, []);
 
+  // Efeito para salvar no localStorage apenas quando necessário
+  useEffect(() => {
+    // Evitar salvar durante o carregamento inicial
+    if (playerState.isLoading && !playerState.currentFile) return;
+    
+    saveToLocalStorage(playerState);
+  }, [playerState.currentFile?.name, playerState.volume, saveToLocalStorage]);
+
+  // Efeito separado para salvar currentTime com throttling
+  useEffect(() => {
+    if (!playerState.currentFile || playerState.isLoading) return;
+    
+    const now = Date.now();
+    if (now - lastSaveTime.current > 5000) { // Salvar a cada 5 segundos
+      saveToLocalStorage(playerState);
+    }
+  }, [Math.floor(playerState.currentTime), playerState.currentFile?.name, saveToLocalStorage]);
+
   // Callbacks memoizados para evitar re-renders
-  const setVolume = useCallback((volume: number) => {
-    updatePlayerState({ volume });
-  }, [updatePlayerState]);
-
-  const setIsMuted = useCallback((muted: boolean) => {
-    updatePlayerState({ isMuted: muted });
-  }, [updatePlayerState]);
-
   const play = useCallback((file: FileInfo) => {
-    console.log('🎵 [PlayerContext] play() chamado para:', file.displayName);
     updatePlayerState(prev => {
       if (prev.currentFile?.name === file.name && prev.isPlaying) {
-        console.log('🎵 [PlayerContext] Mesma música já está tocando, ignorando');
         return {};
       }
       
       const isNewFile = prev.currentFile?.name !== file.name;
       
       if (isNewFile) {
-        console.log('🎵 [PlayerContext] Nova música - carregando do início');
         return {
           currentFile: file,
           isPlaying: true,
           isLoading: true,
           isReady: false,
           error: null,
-          currentTime: 0 // Zerar apenas para nova música
+          currentTime: 0
         };
       } else {
-        console.log('🎵 [PlayerContext] Mesma música - apenas alterando estado de reprodução');
         return {
           isPlaying: true,
-          // Manter currentTime atual se for a mesma música
         };
       }
     });
@@ -246,6 +295,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const seek = useCallback((time: number) => {
     updatePlayerState({ currentTime: time });
+  }, [updatePlayerState]);
+
+  const setVolume = useCallback((volume: number) => {
+    updatePlayerState({ volume });
+  }, [updatePlayerState]);
+
+  const setIsMuted = useCallback((muted: boolean) => {
+    updatePlayerState({ isMuted: muted });
   }, [updatePlayerState]);
 
   // Memoizar o value do contexto para evitar re-renders desnecessários
