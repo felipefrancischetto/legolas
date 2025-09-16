@@ -374,6 +374,51 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     updateQueueItem(item.id, { status: 'downloading' });
 
     try {
+      // Conectar ao SSE de progresso ANTES de iniciar o POST, para não perder eventos iniciais
+      let eventSource: EventSource | null = null;
+      try {
+        eventSource = new EventSource(`/api/download-progress?downloadId=${encodeURIComponent(item.id)}&_t=${Date.now()}`);
+
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            // Ignorar heartbeats
+            if (data.type === 'heartbeat') return;
+
+            if (typeof data.progress === 'number') {
+              updateProgress(item.id, data.progress, data.step, data.substep, data.detail, data.playlistIndex);
+            }
+
+            // Registrar step detalhado na timeline
+            addStep(item.id, {
+              type: data.type === 'error' ? 'error' : 'progress',
+              step: data.step || 'Processando...',
+              substep: data.substep,
+              detail: data.detail,
+              progress: data.progress,
+              timestamp: new Date().toISOString(),
+              completed: data.type === 'complete',
+              playlistIndex: typeof data.playlistIndex === 'number' ? data.playlistIndex : undefined,
+            });
+
+            // Conclusão enviada pelo servidor
+            if (data.type === 'complete') {
+              updateProgress(item.id, 100, 'Download concluído!');
+            }
+          } catch (e) {
+            // Falha ao parsear evento: apenas logar em dev
+            console.error('Erro ao processar evento SSE:', e);
+          }
+        };
+
+        eventSource.onerror = () => {
+          // Em caso de erro de conexão, não interrompe o fluxo do download
+          console.warn('SSE erro/desconexão para', item.id);
+        };
+      } catch (e) {
+        console.warn('Falha ao abrir SSE de progresso, seguindo sem streaming:', e);
+      }
+
       const response = await fetch('/api/download', {
         method: 'POST',
         headers: {
@@ -408,6 +453,9 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       // Atualizar lista de arquivos
       window.dispatchEvent(new CustomEvent('refresh-files'));
       
+      // Fechar SSE se aberto
+      try { eventSource?.close(); } catch {}
+      
     } catch (error) {
       console.error('❌ Erro no download real:', error);
       
@@ -418,6 +466,12 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         error: errorMessage,
         currentStep: 'Erro no download'
       });
+      
+      // Garantir fechamento do SSE em erro
+      try {
+        // @ts-ignore - eventSource está no escopo do try acima
+        if (typeof eventSource !== 'undefined' && eventSource) eventSource.close();
+      } catch {}
     }
   }, [updateQueueItem, updateProgress]);
 
