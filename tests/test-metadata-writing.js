@@ -95,7 +95,7 @@ async function testMetadataWriting() {
         .trim();
     };
 
-    let ffmpegCmd = `ffmpeg -y -i "${testFilePath}" -c copy`;
+    let ffmpegCmd = `ffmpeg -y -i "${testFilePath}" -c copy`; 
     ffmpegCmd += ` -metadata "title=${escapeValue(testMetadata.title)}"`;
     ffmpegCmd += ` -metadata "artist=${escapeValue(testMetadata.artist)}"`;
     ffmpegCmd += ` -metadata "album=${escapeValue(testMetadata.album)}"`;
