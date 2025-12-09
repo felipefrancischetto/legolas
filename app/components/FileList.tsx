@@ -213,7 +213,7 @@ const DynamicFileItem = memo(({
 
       return (
       <div
-        className="backdrop-blur-md rounded-xl overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-xl group flex mt-3 mb-3 border border-white/10"
+        className="backdrop-blur-md rounded-xl overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-xl group flex flex-col sm:flex-row mt-3 mb-3 border border-white/10"
         onClick={handlePlay}
         data-file-name={file.name}
         style={{
@@ -237,13 +237,13 @@ const DynamicFileItem = memo(({
         }}
     >
       {/* Capa ocupando toda altura à esquerda */}
-      <div className="relative w-[132.5px] min-w-[132.5px] h-[132.5px] flex-shrink-0">
+      <div className="relative w-full sm:w-[132.5px] sm:min-w-[132.5px] h-[200px] sm:h-[132.5px] flex-shrink-0">
         <Image
           src={getThumbnailUrl(file.name)}
           alt={file.title || file.displayName}
           width={132.5}
           height={132.5}
-          className="object-cover w-[132.5px] h-[132.5px] bg-zinc-800"
+          className="object-cover w-full h-full bg-zinc-800"
         />
         {isPlaying && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -255,7 +255,7 @@ const DynamicFileItem = memo(({
                 isLoading={isLoading}  
               />
             ) : (
-              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24" style={{ color: `rgb(${itemColor.rgb})` }}>
+              <svg className="w-6 h-6 sm:w-8 sm:h-8" fill="currentColor" viewBox="0 0 24 24" style={{ color: `rgb(${itemColor.rgb})` }}>
                 <polygon points="8,5 19,12 8,19" />
               </svg>
             )}
@@ -273,7 +273,7 @@ const DynamicFileItem = memo(({
       </div>
       
       {/* Conteúdo principal à direita */}
-      <div className="flex-1 p-2 flex flex-col min-w-0">
+      <div className="flex-1 p-3 sm:p-2 flex flex-col min-w-0">
         {/* JSON Debug - Apenas em modo debug */}
         {isDebugMode && (
           <div className="mt-2 p-3 bg-black/30 rounded-lg border border-zinc-700/50 max-h-40 overflow-auto custom-scroll">
@@ -300,14 +300,13 @@ const DynamicFileItem = memo(({
         )}
         
         {/* Linha superior: Título, Artista e Menu */}
-        <div className="flex items-start justify-between mb-1">
-          <div className="flex-1 min-w-0 mr-3">
-            <div className="text-white font-bold text-sm leading-tight truncate group-hover:text-white/90 transition-colors">
+        <div className="flex items-start justify-between mb-2 sm:mb-1 gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="text-white font-bold text-base sm:text-sm leading-tight truncate group-hover:text-white/90 transition-colors">
               {file.title || file.displayName} 
             </div>
-            <div className="text-xs font-medium leading-tight truncate" style={{ color: `rgb(${itemColor.rgb})` }}>
+            <div className="text-sm sm:text-xs font-medium leading-tight truncate mt-0.5" style={{ color: `rgb(${itemColor.rgb})` }}>
               {file.artist || 'Artista desconhecido'}
-
             </div>
           </div>
           
@@ -321,58 +320,57 @@ const DynamicFileItem = memo(({
           </div>
         </div>
         {/* Todas as informações organizadas */}
-        <div className="space-y-0.5">
-          <div className="flex flex-wrap items-center gap-1 text-xs">
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium">
+        <div className="space-y-1.5 sm:space-y-0.5">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-1 text-xs">
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium break-words">
               📀 Álbum: {file.album || 'N/A'}
             </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium">
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium break-words">
               🏷️ Label: {file.label || 'N/A'}
             </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium">
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium break-words">
               📋 Catálogo: {(file as any).catalogNumber || (file as any).catalog || 'N/A'}
             </span>
-
           </div>
 
-          <div className="flex flex-wrap items-center gap-1 text-xs">
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-mono">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-1 text-xs">
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-mono whitespace-nowrap">
               ⏱️ {file.duration || 'N/A'}
             </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1">
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 whitespace-nowrap">
               🎵 BPM: {file.bpm || 'N/A'}
             </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1">
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 whitespace-nowrap">
               🎹 Key: {file.key || 'N/A'}
             </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1">
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 break-words max-w-full">
               🎧 Gênero: {file.genre || 'N/A'}
             </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1">
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 whitespace-nowrap">
               📅 Ano: {(file as any).ano ? String((file as any).ano).slice(0, 4) : 'N/A'}
             </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1">
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 break-words max-w-full">
               📰 Publicado: {(file as any).publishedDate || (file as any).ano || 'N/A'}
             </span>
             
             {/* Indicador de compatibilidade com Beatport */}
             {file.isBeatportFormat && (
-              <span className="bg-orange-500/20 text-orange-200 px-2 py-1 rounded text-xs font-medium border border-orange-400/30 backdrop-blur-sm">
+              <span className="bg-orange-500/20 text-orange-200 px-2 py-1 rounded text-xs font-medium border border-orange-400/30 backdrop-blur-sm whitespace-nowrap">
                 🎛️ Beatport ✓
               </span>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-1 text-xs">
-            <span className="text-zinc-400 px-2 py-1 font-mono" title={file.name}>
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-1 text-xs">
+            <span className="text-zinc-400 px-2 py-1 font-mono break-all" title={file.name}>
               📁 {file.name || 'N/A'}
             </span>
-            <span className="text-zinc-400 px-2 py-1 font-mono">
+            <span className="text-zinc-400 px-2 py-1 font-mono whitespace-nowrap">
               📥 Baixado: {formatDate(file.downloadedAt || file.fileCreatedAt) || 'N/A'}
             </span>
-            <span className="text-zinc-400 px-2 py-1 font-mono">
+            <span className="text-zinc-400 px-2 py-1 font-mono whitespace-nowrap">
               💾 {(file as any).size ? ((file as any).size / (1024 * 1024)).toFixed(1) + 'MB' : 'N/A'}
             </span>
-            <span className="text-zinc-400 px-2 py-1 font-mono">
+            <span className="text-zinc-400 px-2 py-1 font-mono whitespace-nowrap">
               📄 {file.name ? `Formato: ${file.name.split('.').pop()}` : 'N/A'}
             </span>
           </div>

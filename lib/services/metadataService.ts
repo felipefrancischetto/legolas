@@ -44,19 +44,19 @@ class BeatportProviderV2 implements MetadataProvider {
     return true;
   }
 
-  async search(title: string, artist: string): Promise<Partial<EnhancedMetadata> | null> {
+  async search(title: string, artist: string, showBeatportPage: boolean = false): Promise<Partial<EnhancedMetadata> | null> {
     const timeoutMs = 15000;
     console.log(`⏰ [Beatport] Iniciando busca com timeout de ${timeoutMs/1000}s`);
     
     return Promise.race([
-      this.performBeatportSearch(title, artist),
+      this.performBeatportSearch(title, artist, showBeatportPage),
       new Promise<null>((_, reject) => 
         setTimeout(() => reject(new Error('Beatport timeout após 15s')), timeoutMs)
       )
     ]);
   }
 
-  private async performBeatportSearch(title: string, artist: string): Promise<Partial<EnhancedMetadata> | null> {
+  private async performBeatportSearch(title: string, artist: string, showBeatportPage: boolean = false): Promise<Partial<EnhancedMetadata> | null> {
     console.log(`🚀 [Beatport] Lançando browser para busca: "${title}" - "${artist}"`);
     let browser;
     try {
@@ -65,7 +65,7 @@ class BeatportProviderV2 implements MetadataProvider {
       
       console.log(`🔧 [Beatport] Configurando opções do browser...`);
       const browserOptions = { 
-        headless: false, // Browser visível para debug
+        headless: !showBeatportPage, // Browser visível apenas se showBeatportPage for true
         timeout: 10000,
         protocolTimeout: 15000,
         args: [
@@ -450,13 +450,14 @@ class BeatportProviderV2 implements MetadataProvider {
 }
 
 export class MetadataAggregator {
-  async searchMetadata(title: string, artist: string, options: { useBeatport?: boolean } = {}): Promise<EnhancedMetadata> {
-    const { useBeatport = false } = options;
+  async searchMetadata(title: string, artist: string, options: { useBeatport?: boolean; showBeatportPage?: boolean } = {}): Promise<EnhancedMetadata> {
+    const { useBeatport = false, showBeatportPage = false } = options;
 
     console.log(`\n🔍 [MetadataAggregator] Iniciando busca com opções:`, {
       title,
       artist,
       useBeatport,
+      showBeatportPage,
     });
     
     // Se useBeatport estiver desabilitado, retornar dados básicos sem buscar
@@ -477,7 +478,7 @@ export class MetadataAggregator {
     console.log(`⏳ [Beatport] Iniciando busca...`);
     
     try {
-      const result = await beatportProvider.search(title, artist);
+      const result = await beatportProvider.search(title, artist, showBeatportPage);
       const duration = Date.now() - startTime;
       
       if (result) {

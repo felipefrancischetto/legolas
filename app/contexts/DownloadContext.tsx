@@ -29,6 +29,7 @@ interface DownloadItem {
   isPlaylist?: boolean;
   format?: string;
   enrichWithBeatport?: boolean;
+  showBeatportPage?: boolean;
   playlistItems?: Array<{
     title: string;
     status: 'pending' | 'downloading' | 'completed' | 'error';
@@ -429,6 +430,7 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
           downloadId: item.id,
           format: item.format || 'flac',
           useBeatport: item.enrichWithBeatport || false,
+          showBeatportPage: item.showBeatportPage || false,
           isPlaylist: item.isPlaylist || false
         }),
       });

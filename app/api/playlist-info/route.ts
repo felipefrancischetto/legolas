@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { hasValidCookiesFile } from '@/app/api/utils/common';
 
 const execAsync = promisify(exec);
 
@@ -81,16 +82,31 @@ export async function GET(request: NextRequest) {
 
     console.log('Buscando informações da playlist:', id);
 
-    // Obter informações da playlist usando yt-dlp
-    const { stdout } = await execAsync(
-      `yt-dlp --dump-json --flat-playlist ` +
-      `--cookies "cookies.txt" ` +
-      `"https://www.youtube.com/playlist?list=${id}"`,
-      { maxBuffer: 1024 * 1024 * 10 }
-    );
-
-    // Processar a saída linha por linha, pois o yt-dlp retorna um JSON por linha
-    const entries = stdout.trim().split('\n').map(line => JSON.parse(line));
+    // Verificar se temos cookies válidos
+    const hasValidCookies = await hasValidCookiesFile();
+    
+    let entries: any[];
+    
+    if (hasValidCookies) {
+      // Tentar primeiro com cookies do arquivo
+      try {
+        const { stdout } = await execAsync(
+          `yt-dlp --dump-json --flat-playlist ` +
+          `--cookies "cookies.txt" ` +
+          `"https://www.youtube.com/playlist?list=${id}"`,
+          { maxBuffer: 1024 * 1024 * 10 }
+        );
+        entries = stdout.trim().split('\n').map(line => JSON.parse(line));
+      } catch (error) {
+        // Se falhar com cookies, usar métodos alternativos
+        console.log('Falhou com cookies, tentando métodos alternativos...');
+        entries = await getPlaylistInfo(id);
+      }
+    } else {
+      // Usar métodos alternativos diretamente
+      console.log('Arquivo de cookies inválido ou ausente, usando métodos alternativos...');
+      entries = await getPlaylistInfo(id);
+    }
     
     if (!entries || entries.length === 0) {
       return NextResponse.json(
@@ -100,14 +116,23 @@ export async function GET(request: NextRequest) {
     }
 
     // Obter informações do primeiro vídeo para pegar a thumbnail da playlist
-    const { stdout: firstVideoInfo } = await execAsync(
-      `yt-dlp --dump-json ` +
-      `--cookies "cookies.txt" ` +
-      `"https://www.youtube.com/watch?v=${entries[0].id}"`,
-      { maxBuffer: 1024 * 1024 * 10 }
-    );
-    
-    const firstVideo = JSON.parse(firstVideoInfo);
+    let firstVideo: any;
+    if (hasValidCookies) {
+      try {
+        const { stdout: firstVideoInfo } = await execAsync(
+          `yt-dlp --dump-json ` +
+          `--cookies "cookies.txt" ` +
+          `"https://www.youtube.com/watch?v=${entries[0].id}"`,
+          { maxBuffer: 1024 * 1024 * 10 }
+        );
+        firstVideo = JSON.parse(firstVideoInfo);
+      } catch (error) {
+        // Se falhar com cookies, usar método alternativo
+        firstVideo = await getVideoInfo(entries[0].id);
+      }
+    } else {
+      firstVideo = await getVideoInfo(entries[0].id);
+    }
 
     return NextResponse.json({
       title: entries[0].playlist_title || 'Playlist do YouTube',
@@ -130,6 +155,26 @@ export async function GET(request: NextRequest) {
         errorMessage = 'A playlist ou vídeo não está disponível. Verifique se é pública.';
       } else if (error.message.includes('This video is not available')) {
         errorMessage = 'Um ou mais vídeos da playlist não estão disponíveis.';
+      } else if (error.message.includes('does not look like a Netscape format')) {
+        errorMessage = 'Arquivo de cookies inválido. Usando métodos alternativos...';
+        // Tentar novamente sem cookies
+        try {
+          const id = request.nextUrl.searchParams.get('id');
+          if (id) {
+            const entries = await getPlaylistInfo(id);
+            const firstVideo = await getVideoInfo(entries[0].id);
+            return NextResponse.json({
+              title: entries[0].playlist_title || 'Playlist do YouTube',
+              thumbnail: firstVideo.thumbnail,
+              videos: entries.map((entry: any) => ({
+                title: entry.title,
+                duration: formatDuration(entry.duration || 0)
+              }))
+            });
+          }
+        } catch (retryError) {
+          // Continuar com o erro original
+        }
       }
     }
 

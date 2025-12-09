@@ -6,12 +6,13 @@ interface MetadataRequest {
   title: string;
   artist: string;
   useBeatport?: boolean;
+  showBeatportPage?: boolean;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: MetadataRequest = await request.json();
-    let { title, artist, useBeatport = false } = body;
+    let { title, artist, useBeatport = false, showBeatportPage = false } = body;
 
     console.log('\n🎯 [Enhanced-Metadata API] Iniciando busca de metadados (dados brutos):');
     console.log(`   📋 Title: "${title}"`);
@@ -40,7 +41,8 @@ export async function POST(request: NextRequest) {
     
     // Buscar metadados usando o agregador
     const metadata = await metadataAggregator.searchMetadata(title, artist, { 
-      useBeatport
+      useBeatport,
+      showBeatportPage
     });
 
     const duration = Date.now() - startTime;

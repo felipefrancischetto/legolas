@@ -201,6 +201,13 @@ export const SkeletonSearchHeader = memo(() => (
 
 SkeletonSearchHeader.displayName = 'SkeletonSearchHeader';
 
+// Deterministic pseudo-random function for consistent server/client rendering
+const seededRandom = (seed: number) => {
+  // Simple seeded random function for deterministic values
+  const x = Math.sin(seed) * 10000;
+  return x - Math.floor(x);
+};
+
 // Skeleton para player de audio
 export const SkeletonAudioPlayer = memo(({ variant = 'desktop' }: { variant?: 'desktop' | 'mobile' }) => {
   return (
@@ -231,7 +238,7 @@ export const SkeletonAudioPlayer = memo(({ variant = 'desktop' }: { variant?: 'd
                   key={i}
                   className="w-1 rounded-full animate-pulse bg-emerald-500/30"
                   style={{
-                    height: `${Math.random() * 40 + 20}%`,
+                    height: `${seededRandom(i) * 40 + 20}%`,
                     animationDelay: `${i * 0.02}s`,
                     animationDuration: '1.5s'
                   }}
@@ -289,7 +296,7 @@ export const SkeletonAudioPlayer = memo(({ variant = 'desktop' }: { variant?: 'd
                   key={i}
                   className="w-1 rounded-full animate-pulse bg-emerald-500/30"
                   style={{
-                    height: `${Math.random() * 50 + 30}%`,
+                    height: `${seededRandom(i + 1000) * 50 + 30}%`,
                     animationDelay: `${i * 0.03}s`,
                     animationDuration: '1.5s'
                   }}

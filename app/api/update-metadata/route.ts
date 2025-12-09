@@ -11,18 +11,53 @@ import os from 'os';
 function deduplicateLabel(label: string): string {
   if (!label) return '';
   
-  // Remove any duplicate words or phrases
-  const words = label.split(/\s+/);
-  const uniqueWords = [...new Set(words)];
+  // Primeiro, limpar e normalizar o label
+  let cleaned = label.trim();
   
-  // Join back and clean
-  const deduplicated = uniqueWords.join(' ').trim();
+  // Casos específicos conhecidos de duplicação
+  const specificCases = [
+    { pattern: /BMG Rights Management \(UK\) LimitedBMG Limited/gi, replacement: 'BMG Rights Management (UK) Limited' },
+    { pattern: /Sony Music EntertainmentSony Music/gi, replacement: 'Sony Music Entertainment' },
+    { pattern: /Warner Music GroupWarner Music/gi, replacement: 'Warner Music Group' }
+  ];
   
-  // Remove common duplicate patterns
-  return deduplicated
-    .replace(/(\w+)\s+\1/gi, '$1') // Remove consecutive duplicate words
-    .replace(/\s+/g, ' ') // Normalize spaces
+  // Aplicar correções específicas
+  for (const case_ of specificCases) {
+    cleaned = cleaned.replace(case_.pattern, case_.replacement);
+  }
+  
+  // Detectar e remover duplicação específica como "LimitedBMG Limited"
+  // Padrão: palavra seguida imediatamente pela mesma palavra (sem espaço)
+  cleaned = cleaned.replace(/([A-Z][a-z]+)\\1/g, '$1');
+  
+  // Detectar e remover duplicação no final (como "LimitedBMG Limited")
+  // Padrão: palavra seguida imediatamente pela mesma palavra
+  const match = cleaned.match(/^(.+?)([A-Z][a-z]+)\\2$/);
+  if (match) {
+    cleaned = match[1] + match[2];
+  }
+  
+  // Remover duplicação de palavras consecutivas
+  cleaned = cleaned
+    .replace(/(\w+)\s+\1/gi, '$1') // Remove palavras consecutivas duplicadas
+    .replace(/\s+/g, ' ') // Normalize espaços
     .trim();
+  
+  // Se ainda houver duplicação óbvia, tentar uma abordagem mais agressiva
+  const words = cleaned.split(/\s+/);
+  const uniqueWords: string[] = [];
+  
+  for (const word of words) {
+    // Verificar se a palavra já existe (case-insensitive)
+    const exists = uniqueWords.some(existing => 
+      existing.toLowerCase() === word.toLowerCase()
+    );
+    if (!exists) {
+      uniqueWords.push(word);
+    }
+  }
+  
+  return uniqueWords.join(' ').trim();
 }
 
 async function fileExists(path: string): Promise<boolean> {

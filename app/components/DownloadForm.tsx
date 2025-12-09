@@ -46,6 +46,7 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
   const [selectedTracks, setSelectedTracks] = useState<number[]>([]);
   const [format, setFormat] = useState('flac');
   const [enrichWithBeatport, setEnrichWithBeatport] = useState(true); // Sempre ativo por padrão
+  const [showBeatportPage, setShowBeatportPage] = useState(false); // Desmarcado por padrão
   const [currentDownloadId, setCurrentDownloadId] = useState<string | null>(null);
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const [themeColors, setThemeColors] = useState({
@@ -240,6 +241,7 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         isPlaylist: videoInfo?.isPlaylist || false,
         format,
         enrichWithBeatport,
+        showBeatportPage,
         status: 'pending' as const,
         steps: [] as any[],
         playlistItems: videoInfo?.videos?.map(v => ({
@@ -255,6 +257,7 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         isPlaylist: videoInfo?.isPlaylist,
         format,
         enrichWithBeatport,
+        showBeatportPage,
         totalVideos: videoInfo?.videos?.length
       });
       
@@ -718,6 +721,43 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
                       </div>
                       <span className="ml-3 text-sm font-medium text-white">
                         Enriquecer com dados do Beatport
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Toggle Exibir página Beatport */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={showBeatportPage}
+                        onChange={(e) => setShowBeatportPage(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div 
+                        className="w-12 h-6 rounded-full transition-all relative backdrop-blur-sm"
+                        style={{
+                          background: showBeatportPage 
+                            ? `linear-gradient(135deg, ${themeColors.primary} 0%, ${themeColors.primaryDark} 100%)` 
+                            : 'linear-gradient(135deg, rgba(63, 63, 70, 0.8) 0%, rgba(63, 63, 70, 0.9) 100%)',
+                          border: `1px solid ${showBeatportPage ? themeColors.border : 'rgba(82, 82, 91, 0.5)'}`,
+                          boxShadow: showBeatportPage 
+                            ? `0 2px 8px ${themeColors.primary}30, inset 0 1px 0 rgba(255, 255, 255, 0.1)` 
+                            : '0 2px 8px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                        }}
+                      >
+                        <div 
+                          className="w-5 h-5 bg-white rounded-full transition-all absolute top-0.5 left-0.5 shadow-lg"
+                          style={{
+                            transform: showBeatportPage ? 'translateX(24px)' : 'translateX(0px)',
+                            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.1)'
+                          }}
+                        ></div>
+                      </div>
+                      <span className="ml-3 text-sm font-medium text-white">
+                        Exibir página beatport
                       </span>
                     </label>
                   </div>
