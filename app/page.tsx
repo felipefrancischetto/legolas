@@ -2,61 +2,68 @@
 
 import DownloadForm from './components/DownloadForm';
 import FileList from './components/FileList';
-import AudioPlayer from './components/AudioPlayer';
+import dynamic from 'next/dynamic';
+
+const AudioPlayer = dynamic(() => import('./components/AudioPlayer'), {
+  ssr: false,
+  loading: () => null
+});
 import BeatportModal from './components/BeatportModal';
 import BeatportDownloaderModal from './components/BeatportDownloaderModal';
+import SettingsModal from './components/SettingsModal';
 import FloatingPlaylistButton from './components/FloatingPlaylistButton';
+import DownloadQueue from './components/DownloadQueue';
 import { useState } from 'react';
 import { useUI } from './contexts/UIContext';
+import Image from 'next/image';
 
 export default function Home() {
   const [beatportModalOpen, setBeatportModalOpen] = useState(false);
   const [beatportDownloaderModalOpen, setBeatportDownloaderModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const { playerOpen, playerMinimized } = useUI();
   const [downloadFormMinimized, setDownloadFormMinimized] = useState(true);
+  const [showQueue, setShowQueue] = useState(false);
+  
+      // Player open state updated
   
   return (
-    <main className="flex flex-col h-screen bg-black text-white p-4 sm:p-8 overflow-hidden">
-      <div className="max-w-6xl mx-auto flex-1 flex flex-col min-h-0">
-        {!downloadFormMinimized && (
-          <div className="text-center mb-4 animate-slide-up">
-            <div className="flex items-center justify-center gap-2 mb-2">
-              <img src="/legolas_thumb.png" alt="Legolas" className="w-[48px] h-[48px] object-contain transform hover:scale-110 transition-transform duration-200" />
-              <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent" style={{ lineHeight: 'unset' }}>
-                Legolas
-              </h1>
-            </div>
-          </div>
-        )}
-        <div className="space-y-6 flex flex-col flex-1 min-h-0">
-          {!downloadFormMinimized && (
-            <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200">
-              <DownloadForm minimized={downloadFormMinimized} setMinimized={setDownloadFormMinimized} />
-            </div>
-          )}
-          {downloadFormMinimized && (
-            <DownloadForm minimized={downloadFormMinimized} setMinimized={setDownloadFormMinimized} />
-          )}
-          <div
-            className="bg-zinc-900 rounded-xl border border-zinc-800 p-4 animate-slide-up hover:border-zinc-700 transition-colors duration-200 flex-1 min-h-0 flex flex-col"
-            style={{
-              marginTop: downloadFormMinimized ? 70 : 0,
-              marginBottom: playerOpen && !playerMinimized ? 115 : 0
-            }}
-          >
+    <div className="min-h-screen bg-black text-white overflow-hidden">
+      <div className="flex flex-col h-screen">
+
+        {/* Motor de busca/download - fixo no topo */}
+        <div className="flex-shrink-0 mx-auto w-full">
+          <DownloadForm 
+            minimized={downloadFormMinimized} 
+            setMinimized={setDownloadFormMinimized}
+            showQueue={showQueue}
+            setShowQueue={setShowQueue}
+            setSettingsModalOpen={setSettingsModalOpen}
+          />
+        </div>
+
+        {/* Container da lista de arquivos */}
+        <div className="flex-1 min-h-0 max-w-7xl mx-auto w-full px-6 md:px-4 sm:px-3">
+          <div className="h-full overflow-hidden">
             <FileList />
           </div>
         </div>
+
+        {/* Player de áudio */}
+        {playerOpen && <AudioPlayer />}
       </div>
       
-      {playerOpen && <AudioPlayer />}
-      
-      <div className="fixed bottom-6 right-6 z-[60]">
+      {/* Botão flutuante com melhor posicionamento */}
+      <div className="fixed bottom-8 left-8 z-[60] md:bottom-6 md:left-6 sm:bottom-4 sm:left-4">
         <FloatingPlaylistButton />
       </div>
-      
+
+      {/* Fila de downloads */}
+      {showQueue && <DownloadQueue onClose={() => setShowQueue(false)} />}
+
       <BeatportModal isOpen={beatportModalOpen} onClose={() => setBeatportModalOpen(false)} />
       <BeatportDownloaderModal isOpen={beatportDownloaderModalOpen} onClose={() => setBeatportDownloaderModalOpen(false)} />
-    </main>
+      <SettingsModal isOpen={settingsModalOpen} onClose={() => setSettingsModalOpen(false)} />
+    </div>
   );
 }

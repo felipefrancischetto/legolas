@@ -42,19 +42,19 @@ class BeatportProviderV2 implements MetadataProvider {
     return true;
   }
 
-  async search(title: string, artist: string): Promise<Partial<EnhancedMetadata> | null> {
+  async search(title: string, artist: string, showBeatportPage: boolean = false): Promise<Partial<EnhancedMetadata> | null> {
     const timeoutMs = 30000;
     console.log(`⏰ [Beatport] Iniciando busca com timeout de ${timeoutMs/1000}s`);
     
     return Promise.race([
-      this.performBeatportSearch(title, artist),
+      this.performBeatportSearch(title, artist, showBeatportPage),
       new Promise<null>((_, reject) => 
         setTimeout(() => reject(new Error('Beatport timeout após 30s')), timeoutMs)
       )
     ]);
   }
 
-  private async performBeatportSearch(title: string, artist: string): Promise<Partial<EnhancedMetadata> | null> {
+  private async performBeatportSearch(title: string, artist: string, showBeatportPage: boolean = false): Promise<Partial<EnhancedMetadata> | null> {
     console.log(`🚀 [Beatport] Lançando browser para busca: "${title}" - "${artist}"`);
     let browser;
     try {
@@ -62,7 +62,7 @@ class BeatportProviderV2 implements MetadataProvider {
       console.log(`📦 [Beatport] Puppeteer importado com sucesso`);
       
       const browserOptions = { 
-        headless: false,
+        headless: !showBeatportPage, // Browser visível apenas se showBeatportPage for true
         timeout: 15000,
         protocolTimeout: 20000,
         args: [
@@ -180,7 +180,7 @@ class BeatportProviderV2 implements MetadataProvider {
       
       await browser.close();
       
-      if (metadata && (metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.artist)) {
+      if (metadata && (metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.artist || metadata.year)) {
         return metadata;
       }
       
@@ -226,7 +226,7 @@ export class IndividualMetadataAggregator {
           sources: ['BeatportV2']
         };
         
-        const hasUsefulData = aggregated.bpm || aggregated.key || aggregated.genre || aggregated.label;
+        const hasUsefulData = aggregated.bpm || aggregated.key || aggregated.genre || aggregated.label || aggregated.year;
         if (hasUsefulData) {
           return aggregated;
         } else {

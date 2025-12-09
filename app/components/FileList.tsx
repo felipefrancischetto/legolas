@@ -2,13 +2,19 @@
 
 import { useEffect, useState, useRef, memo, useCallback, useMemo } from 'react';
 import Image from 'next/image';
+import { useSearchParams } from 'next/navigation';
 import DownloadQueue from './DownloadQueue';
 import { useDownload } from '../contexts/DownloadContext';
 import { useFile } from '../contexts/FileContext';
 import { useUI } from '../contexts/UIContext';
 import { usePlayer } from '../contexts/PlayerContext';
 import { getThumbnailUrl } from '../utils/thumbnailCache';
+import { getCachedDominantColor } from '../utils/colorExtractor';
+import { useSettings } from '../hooks/useSettings';
+import SoundWave from './SoundWave';
 import ReactDOM from 'react-dom';
+import LoadingSpinner from './LoadingSpinner';
+import { SkeletonMusicList } from './SkeletonComponents';
 
 interface FileInfo {
   name: string;
@@ -36,6 +42,8 @@ interface FileInfo {
   ano?: string;
   status?: string;
   remixer?: string;
+  catalogNumber?: string;
+  catalog?: string;
 }
 
 const MusicIcon = () => (
@@ -64,8 +72,8 @@ const ThumbnailImage = memo(({ file, fileExists }: { file: FileInfo, fileExists:
       <Image
         src={thumbnailUrl}
         alt={file.title || file.displayName}
-        width={48}
-        height={48}
+        width={36}
+        height={36}
         className="object-cover w-full h-full rounded"
         onError={() => setError(true)}
         loading="lazy"
@@ -77,137 +85,19 @@ const ThumbnailImage = memo(({ file, fileExists }: { file: FileInfo, fileExists:
 ThumbnailImage.displayName = 'ThumbnailImage';
 
 // Definição centralizada das colunas
-const columns = [
-  { label: 'Título', key: 'title', width: 260 },
-  { label: 'Artistas', key: 'artist', width: 180 },
-  { label: 'Gravadora', key: 'label', width: 100 },
-  { label: 'Albúm', key: 'album', width: 120 },
-  { label: 'Gênero', key: 'genre', width: 100 },
-  { label: 'BPM', key: 'bpm', width: 60 },
-  { label: 'Tom', key: 'key', width: 70 },
-  { label: 'Lançamento', key: 'ano', width: 70 },
-  { label: 'Ações', key: 'acoes', width: 50 },
+const columns: { label: string; key: string; width: number; always: boolean }[] = [
+  { label: 'Título', key: 'title', width: 260, always: true },
+  { label: 'Artistas', key: 'artist', width: 180, always: true },
+  { label: 'Gravadora', key: 'label', width: 100, always: false },
+  { label: 'Albúm', key: 'album', width: 120, always: false },
+  { label: 'Gênero', key: 'genre', width: 100, always: false },
+  { label: 'BPM', key: 'bpm', width: 60, always: false },
+  { label: 'Tom', key: 'key', width: 70, always: false },
+  { label: 'Lançamento', key: 'ano', width: 70, always: false },
+  { label: 'Ações', key: 'acoes', width: 50, always: true },
 ];
 
-// Memoizando o FileRow para evitar re-renders desnecessários
-const FileRow = memo(({ 
-  file, 
-  index, 
-  files,
-  columns, 
-  onPlay, 
-  onContextMenu,
-  metadataStatus,
-  updateMetadataForFile,
-  setEditModalFile,
-  isPlaying = false,
-  fetchFiles
-}: {
-  file: FileInfo;
-  index: number;
-  files: FileInfo[];
-  columns: { label: string, key: string, width: number }[];
-  onPlay: (file: FileInfo) => void;
-  onContextMenu: (e: React.MouseEvent, file: FileInfo) => void;
-  metadataStatus: any;
-  updateMetadataForFile: (fileName: string, status: string) => void;
-  setEditModalFile: (file: FileInfo) => void;
-  isPlaying?: boolean;
-  fetchFiles: (force?: boolean) => void;
-}) => {
-  const fileExists = files.some(f => f.name === file.name);
-  // Checar se todos os campos principais estão preenchidos
-  const isComplete = Boolean(
-    (file.title || file.displayName) &&
-    file.artist &&
-    file.label &&
-    file.album &&
-    file.genre &&
-    file.bpm &&
-    file.key &&
-    file.ano
-  );
-  return (
-    <div
-      key={file.path}
-      className={`flex items-center hover:bg-zinc-700 transition-all duration-200 group w-full h-[50px] animate-fade-in text-xs cursor-pointer ${isPlaying ? 'ring-2 ring-blue-400 bg-blue-900/20' : ''}`}
-      style={{ minHeight: 50, margin: '5px 0px' }}
-      onClick={e => onContextMenu(e, file)}
-    >
-      {/* Primeira coluna: check sutil se completo */}
-      <div style={{ width: 18, minWidth: 18 }} className="flex items-center justify-center h-12 px-0">
-        {isComplete && (
-          <svg className="w-4 h-4 text-green-400 opacity-60" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
-        )}
-      </div>
-      {columns.map((col, idx) => {
-        let content = null;
-        switch (col.key) {
-          case 'title':
-            content = (
-              <div className="flex items-center overflow-hidden">
-                <button
-                  onClick={(e) => { e.stopPropagation(); onPlay(file); }}
-                  className="w-12 h-12 flex-shrink-0 bg-zinc-700 rounded-sm overflow-hidden group-hover:bg-zinc-600 transition-all duration-200 relative transform hover:scale-110 mr-2"
-                >
-                  <ThumbnailImage file={file} fileExists={fileExists} />
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
-                  </div>
-                </button>
-                <span className="font-bold text-white truncate block max-w-full" title={file.title || file.displayName}>{file.title || file.displayName}</span>
-              </div>
-            );
-            break;
-          case 'artist':
-            content = <span className="text-xs text-blue-400 truncate block max-w-full" title={file.artist || ''}>{file.artist || '-'}</span>;
-            break;
-          case 'label':
-            content = <span className="truncate block max-w-full" title={file.label || ''}>{file.label || '-'}</span>;
-            break;
-          case 'album':
-            content = <span className="text-xs text-gray-400 truncate block max-w-full" title={ file.album || ''}>{file.album || file.album || ''}</span>;
-            break;
-          case 'genre':
-            content = <span className="truncate block max-w-full" title={file.genre || ''}>{file.genre || '-'}</span>;
-            break;
-          case 'bpm':
-            content = <span className="text-xs text-gray-400 truncate block max-w-full">{file.bpm ? `${file.bpm}` : '-'}</span>;
-            break;
-          case 'key':
-            content = <span className="text-xs text-gray-400 truncate block max-w-full">{file.key || '-'}</span>;
-            break;
-          case 'ano':
-            content = <span className="truncate block max-w-full">{file.ano ? String(file.ano).slice(0, 4) : '-'}</span>;
-            break;
-          case 'acoes':
-            content = (
-              <ActionMenu 
-                file={file} 
-                onUpdate={(fileName) => updateMetadataForFile(fileName, 'loading')} 
-                onEdit={setEditModalFile} 
-                fetchFiles={fetchFiles} 
-              />
-            );
-            break;
-          default:
-            content = null;
-        }
-        return (
-          <div key={col.key} style={{ width: col.width, minWidth: col.width }} className="px-2 flex items-center h-12 justify-start text-left overflow-hidden whitespace-nowrap text-ellipsis">
-            {content}
-          </div>
-        );
-      })}
-    </div>
-  );
-});
 
-FileRow.displayName = 'FileRow';
 
 // Função global para remover arquivo
 async function removeFile(fileName: string, fetchFiles: (force?: boolean) => void) {
@@ -223,7 +113,275 @@ async function removeFile(fileName: string, fetchFiles: (force?: boolean) => voi
   }
 }
 
+// Componente para item da lista com cor dinâmica - otimizado
+const DynamicFileItem = memo(({ 
+  file, 
+  isPlaying, 
+  isPlayerPlaying, 
+  onPlay, 
+  extractDominantColor, 
+  dominantColors,
+  onUpdate,
+  onEdit,
+  fetchFiles,
+  isLoading
+}: { 
+  file: FileInfo; 
+  isPlaying: boolean; 
+  isPlayerPlaying: boolean; 
+  onPlay: () => void;
+  extractDominantColor: (fileName: string, imageUrl: string) => Promise<{ rgb: string; rgba: (opacity: number) => string }>;
+  dominantColors: { [fileName: string]: { rgb: string; rgba: (opacity: number) => string } };
+  onUpdate: (fileName: string, status: string) => void;
+  onEdit: (file: any) => void;
+  fetchFiles: (force?: boolean) => void;
+  isLoading: boolean;
+}) => {
+  const [itemColor, setItemColor] = useState<{ rgb: string; rgba: (opacity: number) => string }>({
+    rgb: '16, 185, 129',
+    rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})`
+  });
+
+  // Otimizar carregamento de cor com throttling
+  useEffect(() => {
+    let isCancelled = false;
+    
+    const loadColor = async () => {
+      if (dominantColors[file.name]) {
+        if (!isCancelled) {
+          setItemColor(dominantColors[file.name]);
+        }
+      } else {
+        // Throttle para evitar chamadas excessivas
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        if (isCancelled) return;
+        
+        const thumbnailUrl = getThumbnailUrl(file.name);
+        try {
+          const color = await extractDominantColor(file.name, thumbnailUrl);
+          if (!isCancelled) {
+            setItemColor(color);
+          }
+        } catch (error) {
+          console.error('Erro ao carregar cor:', error);
+        }
+      }
+    };
+    
+    loadColor();
+    
+    return () => {
+      isCancelled = true;
+    };
+  }, [file.name, dominantColors, extractDominantColor]);
+
+  // Memoizar verificação de metadados completos
+  const isComplete = useMemo(() => Boolean(
+    (file.title || file.displayName) &&
+    file.artist &&
+    file.label &&
+    file.album &&
+    file.genre &&
+    file.bpm &&
+    file.key &&
+    file.ano
+  ), [file.title, file.displayName, file.artist, file.label, file.album, file.genre, file.bpm, file.key, file.ano]);
+
+  // Memoizar função de formatação de data
+  const formatDate = useCallback((dateString?: string) => {
+    if (!dateString) return null;
+    try {
+      const date = new Date(dateString);
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = (date.getMonth() + 1).toString().padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}-${month}-${year}`;
+    } catch {
+      return dateString;
+    }
+  }, []);
+
+  // Memoizar handler de play
+  const handlePlay = useCallback(() => {
+    onPlay();
+  }, [onPlay]);
+
+  // Verificar se o modo debug está ativo
+  const searchParams = useSearchParams();
+  const isDebugMode = searchParams?.get('debug') !== null;
+
+      return (
+      <div
+        className="backdrop-blur-md rounded-xl overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-xl group flex flex-col sm:flex-row mt-3 mb-3 border border-white/10"
+        onClick={handlePlay}
+        data-file-name={file.name}
+        style={{
+          borderColor: itemColor.rgba(isPlaying ? 0.4 : 0.15),
+          background: isPlaying
+            ? `linear-gradient(135deg, 
+                ${itemColor.rgba(0.25)} 0%, 
+                ${itemColor.rgba(0.35)} 30%, 
+                rgba(0, 0, 0, 0.7) 70%, 
+                rgba(15, 23, 42, 0.8) 100%
+              )`
+            : `linear-gradient(135deg, 
+                ${itemColor.rgba(0.08)} 0%, 
+                ${itemColor.rgba(0.12)} 30%, 
+                rgba(0, 0, 0, 0.6) 70%, 
+                rgba(15, 23, 42, 0.7) 100%
+              )`,
+          boxShadow: isPlaying
+            ? `0 12px 40px ${itemColor.rgba(0.25)}, inset 0 1px 0 rgba(255, 255, 255, 0.15)`
+            : `0 6px 20px ${itemColor.rgba(0.12)}, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
+        }}
+    >
+      {/* Capa ocupando toda altura à esquerda */}
+      <div className="relative w-full sm:w-[132.5px] sm:min-w-[132.5px] h-[200px] sm:h-[132.5px] flex-shrink-0">
+        <Image
+          src={getThumbnailUrl(file.name)}
+          alt={file.title || file.displayName}
+          width={132.5}
+          height={132.5}
+          className="object-cover w-full h-full bg-zinc-800"
+        />
+        {isPlaying && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+            {isPlayerPlaying ? (
+              <SoundWave 
+                color={`rgb(${itemColor.rgb})`}
+                size="large"
+                isPlaying={true}
+                isLoading={isLoading}  
+              />
+            ) : (
+              <svg className="w-6 h-6 sm:w-8 sm:h-8" fill="currentColor" viewBox="0 0 24 24" style={{ color: `rgb(${itemColor.rgb})` }}>
+                <polygon points="8,5 19,12 8,19" />
+              </svg>
+            )}
+          </div>
+        )}
+        
+        {/* Indicador de metadados completos */}
+        {isComplete && (
+          <div className="absolute top-2 right-2 w-5 h-5 bg-green-500 rounded-full border border-black flex items-center justify-center">
+            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+        )}
+      </div>
+      
+      {/* Conteúdo principal à direita */}
+      <div className="flex-1 p-3 sm:p-2 flex flex-col min-w-0">
+        {/* JSON Debug - Apenas em modo debug */}
+        {isDebugMode && (
+          <div className="mt-2 p-3 bg-black/30 rounded-lg border border-zinc-700/50 max-h-40 overflow-auto custom-scroll">
+            <div className="text-xs text-zinc-300 font-medium mb-1 flex items-center gap-2">
+              <span>🔍 Debug Info</span>
+              <span className="text-emerald-400 text-[10px] bg-emerald-500/20 px-1 py-0.5 rounded">
+                Copiar JSON
+              </span>
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigator.clipboard.writeText(JSON.stringify(file, null, 2));
+                }}
+                className="text-zinc-500 hover:text-emerald-400 transition-colors"
+                title="Copiar JSON"
+              >
+                📋
+              </button>
+            </div>
+            <pre className="text-xs text-zinc-400 font-mono leading-relaxed whitespace-pre-wrap break-words">
+              {JSON.stringify(file, null, 2)}
+            </pre>
+          </div>
+        )}
+        
+        {/* Linha superior: Título, Artista e Menu */}
+        <div className="flex items-start justify-between mb-2 sm:mb-1 gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="text-white font-bold text-base sm:text-sm leading-tight truncate group-hover:text-white/90 transition-colors">
+              {file.title || file.displayName} 
+            </div>
+            <div className="text-sm sm:text-xs font-medium leading-tight truncate mt-0.5" style={{ color: `rgb(${itemColor.rgb})` }}>
+              {file.artist || 'Artista desconhecido'}
+            </div>
+          </div>
+          
+          <div className="flex-shrink-0">
+            <ActionMenu 
+              file={file} 
+              onUpdate={onUpdate} 
+              onEdit={onEdit} 
+              fetchFiles={fetchFiles} 
+            />
+          </div>
+        </div>
+        {/* Todas as informações organizadas */}
+        <div className="space-y-1.5 sm:space-y-0.5">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-1 text-xs">
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium break-words">
+              📀 Álbum: {file.album || 'N/A'}
+            </span>
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium break-words">
+              🏷️ Label: {file.label || 'N/A'}
+            </span>
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium break-words">
+              📋 Catálogo: {(file as any).catalogNumber || (file as any).catalog || 'N/A'}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-1 text-xs">
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-mono whitespace-nowrap">
+              ⏱️ {file.duration || 'N/A'}
+            </span>
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 whitespace-nowrap">
+              🎵 BPM: {file.bpm || 'N/A'}
+            </span>
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 whitespace-nowrap">
+              🎹 Key: {file.key || 'N/A'}
+            </span>
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 break-words max-w-full">
+              🎧 Gênero: {file.genre || 'N/A'}
+            </span>
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 whitespace-nowrap">
+              📅 Ano: {(file as any).ano ? String((file as any).ano).slice(0, 4) : 'N/A'}
+            </span>
+            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 break-words max-w-full">
+              📰 Publicado: {(file as any).publishedDate || (file as any).ano || 'N/A'}
+            </span>
+            
+            {/* Indicador de compatibilidade com Beatport */}
+            {file.isBeatportFormat && (
+              <span className="bg-orange-500/20 text-orange-200 px-2 py-1 rounded text-xs font-medium border border-orange-400/30 backdrop-blur-sm whitespace-nowrap">
+                🎛️ Beatport ✓
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-1 text-xs">
+            <span className="text-zinc-400 px-2 py-1 font-mono break-all" title={file.name}>
+              📁 {file.name || 'N/A'}
+            </span>
+            <span className="text-zinc-400 px-2 py-1 font-mono whitespace-nowrap">
+              📥 Baixado: {formatDate(file.downloadedAt || file.fileCreatedAt) || 'N/A'}
+            </span>
+            <span className="text-zinc-400 px-2 py-1 font-mono whitespace-nowrap">
+              💾 {(file as any).size ? ((file as any).size / (1024 * 1024)).toFixed(1) + 'MB' : 'N/A'}
+            </span>
+            <span className="text-zinc-400 px-2 py-1 font-mono whitespace-nowrap">
+              📄 {file.name ? `Formato: ${file.name.split('.').pop()}` : 'N/A'}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export default function FileList() {
+  
   const {
     files,
     setFiles,
@@ -237,6 +395,7 @@ export default function FileList() {
     setUpdateProgress,
     customDownloadsPath,
     setCustomDownloadsPath,
+    fetchFiles,
   } = useFile();
 
   const {
@@ -258,8 +417,9 @@ export default function FileList() {
     setColWidths,
   } = useUI();
 
-  const { play, playerState } = usePlayer();
+  const { play, resume, playerState } = usePlayer();
   const { queue, updateQueueItem } = useDownload();
+  const { settings } = useSettings();
   const resizingCol = useRef<number | null>(null);
   const startX = useRef<number>(0);
   const startWidth = useRef<number>(0);
@@ -270,72 +430,105 @@ export default function FileList() {
   const fetchFilesDebounced = useRef<NodeJS.Timeout | null>(null);
   const isCurrentlyFetching = useRef(false);
 
-  const fetchFiles = useCallback(async (force = false) => {
-    // Evitar múltiplas chamadas simultâneas
-    if (isCurrentlyFetching.current && !force) {
-      console.log('📂 Fetch já em andamento, ignorando nova chamada');
-      return;
-    }
+  const [selectedRelease, setSelectedRelease] = useState<string | null>(null);
+  const [releaseModalData, setReleaseModalData] = useState<any>(null);
+  const [columnWidths, setColumnWidths] = useState(columns.map(c => c.width));
+  const [catalogNumbers, setCatalogNumbers] = useState<Record<string, string>>({});
 
-    // Debounce - aguardar 500ms antes de executar
-    if (fetchFilesDebounced.current) {
-      clearTimeout(fetchFilesDebounced.current);
-    }
-
-    fetchFilesDebounced.current = setTimeout(async () => {
-      isCurrentlyFetching.current = true;
-      try {
-        console.log('📂 Buscando lista de arquivos...');
-        const response = await fetch('/api/files');
-        const data = await response.json();
-        setFiles(data.files);
-        console.log(`📂 Lista de arquivos atualizada: ${data.files.length} arquivos`);
-      } catch (error) {
-        console.error('❌ Erro ao carregar arquivos:', error);
-      } finally {
-        setLoading(false);
-        isCurrentlyFetching.current = false;
-      }
-    }, force ? 0 : 500);
-  }, [setFiles, setLoading]);
+  // Ref para controlar o scroll automático
+  const shouldScrollToPlaying = useRef<boolean>(false);
+  const previousLoadingState = useRef<boolean>(false);
 
   useEffect(() => {
-    // Carregar a preferência salva
     const savedPath = localStorage.getItem('customDownloadsPath');
     if (savedPath) {
       setCustomDownloadsPath(savedPath);
     }
     
-    // Carregar arquivos inicialmente (força execução imediata)
-    fetchFiles(true);
+    // Removido auto-refresh da lista de arquivos
 
-    // Atualizar a cada 60 segundos (reduzido frequência para evitar calls desnecessários)
-    const interval = setInterval(() => fetchFiles(), 60000);
-
-    // Atualizar quando um novo download for concluído (com debounce)
-    const handleRefresh = () => {
-      console.log('🔄 Evento refresh-files recebido, atualizando lista...');
-      fetchFiles();
-    };
-    window.addEventListener('refresh-files', handleRefresh);
-
-    // Ouvir evento customizado para abrir a fila de downloads
     const openQueue = () => setShowQueue(true);
     window.addEventListener('open-download-queue', openQueue);
 
     return () => {
-      clearInterval(interval);
-      window.removeEventListener('refresh-files', handleRefresh);
       window.removeEventListener('open-download-queue', openQueue);
       
-      // Limpar timeout pendente
       if (fetchFilesDebounced.current) {
         clearTimeout(fetchFilesDebounced.current);
       }
     };
   }, [fetchFiles, setCustomDownloadsPath, setShowQueue]);
 
-  // Função para alternar ordenação
+  // Detectar quando o loading termina e rolar para a música tocando
+  useEffect(() => {
+    // Se estava loading e agora não está mais (loading acabou)
+    if (previousLoadingState.current && !loading) {
+      shouldScrollToPlaying.current = true;
+    }
+    previousLoadingState.current = loading;
+  }, [loading]);
+
+  // Scroll automático para a música tocando após o loading
+  useEffect(() => {
+    if (shouldScrollToPlaying.current && playerState.currentFile && files.length > 0) {
+      const currentFileName = playerState.currentFile.name;
+      
+      // Aguardar um pouco para garantir que o DOM foi atualizado
+      setTimeout(() => {
+        // Encontrar o elemento da música tocando
+        const playingElement = document.querySelector(`[data-file-name="${CSS.escape(currentFileName)}"]`);
+        
+        if (playingElement) {
+          // Verificar se o elemento está visível na tela
+          const rect = playingElement.getBoundingClientRect();
+          const isVisible = rect.top >= 0 && rect.bottom <= window.innerHeight;
+          
+          // Só fazer scroll se não estiver visível
+          if (!isVisible) {
+            playingElement.scrollIntoView({
+              behavior: 'smooth',
+              block: 'center',
+              inline: 'nearest'
+            });
+            
+            // Scroll automático para a música tocando
+          }
+        }
+        
+        shouldScrollToPlaying.current = false;
+      }, 300); // Delay para garantir que o DOM foi renderizado
+    }
+  }, [files, playerState.currentFile]);
+
+  // Scroll automático quando uma nova música começar a tocar (não só após loading)
+  useEffect(() => {
+    if (playerState.currentFile && lastPlayedFile.current !== playerState.currentFile.name) {
+      lastPlayedFile.current = playerState.currentFile.name;
+      
+      // Pequeno delay para permitir que a música inicie
+      setTimeout(() => {
+        const currentFileName = playerState.currentFile!.name;
+        const playingElement = document.querySelector(`[data-file-name="${CSS.escape(currentFileName)}"]`);
+        
+        if (playingElement) {
+          const rect = playingElement.getBoundingClientRect();
+          const isVisible = rect.top >= 0 && rect.bottom <= window.innerHeight;
+          
+          // Só fazer scroll se não estiver visível
+          if (!isVisible) {
+            playingElement.scrollIntoView({
+              behavior: 'smooth',
+              block: 'center',
+              inline: 'nearest'
+            });
+            
+            // Scroll automático para nova música
+          }
+        }
+      }, 100);
+    }
+  }, [playerState.currentFile]);
+
   const handleSort = useCallback((column: string) => {
     if (sortBy === column) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
@@ -479,98 +672,260 @@ export default function FileList() {
   };
 
   const [releaseModal, setReleaseModal] = useState<{album: string, tracks: any[], metadata: any, loading: boolean, error: string | null} | null>(null);
+  const [dominantColors, setDominantColors] = useState<{ [fileName: string]: { rgb: string, rgba: (opacity: number) => string } }>({});
+  const [mobileActionMenus, setMobileActionMenus] = useState<{ [fileName: string]: boolean }>({});
+
+  // Função para extrair cor dominante (respeitando configurações)
+  const extractDominantColor = useCallback(async (fileName: string, imageUrl: string) => {
+    // Usar cor padrão se cores dinâmicas estiverem desabilitadas
+    if (settings.disableDynamicColors) {
+      const fallbackColor = { rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` };
+      return fallbackColor;
+    }
+
+    if (dominantColors[fileName]) return dominantColors[fileName];
+
+    // Verificar se estamos no cliente
+    if (typeof window === 'undefined') {
+      const fallbackColor = { rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` };
+      return fallbackColor;
+    }
+
+    try {
+      const img = new (window as any).Image();
+      img.crossOrigin = 'anonymous';
+      
+      return new Promise<{ rgb: string, rgba: (opacity: number) => string }>((resolve) => {
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve({ rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` });
+            return;
+          }
+
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const data = imageData.data;
+          const colorCounts: { [key: string]: number } = {};
+
+          // Analisar pixels em intervalos para performance
+          for (let i = 0; i < data.length; i += 16) { // Pular pixels para performance
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            const alpha = data[i + 3];
+
+            if (alpha < 128) continue; // Ignorar pixels transparentes
+
+            // Agrupar cores similares
+            const key = `${Math.floor(r / 32) * 32},${Math.floor(g / 32) * 32},${Math.floor(b / 32) * 32}`;
+            colorCounts[key] = (colorCounts[key] || 0) + 1;
+          }
+
+          // Encontrar cor mais comum
+          let dominantColor = '16, 185, 129'; // Fallback para emerald
+          let maxCount = 0;
+
+          for (const [color, count] of Object.entries(colorCounts)) {
+            if (count > maxCount) {
+              maxCount = count;
+              dominantColor = color;
+            }
+          }
+
+          // Ajustar saturação e brilho para melhor contraste
+          const [r, g, b] = dominantColor.split(',').map(Number);
+          const adjustedColor = adjustColorForUI(r, g, b);
+
+          const colorData = {
+            rgb: adjustedColor,
+            rgba: (opacity: number) => `rgba(${adjustedColor}, ${opacity})`
+          };
+
+          setDominantColors(prev => ({ ...prev, [fileName]: colorData }));
+          resolve(colorData);
+        };
+
+        img.onerror = () => {
+          const fallbackColor = { rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` };
+          setDominantColors(prev => ({ ...prev, [fileName]: fallbackColor }));
+          resolve(fallbackColor);
+        };
+
+        img.src = imageUrl;
+      });
+    } catch (error) {
+      console.error('Erro ao extrair cor:', error);
+      const fallbackColor = { rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` };
+      setDominantColors(prev => ({ ...prev, [fileName]: fallbackColor }));
+      return fallbackColor;
+    }
+  }, [dominantColors, settings.disableDynamicColors]);
+
+  // Função para ajustar cor para melhor contraste na UI
+  const adjustColorForUI = (r: number, g: number, b: number): string => {
+    // Converter para HSL para ajustar saturação e luminosidade
+    const max = Math.max(r, g, b) / 255;
+    const min = Math.min(r, g, b) / 255;
+    const diff = max - min;
+    const add = max + min;
+    const l = add * 0.5;
+
+    let s = 0;
+    if (diff !== 0) {
+      s = l < 0.5 ? diff / add : diff / (2 - add);
+    }
+
+    // Ajustar saturação (mínimo 0.4, máximo 0.8)
+    s = Math.max(0.4, Math.min(0.8, s));
+    
+    // Ajustar luminosidade (mínimo 0.3, máximo 0.7)
+    const adjustedL = Math.max(0.3, Math.min(0.7, l));
+
+    // Converter de volta para RGB
+    const hue = getHue(r, g, b, max, min, diff);
+    const [newR, newG, newB] = hslToRgb(hue, s, adjustedL);
+
+    return `${Math.round(newR)}, ${Math.round(newG)}, ${Math.round(newB)}`;
+  };
+
+  const getHue = (r: number, g: number, b: number, max: number, min: number, diff: number): number => {
+    if (diff === 0) return 0;
+    
+    const rNorm = r / 255;
+    const gNorm = g / 255;
+    const bNorm = b / 255;
+    
+    let hue = 0;
+    if (max === rNorm) {
+      hue = ((gNorm - bNorm) / diff) % 6;
+    } else if (max === gNorm) {
+      hue = (bNorm - rNorm) / diff + 2;
+    } else {
+      hue = (rNorm - gNorm) / diff + 4;
+    }
+    
+    return hue * 60;
+  };
+
+  const hslToRgb = (h: number, s: number, l: number): [number, number, number] => {
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    const m = l - c / 2;
+
+    let r = 0, g = 0, b = 0;
+
+    if (0 <= h && h < 60) {
+      r = c; g = x; b = 0;
+    } else if (60 <= h && h < 120) {
+      r = x; g = c; b = 0;
+    } else if (120 <= h && h < 180) {
+      r = 0; g = c; b = x;
+    } else if (180 <= h && h < 240) {
+      r = 0; g = x; b = c;
+    } else if (240 <= h && h < 300) {
+      r = x; g = 0; b = c;
+    } else if (300 <= h && h < 360) {
+      r = c; g = 0; b = x;
+    }
+
+    return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+  };
 
   async function updateMetadataForFile(fileName: string, status: string) {
-    setMetadataStatus({ ...metadataStatus, [fileName]: status });
+    if (!fileName) return;
+
+    const file = files.find(f => f.name === fileName);
+    if (!file) {
+      console.error(`Arquivo ${fileName} não encontrado na lista.`);
+      setMetadataStatus({ ...metadataStatus, [fileName]: 'error' });
+      return;
+    }
+
     try {
-      const file = files.find(f => f.name === fileName);
-      if (!file) {
-        throw new Error('Arquivo não encontrado');
+      setMetadataStatus({ ...metadataStatus, [fileName]: status });
+      
+      // Se é apenas para marcar como loading, não fazer a requisição
+      if (status === 'loading') {
+        const response = await fetch(`/api/enhanced-metadata`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            title: file.title || file.displayName,
+            artist: file.artist,
+            useBeatport: true // Assumindo que deve usar Beatport por padrão
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Erro desconhecido');
+        
+        // Só fazer fetchFiles se realmente houver mudanças significativas
+        // Para updates individuais, é melhor atualizar localmente quando possível
+        setMetadataStatus({ ...metadataStatus, [fileName]: 'completed' });
+        
+        // Agenda uma atualização da lista após um delay, mas só se não houver outras pendentes
+        setTimeout(() => {
+          if (!isCurrentlyFetching.current) {
+            isCurrentlyFetching.current = true;
+            fetchFiles(false).finally(() => {
+              isCurrentlyFetching.current = false;
+            });
+          }
+        }, 2000);
       }
-
-      const response = await fetch('/api/update-individual-metadata', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          fileName,
-          title: file.title || file.displayName,
-          artist: file.artist || ''
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok || result.error) {
-        setMetadataStatus({ ...metadataStatus, [fileName]: result.error || 'error' });
-        return;
-      }
-
-      // Extrair o ano (YYYY) do metadata.year ou metadata.ano ou metadata.releaseDate
-      let year = '';
-      if (result.metadata) {
-        if (result.metadata.year && /^\d{4}/.test(result.metadata.year.toString())) {
-          year = result.metadata.year.toString().slice(0, 4);
-        } else if (result.metadata.ano && /^\d{4}/.test(result.metadata.ano.toString())) {
-          year = result.metadata.ano.toString().slice(0, 4);
-        } else if (result.metadata.releaseDate && /^\d{4}/.test(result.metadata.releaseDate.toString())) {
-          year = result.metadata.releaseDate.toString().slice(0, 4);
-        }
-      }
-
-      // Atualizar os metadados do arquivo com os novos dados
-      const updatedFile = {
-        ...file,
-        ...result.metadata,
-        isBeatportFormat: true,
-        year, // garantir que o campo year seja só 4 dígitos
-        fileName: file.name // garantir que fileName sempre vai para o backend
-      };
-
-      // Atualizar o arquivo no backend
-      const updateResponse = await fetch('/api/update-metadata', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedFile),
-      });
-
-      if (!updateResponse.ok) {
-        throw new Error('Erro ao atualizar arquivo');
-      }
-
-      setMetadataStatus({ ...metadataStatus, [fileName]: 'success' });
-      fetchFiles();
+      
     } catch (err: any) {
-      setMetadataStatus({ ...metadataStatus, [fileName]: err.message || 'error' });
+      console.error(`Erro ao atualizar metadados para ${fileName}:`, err.message);
+      setMetadataStatus({ ...metadataStatus, [fileName]: 'error' });
     }
   }
 
   async function updateAllMetadata() {
-    const filesToUpdate = files.filter(file => !file.isBeatportFormat);
-    if (filesToUpdate.length === 0) return;
-
     setIsUpdatingAll(true);
+    
+    const filesToUpdate = files.filter(f => !f.isBeatportFormat);
     setUpdateProgress({ current: 0, total: filesToUpdate.length });
 
-    for (const file of filesToUpdate) {
-      setMetadataStatus({ ...metadataStatus, [file.name]: 'loading' });
+    // Iniciando atualização de metadados
+
+    for (let i = 0; i < filesToUpdate.length; i++) {
+      const file = filesToUpdate[i];
+      setUpdateProgress({ current: i + 1, total: filesToUpdate.length });
+      
       try {
-        const response = await fetch('/api/update-metadata', {
+        // Atualizar status para loading
+        setMetadataStatus({ ...metadataStatus, [file.name]: 'loading' });
+        
+        // Fazer a requisição de metadados
+        const response = await fetch(`/api/enhanced-metadata`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileName: file.name }),
+          body: JSON.stringify({ 
+            title: file.title || file.displayName,
+            artist: file.artist,
+            useBeatport: true
+          }),
         });
+        
         const result = await response.json();
-        if (!response.ok || result.error) {
-          setMetadataStatus({ ...metadataStatus, [file.name]: result.error || 'error' });
-        } else {
-          setMetadataStatus({ ...metadataStatus, [file.name]: 'success' });
-        }
-      } catch (err: any) {
-        setMetadataStatus({ ...metadataStatus, [file.name]: err.message || 'error' });
+        if (!response.ok) throw new Error(result.error || 'Erro desconhecido');
+        
+        // Marcar como concluído
+        setMetadataStatus({ ...metadataStatus, [file.name]: 'completed' });
+        
+      } catch (error: any) {
+        console.error(`Erro ao atualizar metadados para ${file.name}:`, error.message);
+        setMetadataStatus({ ...metadataStatus, [file.name]: 'error' });
       }
-      setUpdateProgress({ ...updateProgress, current: updateProgress.current + 1 });
     }
 
+    // Recarregar tudo apenas no final
+    await fetchFiles(true);
     setIsUpdatingAll(false);
-    fetchFiles();
   }
 
   // Contar apenas downloads em andamento ou na fila
@@ -578,36 +933,6 @@ export default function FileList() {
   const queueCount = queueActive.length;
   // Verificar se há algum download em andamento
   const isProcessing = queue.some(item => item.status === 'downloading');
-
-  // Nova função para selecionar pasta de downloads com feedback
-  const handleSelectDownloadsFolder = async () => {
-    if (!('showDirectoryPicker' in window)) {
-      alert('Seu navegador não suporta seleção de pastas. Use o Chrome ou Edge mais recente.');
-      return;
-    }
-    try {
-      // Só pode ser chamado em resposta a um clique!
-      // @ts-ignore
-      const directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      setCustomDownloadsPath(directoryHandle.name);
-      localStorage.setItem('customDownloadsPath', directoryHandle.name);
-      // Atualizar a API/backend se necessário
-      await fetch('/api/set-downloads-path', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: directoryHandle.name }),
-      });
-      // Atualizar a lista
-      fetchFiles();
-      alert('Pasta selecionada com sucesso!');
-    } catch (error: any) {
-      if (error?.name === 'AbortError') {
-        alert('Seleção de pasta cancelada.');
-      } else {
-        alert('Permissão negada ou erro ao acessar a pasta.');
-      }
-    }
-  };
 
   // Função para iniciar o resize
   const handleResizeStart = (idx: number, e: React.MouseEvent) => {
@@ -641,21 +966,55 @@ export default function FileList() {
     window.removeEventListener('mouseup', handleResizeEnd);
   };
 
+  // Ref para rastrear itens já processados
+  const processedQueueItems = useRef<Set<string>>(new Set());
+
   // Sincronizar fila de downloads com arquivos baixados
   useEffect(() => {
     if (!queue || !files) return;
+    
     queue.forEach(item => {
+      // Evitar processar o mesmo item múltiplas vezes
+      if (processedQueueItems.current.has(item.id)) return;
+      
       if (files.some(f => f.name === item.title || f.displayName === item.title)) {
+        processedQueueItems.current.add(item.id);
         updateQueueItem(item.id, { status: 'completed', progress: 100 });
+      }
+    });
+    
+    // Limpar itens processados que não estão mais na fila
+    const currentQueueIds = new Set(queue.map(item => item.id));
+    processedQueueItems.current.forEach(id => {
+      if (!currentQueueIds.has(id)) {
+        processedQueueItems.current.delete(id);
       }
     });
   }, [files, queue, updateQueueItem]);
 
   // Handlers memoizados
   const handlePlay = useCallback((file: FileInfo) => {
-    play(file);
+    // Proteção contra chamadas duplicadas rapidamente (usando timestamp)
+    const now = Date.now();
+    const lastPlayTime = parseInt(localStorage.getItem('lastPlayTime') || '0');
+    if (lastPlayedFile.current === file.name && (now - lastPlayTime) < 500) {
+      return;
+    }
+    localStorage.setItem('lastPlayTime', now.toString());
+    
+    // Se é a mesma música já carregada, apenas resumir sem zerar progresso
+    if (playerState.currentFile?.name === file.name) {
+      if (!playerState.isPlaying) {
+        // Usar resume() ao invés de play() para não zerar o progresso
+        resume();
+      }
+    } else {
+      play(file); // Para nova música, usar play normal
+      lastPlayedFile.current = file.name;
+    }
+    
     setPlayerOpen(true);
-  }, [play, setPlayerOpen]);
+  }, [play, resume, setPlayerOpen, playerState.currentFile, playerState.isPlaying]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, file: FileInfo) => {
     if (e.button === 0) {
@@ -677,43 +1036,144 @@ export default function FileList() {
   const [editModalFile, setEditModalFile] = useState<FileInfo | null>(null);
 
   const handleEditFileSave = async (data: Partial<FileInfo>) => {
-    if (editModalFile) {
-      try {
-        // Montar novo nome de arquivo no padrão: Artista(s) - Título (Versão) [Label].extensão
-        const ext = editModalFile.name.split('.').pop();
-        let artista = (data.artist || editModalFile.artist || '').trim();
-        let titulo = (data.title || editModalFile.title || editModalFile.displayName || '').trim();
-        let label = (data.label || editModalFile.label || '').trim();
-        // Extrair versão do título se houver entre parênteses
-        let versao = '';
-        const matchVersao = titulo.match(/\(([^)]+)\)/);
-        if (matchVersao) {
-          versao = matchVersao[1];
-          // Remover a versão do título para não duplicar
-          titulo = titulo.replace(/\s*\([^)]*\)/, '').trim();
+    if (!editModalFile) return;
+
+    // Não usar setIsUpdatingAll para evitar loading que fecha modais
+    try {
+      // Se deve propagar para o álbum, atualizar todas as músicas do álbum
+      if ((data as any).propagateToAlbum && data.album) {
+        // Buscar todas as músicas do mesmo álbum
+        const albumTracks = files.filter(f => f.album === data.album);
+        
+        if (albumTracks.length > 0) {
+          // Preparar atualizações em lote para informações do álbum
+          const albumUpdates = albumTracks.map(track => ({
+            operation: 'update',
+            fileName: track.name,
+            title: track.name === editModalFile.name ? data.title : track.title,
+            artist: track.name === editModalFile.name ? data.artist : track.artist,
+            album: data.album,
+            year: data.ano, // Propagar data para todo o álbum
+            genre: track.name === editModalFile.name ? data.genre : track.genre,
+            label: data.label, // Propagar label para todo o álbum
+            bpm: track.name === editModalFile.name ? data.bpm : track.bpm,
+            key: track.name === editModalFile.name ? data.key : track.key,
+            catalogNumber: (data as any).catalogNumber, // Propagar catálogo para todo o álbum
+            duration: track.name === editModalFile.name ? data.duration : track.duration,
+          }));
+
+          // Fazer as atualizações em lote
+          let updatedCount = 0;
+          for (const updatePayload of albumUpdates) {
+            const response = await fetch('/api/metadata/unified', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(updatePayload),
+            });
+
+            if (!response.ok) {
+              const errorResult = await response.json();
+              throw new Error(errorResult.error || 'Falha ao atualizar metadados do álbum.');
+            }
+            updatedCount++;
+          }
+
+          // Informações do álbum atualizadas
+          
+          // Atualizar dados localmente sem recarregar tudo
+          const updatedFiles = files.map(file => {
+            if (file.album === data.album) {
+              return {
+                ...file,
+                // Propagar informações do álbum
+                label: data.label || file.label,
+                ano: data.ano || (file as any).ano,
+                catalogNumber: (data as any).catalogNumber || (file as any).catalogNumber,
+                // Atualizar dados específicos da música editada
+                ...(file.name === editModalFile.name ? {
+                  title: data.title || file.title,
+                  artist: data.artist || file.artist,
+                  album: data.album || file.album,
+                  genre: data.genre || file.genre,
+                  bpm: data.bpm || file.bpm,
+                  key: data.key || file.key,
+                  duration: data.duration || file.duration,
+                } : {})
+              };
+            }
+            return file;
+          });
+          
+          setFiles(updatedFiles);
+          
+          // Feedback visual de sucesso
+          alert(`✅ Informações do álbum propagadas com sucesso!\n\n` +
+                `📀 Álbum: "${data.album}"\n` +
+                `🎵 ${updatedCount} músicas atualizadas\n\n` +
+                `Informações propagadas:\n` +
+                `${data.label ? `• Label: ${data.label}\n` : ''}` +
+                `${data.ano ? `• Data: ${data.ano}\n` : ''}` +
+                `${(data as any).catalogNumber ? `• Catálogo: ${(data as any).catalogNumber}` : ''}`);
         }
-        // Montar nome
-        let newFileName = `${artista} - ${titulo}`;
-        if (versao) newFileName += ` (${versao})`;
-        if (label) newFileName += ` [${label}]`;
-        newFileName = newFileName.replace(/\s+/g, ' ').replace(/[\\/:*?"<>|]/g, '').trim();
-        newFileName += `.${ext}`;
-        const response = await fetch('/api/update-metadata', {
+      } else {
+        // Atualização normal de apenas uma música
+        const payload = {
+          operation: 'update',
+          fileName: editModalFile.name,
+          title: data.title,
+          artist: data.artist,
+          album: data.album,
+          year: data.ano,
+          genre: data.genre,
+          label: data.label,
+          bpm: data.bpm,
+          key: data.key,
+          catalogNumber: (data as any).catalogNumber,
+          duration: data.duration,
+        };
+
+        const response = await fetch('/api/metadata/unified', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileName: editModalFile.name, ...data, year: data.ano ? String(data.ano).slice(0, 4) : '', newFileName }),
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
         });
-        const result = await response.json();
-        if (!response.ok || result.error) {
-          setMetadataStatus({ ...metadataStatus, [editModalFile.name]: result.error || 'error' });
-        } else {
-          setMetadataStatus({ ...metadataStatus, [editModalFile.name]: 'success' });
-          fetchFiles();
+
+        if (!response.ok) {
+          const errorResult = await response.json();
+          throw new Error(errorResult.error || 'Falha ao atualizar metadados.');
         }
-      } catch (err: any) {
-        setMetadataStatus({ ...metadataStatus, [editModalFile.name]: err.message || 'error' });
+
+        // Atualizar apenas o arquivo editado localmente
+        const updatedFiles = files.map(file => 
+          file.name === editModalFile.name 
+            ? { 
+                ...file, 
+                title: data.title || file.title,
+                artist: data.artist || file.artist,
+                album: data.album || file.album,
+                ano: data.ano || (file as any).ano,
+                genre: data.genre || file.genre,
+                label: data.label || file.label,
+                bpm: data.bpm || file.bpm,
+                key: data.key || file.key,
+                catalogNumber: (data as any).catalogNumber || (file as any).catalogNumber,
+                duration: data.duration || file.duration,
+              }
+            : file
+        );
+        
+        setFiles(updatedFiles);
       }
-      setEditModalFile(null);
+
+      setEditModalFile(null); // Fecha o modal
+
+    } catch (error: any) {
+      console.error('Erro ao salvar metadados:', error);
+      alert(`Erro: ${error.message}`);
     }
   };
 
@@ -735,12 +1195,13 @@ export default function FileList() {
       if (result.metadata && result.metadata.catalogNumber) {
         setCatalogNumbers((prev: any) => ({ ...prev, [albumName]: result.metadata.catalogNumber }));
         // Atualizar título dos arquivos daquele álbum
-        setFiles((prevFiles: any[]) => prevFiles.map((f: any) => {
+        const updatedFiles = files.map((f: any) => {
           if (f.album === albumName && result.metadata.catalogNumber && f.title && !f.title.endsWith(`[${result.metadata.catalogNumber}]`)) {
             return { ...f, title: `${f.title} [${result.metadata.catalogNumber}]` };
           }
           return f;
-        }));
+        });
+        setFiles(updatedFiles);
       }
       setReleaseModal({ album: albumName, tracks: result.tracks, metadata: result.metadata, loading: false, error: null });
     } catch (err: any) {
@@ -750,27 +1211,32 @@ export default function FileList() {
 
   if (loading) {
     return (
-      <div className="flex flex-col h-full min-h-0">
-        <div 
-          className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden flex flex-col flex-1 min-h-0"
-          style={{ minHeight: 300 }}
-        >
-          <div className="flex w-full px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10 flex-shrink-0" style={{userSelect:'none'}}>
-            {columns.map((col, idx) => (
-              <div
-                key={col.key}
-                style={{ width: col.width, minWidth: col.width }}
-                className="flex items-center h-12 px-2 overflow-hidden whitespace-nowrap text-ellipsis"
-              >
-                <span className="truncate uppercase tracking-wide text-xs font-semibold">{col.label}</span>
-              </div>
-            ))}
-          </div>
-          <div className="flex-1 flex items-center justify-center animate-fade-in" style={{ minHeight: 200 }}>
-            <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-          </div>
-        </div>
-      </div>
+      <>
+        <SkeletonMusicList count={5} variant="desktop" />
+        
+        {/* Preservar modal de edição durante loading */}
+        {editModalFile && (
+          <EditFileModal
+            file={editModalFile}
+            onClose={() => setEditModalFile(null)}
+            onSave={handleEditFileSave}
+            isListLoading={loading}
+            isUpdatingAll={isUpdatingAll}
+          />
+        )}
+
+        {releaseModal && (
+          <ReleaseModal
+            album={releaseModal.album}
+            tracks={releaseModal.tracks}
+            metadata={releaseModal.metadata}
+            loading={releaseModal.loading}
+            error={releaseModal.error}
+            onClose={() => setReleaseModal(null)}
+            files={files}
+          />
+        )}
+      </>
     );
   }
 
@@ -783,94 +1249,242 @@ export default function FileList() {
     );
   }
 
-  return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center mb-4 gap-2 flex-shrink-0">
-        {/* <h2 className="text-xl font-semibold text-white">Arquivos Baixados</h2> */}
-        <div className="flex items-center justify-between w-full gap-2">
-          {/* Campo de busca à esquerda */}
-          <input
-            type="text"
-            placeholder="Buscar por título ou artista..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="flex-1 px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white text-sm focus:outline-none"
-            style={{ minWidth: 200 }}
-          />
-          {/* Agrupar por à direita */}
-          <div className="flex gap-2 items-center ml-4">
-            <label className="text-sm text-zinc-300 mr-1">Agrupar por:</label>
-            <select
-              value={groupByField}
-              onChange={e => setGroupByField(e.target.value)}
-              className="px-2 py-1 rounded bg-zinc-700 text-white text-sm focus:outline-none"
-            >
-              {groupableFields.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
+      return (
+      <div className="flex flex-col h-full min-h-0">
+        {/* Controles superiores com melhor responsividade */}
+        <div className="flex flex-col lg:flex-row lg:items-center gap-4 flex-shrink-0 mb-2 mt-2">
+          {/* Campo de busca melhorado */}
+          <div className="flex-1 relative group">
+            <input
+              type="text"
+              placeholder="Buscar por título ou artista..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full h-11 md:h-10 sm:h-9 pl-4 pr-12 py-2.5 rounded-xl text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm font-medium backdrop-blur-xl border border-white/10 group-hover:border-emerald-500/30"
+              style={{
+                background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(5, 150, 105, 0.08) 30%, rgba(0, 0, 0, 0.6) 70%, rgba(15, 23, 42, 0.7) 100%)',
+                boxShadow: '0 6px 20px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+              }}
+            />
+            <svg className="absolute right-4 top-1/2 transform -translate-y-1/2 w-5 h-5 md:w-4 md:h-4 text-zinc-400 group-hover:text-emerald-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          
+          {/* Controles laterais */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 lg:gap-4">
+            {/* Seletor de agrupamento melhorado */}
+            <div className="flex items-center gap-3 min-w-0 group">
+              <label className="text-sm md:text-xs text-zinc-300 font-medium whitespace-nowrap">
+                Agrupar por:
+              </label>
+              <select
+                value={groupByField}
+                onChange={e => setGroupByField(e.target.value)}
+                className="flex-1 sm:flex-none h-11 md:h-10 sm:h-9 px-4 md:px-3 py-2 rounded-xl backdrop-blur-xl border text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all duration-200 min-w-[120px] appearance-none cursor-pointer hover:border-emerald-500/30"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(5, 150, 105, 0.08) 30%, rgba(0, 0, 0, 0.6) 70%, rgba(15, 23, 42, 0.7) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 6px 20px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)',
+                  backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='rgba(16,185,129,0.8)' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
+                  backgroundPosition: 'right 12px center',
+                  backgroundRepeat: 'no-repeat',
+                  backgroundSize: '16px',
+                  paddingRight: '40px'
+                }}
+              >
+                {groupableFields.map(opt => (
+                  <option 
+                    key={opt.value} 
+                    value={opt.value}
+                    className="bg-zinc-900 text-white py-2"
+                    style={{
+                      backgroundColor: '#18181b',
+                      color: '#ffffff'
+                    }}
+                  >
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          
+            {/* Estatísticas da biblioteca */}
+             <div className="flex items-center gap-2 rounded-xl text-xs text-zinc-400 bg-black/20 px-3 py-2 backdrop-blur-sm border border-white/5">
+               <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+               </svg>
+               <span className="font-medium">
+                 {Object.values(groupedFiles).flat().length} {Object.values(groupedFiles).flat().length === 1 ? 'música' : 'músicas'}
+               </span>
+             </div>
           </div>
         </div>
-      </div>
-      
-      <div 
-        className="bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden flex flex-col flex-1 min-h-0"
-      >
-        <div className="flex w-full px-2 py-2 text-sm text-gray-400 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10 flex-shrink-0" style={{userSelect:'none'}}>
-          {columns.map((col, idx) => (
-            <div
-              key={col.key}
-              style={{ width: col.width, minWidth: col.width }}
-              className="flex items-center h-12 px-2 overflow-hidden whitespace-nowrap text-ellipsis"
-            >
-              <span className="truncate uppercase tracking-wide text-xs font-semibold">{col.label}{sortBy === col.key && (sortOrder === 'asc' ? '↑' : '↓')}</span>
+
+      {/* Lista de arquivos - Layout mobile (cards) */}
+      <div className="block sm:hidden flex-1 overflow-y-auto space-y-1 custom-scroll-square">
+        {Object.keys(groupedFiles).length === 0 || Object.values(groupedFiles).every(group => group.length === 0) ? (
+          <div className="text-center py-12">
+            <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
+              <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+              </svg>
             </div>
-          ))}
-        </div>
-        <div 
-          className="flex-1 min-h-0 overflow-y-auto custom-scroll"
-          style={{ maxHeight: '100%' }}
-        >
-          {Object.entries(groupedFiles).map(([group, files]) => (
-            <div key={group} className="animate-fade-in">
-              {groupByField && group !== '' && (
-                <div className="sticky top-0 bg-zinc-900 z-10 px-2 py-2 border-b border-zinc-700 flex items-center justify-between">
-                  <h3 className="text-sm font-medium text-white mr-2">{group}</h3>
-                  {groupByField === 'album' && (
-                    <button
-                      className="p-1 rounded hover:bg-blue-700 transition-colors text-blue-400 ml-auto"
-                      title="Atualizar metadados da release"
-                      onClick={() => handleUpdateRelease(group)}
-                      style={{ minWidth: 32 }}
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582M20 20v-5h-.581M5.21 17.293A9 9 0 1 0 6 6.26m1 5.74V9h3" />
-                      </svg>
-                    </button>
-                  )}
+            <p className="text-zinc-400 text-lg font-medium">Nenhuma música encontrada</p>
+            <p className="text-zinc-500 text-sm mt-1">Baixe algumas músicas para começar</p>
+          </div>
+        ) : (
+          Object.entries(groupedFiles).map(([groupName, groupFiles]) => (
+            <div key={groupName} className="space-y-1">
+              {/* Cabeçalho do grupo (se houver agrupamento) */}
+              {groupByField && groupName !== '' && (
+                <div className="sticky top-0 z-10 bg-black/40 backdrop-blur-sm rounded-lg p-2 border border-white/10 mb-1">
+                  <h3 className="text-base font-semibold text-white">
+                    {groupableFields.find(f => f.value === groupByField)?.label}: {groupName}
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    {groupFiles.length} {groupFiles.length === 1 ? 'música' : 'músicas'}
+                  </p>
                 </div>
               )}
-              {files.map((file, index) => (
-                <FileRow
-                  key={file.path}
-                  file={file}
-                  index={files.length - index - 1}
-                  files={files}
-                  columns={columns}
-                  onPlay={handlePlay}
-                  onContextMenu={handleContextMenu}
-                  metadataStatus={metadataStatus}
-                  updateMetadataForFile={updateMetadataForFile}
-                  setEditModalFile={setEditModalFile}
-                  isPlaying={!!(playerState.currentFile && playerState.currentFile.name === file.name)}
-                  fetchFiles={fetchFiles}
-                />
+              
+                            {/* Arquivos do grupo */}
+              {groupFiles.map((file, index) => (
+                <div
+                  key={file.name}
+                  data-file-name={file.name}
+                  className={`glass-card backdrop-blur-sm border border-emerald-500/20 hover:border-emerald-500/40 rounded-lg p-2 transition-all duration-300 cursor-pointer hover:shadow-lg hover:shadow-emerald-500/20 h-[50px] flex items-center ${
+                    playerState.currentFile?.name === file.name ? 'border-emerald-500/60 bg-emerald-500/10' : ''
+                  }`}
+                  onClick={() => handlePlay(file)}
+                  style={{
+                    background: `linear-gradient(135deg, 
+                      rgba(16, 185, 129, 0.05) 0%, 
+                      rgba(5, 150, 105, 0.08) 40%, 
+                      rgba(16, 185, 129, 0.03) 100%
+                    )`,
+                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                  }}
+                >
+                  <div className="flex items-center gap-3 w-full">
+                    <div className="relative flex-shrink-0">
+                      <Image
+                        src={getThumbnailUrl(file.name)}
+                        alt={file.title || file.displayName}
+                        width={36}
+                        height={36}
+                        className="object-cover w-9 h-9 bg-zinc-800 rounded border border-zinc-700/50"
+                      />
+                      {playerState.currentFile?.name === file.name && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded">
+                          {playerState.isPlaying ? (
+                            <SoundWave 
+                              color="rgb(16, 185, 129)"
+                              size="small"
+                              isPlaying={true}
+                              isLoading={playerState.isLoading}
+                            />
+                          ) : (
+                            <svg className="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
+                              <polygon points="8,5 19,12 8,19" />
+                            </svg>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="flex-1 min-w-0">
+                      <div className="text-white font-semibold text-sm leading-tight truncate">
+                        {file.title || file.displayName}
+                      </div>
+                      <div className="text-emerald-400 text-xs truncate font-medium leading-tight">
+                        {file.artist || 'Artista desconhecido'}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {file.bpm && (
+                        <span className="bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded text-xs font-medium">
+                          {file.bpm}
+                        </span>
+                      )}
+                      {file.key && (
+                        <span className="bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded text-xs font-medium">
+                          {file.key}
+                        </span>
+                      )}
+                      {file.genre && (
+                        <span className="bg-zinc-700/50 text-zinc-300 px-1.5 py-0.5 rounded text-xs max-w-[60px] truncate">
+                          {file.genre}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex-shrink-0 ml-2">
+                      <MobileActionMenu 
+                        file={file}
+                        onUpdate={updateMetadataForFile}
+                        onEdit={setEditModalFile}
+                        fetchFiles={fetchFiles}
+                      />
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
-          ))}
-        </div>
+          ))
+        )}
       </div>
-      
+
+      {/* Lista de arquivos - Layout desktop (cards como mobile) */}
+      <div className="hidden sm:block flex-1 overflow-y-auto space-y-1 custom-scroll-square">
+        {Object.keys(groupedFiles).length === 0 || Object.values(groupedFiles).every(group => group.length === 0) ? (
+          <div className="text-center py-12">
+            <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
+              <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+              </svg>
+            </div>
+            <p className="text-zinc-400 text-lg font-medium">Nenhuma música encontrada</p>
+            <p className="text-zinc-500 text-sm mt-1">Baixe algumas músicas para começar</p>
+          </div>
+        ) : (
+          Object.entries(groupedFiles).map(([groupName, groupFiles]) => (
+            <div key={groupName} className="space-y-1">
+              {/* Cabeçalho do grupo (se houver agrupamento) */}
+              {groupByField && groupName !== '' && (
+                <div className="sticky top-0 z-10 bg-black/40 backdrop-blur-sm rounded-lg p-2 border border-white/10 mb-1">
+                  <h3 className="text-base font-semibold text-white">
+                    {groupableFields.find(f => f.value === groupByField)?.label}: {groupName}
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    {groupFiles.length} {groupFiles.length === 1 ? 'música' : 'músicas'}
+                  </p>
+                </div>
+              )}
+              
+              {/* Arquivos do grupo */}
+              {groupFiles.map((file, index) => (
+                <div key={file.name} data-file-name={file.name}>
+                  <DynamicFileItem 
+                    file={file}
+                    isPlaying={playerState.currentFile?.name === file.name}
+                    isPlayerPlaying={playerState.isPlaying}
+                    onPlay={() => handlePlay(file)}
+                    extractDominantColor={extractDominantColor}
+                    dominantColors={dominantColors}
+                    onUpdate={updateMetadataForFile}
+                    onEdit={setEditModalFile}
+                    fetchFiles={fetchFiles}
+                    isLoading={playerState.isLoading}
+                  />
+                </div>
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+
       {showQueue && queue.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <DownloadQueue onClose={() => setShowQueue(false)} />
@@ -883,6 +1497,8 @@ export default function FileList() {
           file={editModalFile}
           onClose={() => setEditModalFile(null)}
           onSave={handleEditFileSave}
+          isListLoading={loading}
+          isUpdatingAll={isUpdatingAll}
         />
       )}
 
@@ -901,7 +1517,13 @@ export default function FileList() {
   );
 }
 
-function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () => void, onSave: (data: Partial<FileInfo>) => void }) {
+function EditFileModal({ file, onClose, onSave, isListLoading, isUpdatingAll }: { 
+  file: FileInfo, 
+  onClose: () => void, 
+  onSave: (data: Partial<FileInfo>) => void,
+  isListLoading?: boolean,
+  isUpdatingAll?: boolean
+}) {
   // Função utilitária para normalizar o valor inicial da data
   function getInitialReleaseDate(ano?: string) {
     if (!ano) return '';
@@ -919,10 +1541,38 @@ function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () 
     genre: file.genre || '',
     album: file.album || '',
     label: file.label || '',
+    catalog: (file as any).catalogNumber || (file as any).catalog || '',
     releaseDate: getInitialReleaseDate(file.ano),
   });
+  
+  const [formTouched, setFormTouched] = useState(false); // Rastrear se o usuário alterou algo
   const [saving, setSaving] = useState(false);
   const [dateError, setDateError] = useState<string | null>(null);
+  const [propagateToAlbum, setPropagateToAlbum] = useState(false);
+  const [activeTab, setActiveTab] = useState<'edit' | 'beatport'>('edit');
+  const initialFileRef = useRef(file.name); // Rastrear o arquivo inicial
+
+  // Só resetar o formulário se mudou para um arquivo diferente (não apenas atualizou)
+  useEffect(() => {
+    if (file.name !== initialFileRef.current) {
+      // Mudou de arquivo, resetar tudo
+      initialFileRef.current = file.name;
+      setFormTouched(false);
+      setActiveTab('edit'); // Resetar para aba de edição
+      setForm({
+        title: file.title || '',
+        artist: file.artist || '',
+        duration: file.duration || '',
+        bpm: file.bpm?.toString() || '',
+        key: file.key || '',
+        genre: file.genre || '',
+        album: file.album || '',
+        label: file.label || '',
+        catalog: (file as any).catalogNumber || (file as any).catalog || '',
+        releaseDate: getInitialReleaseDate(file.ano),
+      });
+    }
+  }, [file.name]); // Só depende do nome do arquivo, não do objeto completo
 
   // Máscara para data YYYY-MM-DD
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -931,12 +1581,14 @@ function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () 
     if (value.length > 4 && value[4] !== '-') value = value.slice(0, 4) + '-' + value.slice(4);
     if (value.length > 7 && value[7] !== '-') value = value.slice(0, 7) + '-' + value.slice(7);
     value = value.slice(0, 10);
+    setFormTouched(true); // Marcar como alterado pelo usuário
     setForm(f => ({ ...f, releaseDate: value }));
     setDateError(null);
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
+    setFormTouched(true); // Marcar como alterado pelo usuário
     if (name === 'releaseDate') {
       handleDateChange(e);
     } else {
@@ -953,43 +1605,592 @@ function EditFileModal({ file, onClose, onSave }: { file: FileInfo, onClose: () 
       setSaving(false);
       return;
     }
-    await onSave({
+    
+    const formData = {
       ...form,
       bpm: form.bpm ? parseInt(form.bpm) : undefined,
       ano: form.releaseDate || '',
-    });
+      catalogNumber: form.catalog,
+      propagateToAlbum: propagateToAlbum && form.album
+    };
+    
+    await onSave(formData);
     setSaving(false);
+    setFormTouched(false); // Resetar o estado de alterações
     onClose();
   };
 
+  const handleClose = () => {
+    if (formTouched) {
+      if (window.confirm('Você tem alterações não salvas. Deseja realmente fechar sem salvar?')) {
+        setFormTouched(false);
+        onClose();
+      }
+    } else {
+      onClose();
+    }
+  };
+
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
-      <div className="bg-zinc-900 rounded-lg p-6 w-full max-w-md shadow-lg relative animate-fade-in">
-        <button
-          onClick={onClose}
-          className="absolute top-2 right-2 text-gray-400 hover:text-white"
-        >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-        <h2 className="text-xl font-semibold text-white mb-4">Editar informações</h2>
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <input name="title" value={form.title} onChange={handleChange} placeholder="Título" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="artist" value={form.artist} onChange={handleChange} placeholder="Artista" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="duration" value={form.duration} onChange={handleChange} placeholder="Duração" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="bpm" value={form.bpm} onChange={handleChange} placeholder="BPM" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="key" value={form.key} onChange={handleChange} placeholder="Key" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="genre" value={form.genre} onChange={handleChange} placeholder="Gênero" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="album" value={form.album} onChange={handleChange} placeholder="Álbum" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="label" value={form.label} onChange={handleChange} placeholder="Label" className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          <input name="releaseDate" value={form.releaseDate} onChange={handleChange} placeholder="Data de Lançamento (YYYY-MM-DD)" maxLength={10} className="w-full px-3 py-2 rounded bg-zinc-800 border border-zinc-700 text-white" />
-          {dateError && <div className="text-red-400 text-xs">{dateError}</div>}
-          <button type="submit" disabled={saving} className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-all font-medium shadow disabled:opacity-50 disabled:cursor-not-allowed">
-            {saving ? 'Salvando...' : 'Salvar'}
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div 
+        className="w-full max-w-2xl rounded-xl border border-emerald-500/30 shadow-2xl relative animate-fade-in backdrop-blur-xl"
+        style={{
+          background: `linear-gradient(135deg, 
+            rgba(16, 185, 129, 0.1) 0%, 
+            rgba(5, 150, 105, 0.15) 30%, 
+            rgba(0, 0, 0, 0.8) 70%, 
+            rgba(15, 23, 42, 0.9) 100%
+          )`,
+          boxShadow: '0 25px 50px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+        }}
+      >
+        {/* Header compacto */}
+        <div className="relative p-4 pb-3 border-b border-emerald-500/20">
+          <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-emerald-400/50 to-transparent"></div>
+          
+          <button
+            onClick={handleClose}
+            className="absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded-lg text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition-all duration-200"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
+          
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
+              <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-white">Editar Metadados</h2>
+              <p className="text-xs text-emerald-300/80">Personalize as informações da música</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Abas */}
+        <div className="flex border-b border-emerald-500/20">
+          <button
+            onClick={() => setActiveTab('edit')}
+            className={`flex-1 px-4 py-3 text-sm font-medium transition-all duration-200 ${
+              activeTab === 'edit'
+                ? 'text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/5'
+                : 'text-zinc-400 hover:text-emerald-300 hover:bg-emerald-500/5'
+            }`}
+          >
+            <div className="flex items-center justify-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+              Edição Manual
+            </div>
+          </button>
+          <button
+            onClick={() => setActiveTab('beatport')}
+            className={`flex-1 px-4 py-3 text-sm font-medium transition-all duration-200 ${
+              activeTab === 'beatport'
+                ? 'text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/5'
+                : 'text-zinc-400 hover:text-emerald-300 hover:bg-emerald-500/5'
+            }`}
+          >
+            <div className="flex items-center justify-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              Beatport
+            </div>
+          </button>
+        </div>
+
+        {/* Conteúdo das Abas */}
+        {activeTab === 'edit' && (
+          <div>
+            {/* Form otimizado horizontalmente */}
+            <form onSubmit={handleSubmit} className="p-4 space-y-3">
+          {/* Grid principal com 3 colunas em desktop */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            {/* Título - ocupa 2 colunas */}
+            <div className="lg:col-span-2 space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Título</label>
+              <input 
+                name="title" 
+                value={form.title} 
+                onChange={handleChange} 
+                placeholder="Nome da música"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            {/* Duração */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Duração</label>
+              <input 
+                name="duration" 
+                value={form.duration} 
+                onChange={handleChange} 
+                placeholder="0:00"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Segunda linha - Artista e BPM */}
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+            {/* Artista - ocupa 3 colunas */}
+            <div className="lg:col-span-3 space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Artista</label>
+              <input 
+                name="artist" 
+                value={form.artist} 
+                onChange={handleChange} 
+                placeholder="Nome do artista"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            {/* BPM */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">BPM</label>
+              <input 
+                name="bpm" 
+                value={form.bpm} 
+                onChange={handleChange} 
+                placeholder="120"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Terceira linha - Key, Gênero, Data */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Key</label>
+              <input 
+                name="key" 
+                value={form.key} 
+                onChange={handleChange} 
+                placeholder="A Minor"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Gênero</label>
+              <input 
+                name="genre" 
+                value={form.genre} 
+                onChange={handleChange} 
+                placeholder="Deep House"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            <div className="space-y-1 md:col-span-2 lg:col-span-1">
+              <label className="text-xs font-medium text-emerald-300">Data</label>
+              <input 
+                name="releaseDate" 
+                value={form.releaseDate} 
+                onChange={handleChange} 
+                placeholder="YYYY-MM-DD" 
+                maxLength={10}
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Quarta linha - Álbum, Label e Catálogo */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Álbum</label>
+              <input 
+                name="album" 
+                value={form.album} 
+                onChange={handleChange} 
+                placeholder="Nome do álbum"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Label</label>
+              <input 
+                name="label" 
+                value={form.label} 
+                onChange={handleChange} 
+                placeholder="Gravadora"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-emerald-300">Catálogo</label>
+              <input 
+                name="catalog" 
+                value={form.catalog} 
+                onChange={handleChange} 
+                placeholder="CAT001"
+                className="w-full px-3 py-2 rounded-lg backdrop-blur-xl border text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all duration-200 text-sm"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(0, 0, 0, 0.3) 0%, rgba(39, 39, 42, 0.4) 100%)',
+                  borderColor: 'rgba(255, 255, 255, 0.1)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Checkbox para propagar informações do álbum */}
+          {form.album && (
+            <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20 backdrop-blur-sm">
+              <label className="flex items-start gap-3 cursor-pointer group">
+                <div className="relative flex-shrink-0 mt-0.5">
+                  <input
+                    type="checkbox"
+                    checked={propagateToAlbum}
+                    onChange={(e) => setPropagateToAlbum(e.target.checked)}
+                    className="sr-only"
+                  />
+                  <div 
+                    className={`w-5 h-5 rounded border-2 transition-all duration-200 flex items-center justify-center ${
+                      propagateToAlbum 
+                        ? 'bg-blue-500 border-blue-500 shadow-lg shadow-blue-500/30' 
+                        : 'border-blue-400/50 bg-transparent hover:border-blue-400 hover:bg-blue-500/10'
+                    }`}
+                  >
+                    {propagateToAlbum && (
+                      <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </div>
+                </div>
+                <div className="flex-1">
+                  <span className="text-sm font-semibold text-blue-300 group-hover:text-blue-200 transition-colors">
+                    Aplicar informações do álbum para todas as músicas
+                  </span>
+                  <p className="text-xs text-blue-200/80 mt-1 leading-relaxed">
+                    <strong>Label</strong>, <strong>Data</strong> e <strong>Catálogo</strong> serão atualizados em todas as músicas do álbum <span className="font-medium text-blue-100">"{form.album}"</span>
+                  </p>
+                  {propagateToAlbum && (
+                    <div className="mt-2 text-xs text-blue-100 bg-blue-500/20 px-2 py-1 rounded-md">
+                      ⚡ Propagação ativada
+                    </div>
+                  )}
+                </div>
+              </label>
+            </div>
+          )}
+
+          {/* Erro de data */}
+          {dateError && (
+            <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg p-2">
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {dateError}
+            </div>
+          )}
+
+          {/* Botão de salvar compacto */}
+          <div className="pt-3 border-t border-emerald-500/20">
+            <button 
+              type="submit" 
+              disabled={saving}
+              className="w-full px-4 py-2.5 rounded-lg font-semibold text-white transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              style={{
+                background: saving 
+                  ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(5, 150, 105, 0.4) 100%)'
+                  : 'linear-gradient(135deg, rgba(16, 185, 129, 0.8) 0%, rgba(5, 150, 105, 0.9) 100%)',
+                boxShadow: saving 
+                  ? '0 4px 16px rgba(16, 185, 129, 0.1)' 
+                  : '0 8px 32px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)'
+              }}
+              onMouseEnter={(e) => {
+                if (!saving) {
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 12px 40px rgba(16, 185, 129, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!saving) {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 8px 32px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2)';
+                }
+              }}
+            >
+              {saving ? (
+                <div className="flex items-center justify-center gap-2">
+                  <LoadingSpinner size="sm" color="white" isLoading={saving} />
+                  Salvando...
+                </div>
+              ) : (
+                <div className="flex items-center justify-center gap-2">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  Salvar Alterações
+                </div>
+              )}
+            </button>
+          </div>
         </form>
+          </div>
+        )}
+
+        {/* Aba Beatport */}
+        {activeTab === 'beatport' && (
+          <div className="p-4">
+            <div className="space-y-4">
+              {/* Informações da música atual */}
+              <div className="bg-zinc-800/50 rounded-lg p-3 border border-emerald-500/20">
+                                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-medium text-emerald-300">Música Atual</h3>
+                  <div className="flex items-center gap-3">
+                    {formTouched && (
+                      <div className="flex items-center gap-1 text-xs text-orange-400 bg-orange-500/10 px-2 py-1 rounded-md border border-orange-500/20">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                        </svg>
+                        <span>Não salvo</span>
+                      </div>
+                    )}
+                    {(isListLoading || isUpdatingAll) && (
+                      <div className="flex items-center gap-2 text-xs text-yellow-400">
+                        <LoadingSpinner size="sm" color="yellow" isLoading={true} />
+                        <span>{formTouched ? 'Atualizando (suas alterações estão preservadas)' : 'Atualizando lista...'}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="text-xs text-zinc-300">
+                  <div><strong>Título:</strong> {file.title || file.displayName}</div>
+                  <div><strong>Artista:</strong> {file.artist || 'Não informado'}</div>
+                </div>
+              </div>
+
+              {/* Iframe do Beatport */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-medium text-emerald-300">Pesquisar no Beatport</h3>
+                  <button
+                    onClick={() => {
+                      const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
+                      const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
+                      window.open(beatportUrl, '_blank', 'width=1200,height=800');
+                    }}
+                    className="px-3 py-1 bg-emerald-600 text-white text-xs rounded-md hover:bg-emerald-700 transition-colors"
+                  >
+                    🔗 Abrir no Beatport
+                  </button>
+                </div>
+                
+                <div className="w-full rounded-lg border border-zinc-700 bg-zinc-800/30 p-6 text-center">
+                  <div className="mb-4">
+                    <svg className="w-16 h-16 mx-auto text-zinc-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                    <h3 className="text-lg font-medium text-zinc-300 mb-2">Beatport abrirá em nova aba</h3>
+                    <p className="text-sm text-zinc-400 mb-4">
+                      Por questões de segurança, o Beatport não permite integração via iframe.
+                    </p>
+                  </div>
+                  
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-4 mb-4">
+                    <h4 className="text-sm font-medium text-emerald-300 mb-2">🎯 Informações para buscar:</h4>
+                    <div className="text-sm space-y-1">
+                      <div className="bg-zinc-700/50 rounded px-3 py-2">
+                        <strong className="text-emerald-300">Busca:</strong> 
+                        <span className="ml-2 text-white">{`${file.artist || ''} ${file.title || file.displayName}`.trim()}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-zinc-400">
+                    Clique no botão acima para abrir o Beatport em uma nova aba com a busca automática.
+                  </div>
+                </div>
+              </div>
+
+              {/* Instruções */}
+              <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                <h4 className="text-xs font-medium text-blue-300 mb-2">💡 Como usar:</h4>
+                <ol className="text-xs text-blue-200/80 space-y-1 list-decimal list-inside">
+                  <li>Clique em "🔗 Abrir no Beatport" - abrirá uma nova aba com busca automática</li>
+                  <li>Encontre a música desejada na página do Beatport</li>
+                  <li>Copie as informações (BPM, Key, Label, etc.) da página do Beatport</li>
+                  <li>Volte para esta aba e vá para "Edição Manual"</li>
+                  <li>Cole os dados copiados nos campos correspondentes</li>
+                  <li>Clique em "Salvar Alterações"</li>
+                </ol>
+              </div>
+
+              {/* Botões de ação */}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setActiveTab('edit')}
+                  className="flex-1 px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 transition-colors text-sm"
+                >
+                  ← Voltar para Edição
+                </button>
+                <button
+                  onClick={handleClose}
+                  className="px-4 py-2 bg-zinc-700 text-white rounded-md hover:bg-zinc-600 transition-colors text-sm"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+// Menu de ações mobile
+function MobileActionMenu({ file, onUpdate, onEdit, fetchFiles }: { 
+  file: any, 
+  onUpdate: (fileName: string, status: string) => void, 
+  onEdit: (file: any) => void,
+  fetchFiles: (force?: boolean) => void 
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // Fechar menu ao clicar fora
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node) && 
+          buttonRef.current && !buttonRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside);
+    } else {
+      document.removeEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  return (
+    <div className="relative inline-block">
+      <button
+        ref={buttonRef}
+        className="flex-shrink-0 w-10 h-10 flex items-center justify-center text-zinc-400 hover:text-emerald-400 transition-colors rounded-lg hover:bg-emerald-500/10"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        title="Ações"
+        type="button"
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          ref={menuRef}
+          className="absolute right-0 top-full mt-2 z-[9999] backdrop-blur-md border border-emerald-500/20 rounded-lg shadow-xl min-w-[140px] py-1.5 animate-fade-in"
+          style={{
+            background: `linear-gradient(135deg, 
+              rgba(16, 185, 129, 0.1) 0%, 
+              rgba(5, 150, 105, 0.15) 30%, 
+              rgba(0, 0, 0, 0.8) 70%, 
+              rgba(15, 23, 42, 0.9) 100%
+            )`,
+            boxShadow: '0 8px 32px rgba(16, 185, 129, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+          }}
+        >
+          <button
+            className="w-full text-left px-3 py-2 text-xs hover:bg-emerald-500/10 text-emerald-300 font-medium transition-colors rounded-md mx-1"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onUpdate(file.name, 'loading');
+              setOpen(false);
+            }}
+          >
+            ↻ Atualizar Metadados
+          </button>
+          <button
+            className="w-full text-left px-3 py-2 text-xs hover:bg-blue-500/10 text-blue-300 font-medium transition-colors rounded-md mx-1"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onEdit(file);
+              setOpen(false);
+            }}
+          >
+            ✎ Editar
+          </button>
+          <button
+            className="w-full text-left px-3 py-2 text-xs hover:bg-red-500/10 text-red-300 font-medium transition-colors rounded-md mx-1"
+            onClick={async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (window.confirm('Remover este arquivo?')) {
+                await removeFile(file.name, fetchFiles);
+                setOpen(false);
+              }
+            }}
+          >
+            🗑 Remover
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1035,25 +2236,38 @@ function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
   const menu = (
     <div
       ref={menuRef}
-      className="z-[9999] bg-zinc-900 border border-zinc-700 rounded shadow-lg min-w-[160px] py-1 animate-fade-in"
-      style={{ position: 'absolute', top: menuPosition.top, left: menuPosition.left }}
+      className="z-[9999] backdrop-blur-md border border-emerald-500/20 rounded-lg shadow-xl min-w-[140px] py-1.5 animate-fade-in"
+      style={{ 
+        position: 'absolute', 
+        top: menuPosition.top, 
+        left: menuPosition.left,
+        background: `linear-gradient(135deg, 
+          rgba(16, 185, 129, 0.1) 0%, 
+          rgba(5, 150, 105, 0.15) 30%, 
+          rgba(0, 0, 0, 0.8) 70%, 
+          rgba(15, 23, 42, 0.9) 100%
+        )`,
+        boxShadow: '0 8px 32px rgba(16, 185, 129, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+      }}
     >
       <button
-        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-blue-400"
+        className="w-full text-left px-3 py-2 text-xs hover:bg-emerald-500/10 text-emerald-300 font-medium transition-colors rounded-md mx-1"
         onClick={() => { onUpdate(file.name, 'loading'); setOpen(false); }}
-      >Atualizar</button>
+      >
+        ↻ Atualizar Metadados
+      </button>
       <button
-        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-green-400"
+        className="w-full text-left px-3 py-2 text-xs hover:bg-blue-500/10 text-blue-300 font-medium transition-colors rounded-md mx-1"
         onClick={() => { onEdit(file); setOpen(false); }}
-      >Editar</button>
+      >
+        ✎ Editar
+      </button>
       <button
-        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-purple-400"
-        onClick={() => { window.open(`/api/downloads/${encodeURIComponent(file.name)}`, '_blank'); setOpen(false); }}
-      >Baixar</button>
-      <button
-        className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 text-red-400"
+        className="w-full text-left px-3 py-2 text-xs hover:bg-red-500/10 text-red-300 font-medium transition-colors rounded-md mx-1"
         onClick={async () => { if (window.confirm('Remover este arquivo?')) { await removeFile(file.name, fetchFiles); setOpen(false); } }}
-      >Remover</button>
+      >
+        🗑 Remover
+      </button>
     </div>
   );
 
@@ -1061,13 +2275,16 @@ function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
     <div className="relative inline-block">
       <button
         ref={buttonRef}
-        className="p-2 rounded-full hover:bg-zinc-700 transition-colors text-zinc-300 flex items-center justify-center"
-        onClick={() => setOpen((v) => !v)}
+        className="w-8 h-8 rounded-lg hover:bg-emerald-500/10 transition-colors text-zinc-400 hover:text-emerald-400 flex items-center justify-center border border-transparent hover:border-emerald-500/20"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
         title="Ações"
         type="button"
       >
-        {/* Vertical Dots (Heroicons style) */}
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
           <circle cx="12" cy="6" r="1.5" />
           <circle cx="12" cy="12" r="1.5" />
           <circle cx="12" cy="18" r="1.5" />

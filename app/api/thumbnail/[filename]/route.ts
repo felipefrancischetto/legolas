@@ -68,6 +68,27 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+// Função para gerar thumbnail padrão baseado no nome do arquivo
+async function generateDefaultThumbnail(filename: string): Promise<Buffer> {
+  // Criar uma imagem SVG simples como fallback
+  const svg = `
+    <svg width="200" height="200" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" style="stop-color:#10b981;stop-opacity:1" />
+          <stop offset="100%" style="stop-color:#059669;stop-opacity:1" />
+        </linearGradient>
+      </defs>
+      <rect width="200" height="200" fill="url(#grad)" rx="20"/>
+      <text x="100" y="80" font-family="Arial, sans-serif" font-size="16" fill="white" text-anchor="middle" opacity="0.8">🎵</text>
+      <text x="100" y="120" font-family="Arial, sans-serif" font-size="12" fill="white" text-anchor="middle" opacity="0.6">${filename.substring(0, 20)}${filename.length > 20 ? '...' : ''}</text>
+      <text x="100" y="140" font-family="Arial, sans-serif" font-size="10" fill="white" text-anchor="middle" opacity="0.4">Audio File</text>
+    </svg>
+  `;
+  
+  return Buffer.from(svg);
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ filename: string }> }
@@ -107,7 +128,15 @@ export async function GET(
           }
         });
       }
-      return new NextResponse('', { status: 404 });
+      // Se ainda não tem cache, retornar thumbnail padrão
+      const defaultBuffer = await generateDefaultThumbnail(decodedFilename);
+      return new NextResponse(defaultBuffer, {
+        headers: {
+          'Content-Type': 'image/svg+xml',
+          'Cache-Control': 'public, max-age=3600',
+          'X-Cache': 'DEFAULT'
+        }
+      });
     }
     
     processingCache.add(cacheKey);
@@ -117,14 +146,24 @@ export async function GET(
       const filePath = join(downloadsFolder, decodedFilename);
 
       if (!await fileExists(filePath)) {
-        return new NextResponse('Arquivo não encontrado', { status: 404 });
+        const defaultBuffer = await generateDefaultThumbnail(decodedFilename);
+        return new NextResponse(defaultBuffer, {
+          headers: {
+            'Content-Type': 'image/svg+xml',
+            'Cache-Control': 'public, max-age=3600',
+            'X-Cache': 'DEFAULT'
+          }
+        });
       }
 
       const timestamp = Date.now();
       const randomSuffix = Math.random().toString(36).substring(7);
       tempImagePath = join(downloadsFolder, `thumb_${timestamp}_${randomSuffix}.jpg`);
 
+      let imageBuffer: Buffer | null = null;
+
       try {
+        // Primeiro, verificar se há streams de vídeo (artwork embutido)
         const { stdout: probeOutput } = await execAsync(
           `ffprobe -v quiet -print_format json -show_streams "${filePath}"`,
           { maxBuffer: 1024 * 1024 * 10 }
@@ -133,71 +172,35 @@ export async function GET(
         const probeInfo = JSON.parse(probeOutput);
         const hasVideoStream = probeInfo.streams?.some((stream: any) => stream.codec_type === 'video');
         
-        if (!hasVideoStream) {
+        if (hasVideoStream) {
+          // Tentar extrair artwork embutido
           try {
             const artworkCommand = `ffmpeg -y -i "${filePath}" -an -c:v copy -f image2 "${tempImagePath}"`;
             await execAsync(artworkCommand, { maxBuffer: 1024 * 1024 * 10 });
             
             if (await fileExists(tempImagePath)) {
-              const imageBuffer = await readFile(tempImagePath);
-              
-              try {
-                await unlink(tempImagePath);
-              } catch (error) {
-                console.warn('Erro ao remover arquivo temporário:', error);
-              }
-              
-              const cacheEntry: ThumbnailCache = {
-                buffer: imageBuffer,
-                timestamp: Date.now(),
-                contentType: 'image/jpeg'
-              };
-              thumbnailCache.set(cacheKey, cacheEntry);
-              cleanupCache();
-              
-              return new NextResponse(imageBuffer, {
-                headers: {
-                  'Content-Type': 'image/jpeg',
-                  'Cache-Control': 'public, max-age=31536000',
-                  'X-Cache': 'MISS'
-                }
-              });
+              imageBuffer = await readFile(tempImagePath);
+              console.log('✅ Artwork embutido extraído com sucesso');
             }
-          } catch (error) {
+          } catch (artworkError) {
+            console.log('⚠️ Erro ao extrair artwork com -c:v copy, tentando -map 0:v');
+            
             try {
               const flacArtworkCommand = `ffmpeg -y -i "${filePath}" -map 0:v -c copy "${tempImagePath}"`;
               await execAsync(flacArtworkCommand, { maxBuffer: 1024 * 1024 * 10 });
               
               if (await fileExists(tempImagePath)) {
-                const imageBuffer = await readFile(tempImagePath);
-                
-                try {
-                  await unlink(tempImagePath);
-                } catch (error) {
-                  console.warn('Erro ao remover arquivo temporário:', error);
-                }
-                
-                const cacheEntry: ThumbnailCache = {
-                  buffer: imageBuffer,
-                  timestamp: Date.now(),
-                  contentType: 'image/jpeg'
-                };
-                thumbnailCache.set(cacheKey, cacheEntry);
-                cleanupCache();
-                
-                return new NextResponse(imageBuffer, {
-                  headers: {
-                    'Content-Type': 'image/jpeg',
-                    'Cache-Control': 'public, max-age=31536000',
-                    'X-Cache': 'MISS'
-                  }
-                });
+                imageBuffer = await readFile(tempImagePath);
+                console.log('✅ Artwork embutido extraído com -map 0:v');
               }
             } catch (flacError) {
-              console.log('⚠️ Nenhum artwork embutido encontrado no arquivo');
+              console.log('⚠️ Falha ao extrair artwork embutido');
             }
           }
-          
+        }
+
+        // Se não conseguiu extrair artwork embutido, tentar buscar URL do YouTube nos metadados
+        if (!imageBuffer) {
           try {
             const { stdout: metadataOutput } = await execAsync(
               `ffprobe -v quiet -print_format json -show_format "${filePath}"`,
@@ -205,98 +208,149 @@ export async function GET(
             );
             
             const metadata = JSON.parse(metadataOutput);
-            const youtubeUrl = metadata.format?.tags?.purl || metadata.format?.tags?.comment;
+            const youtubeUrl = metadata.format?.tags?.purl || 
+                             metadata.format?.tags?.comment ||
+                             metadata.format?.tags?.description;
             
             if (youtubeUrl && youtubeUrl.includes('youtube.com/watch?v=')) {
               const videoId = youtubeUrl.split('v=')[1].split('&')[0];
               const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
               
+              console.log('🔍 Tentando baixar thumbnail do YouTube:', thumbnailUrl);
               const response = await fetch(thumbnailUrl);
               if (response.ok) {
-                const imageBuffer = Buffer.from(await response.arrayBuffer());
-                
-                const cacheEntry: ThumbnailCache = {
-                  buffer: imageBuffer,
-                  timestamp: Date.now(),
-                  contentType: 'image/jpeg'
-                };
-                thumbnailCache.set(cacheKey, cacheEntry);
-                cleanupCache();
-                
-                return new NextResponse(imageBuffer, {
-                  headers: {
-                    'Content-Type': 'image/jpeg',
-                    'Cache-Control': 'public, max-age=31536000',
-                    'X-Cache': 'MISS'
-                  }
-                });
+                imageBuffer = Buffer.from(await response.arrayBuffer());
+                console.log('✅ Thumbnail do YouTube baixado com sucesso');
+              } else {
+                // Tentar thumbnail de qualidade menor
+                const fallbackUrl = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+                const fallbackResponse = await fetch(fallbackUrl);
+                if (fallbackResponse.ok) {
+                  imageBuffer = Buffer.from(await fallbackResponse.arrayBuffer());
+                  console.log('✅ Thumbnail do YouTube (qualidade menor) baixado');
+                }
               }
             }
           } catch (metadataError) {
-            console.log('Não foi possível extrair URL do YouTube dos metadados');
+            console.log('⚠️ Não foi possível extrair URL do YouTube dos metadados');
           }
-          
-          return new NextResponse('', { status: 404 });
-        } else {
-          const ffmpegCommand = `ffmpeg -y -i "${filePath}" -vf "select=eq(n\\,0)" -vframes 1 "${tempImagePath}"`;
-          await execAsync(ffmpegCommand, { maxBuffer: 1024 * 1024 * 10 });
         }
+
+        // Se ainda não tem imagem, tentar extrair frame do vídeo (se for arquivo de vídeo)
+        if (!imageBuffer && hasVideoStream) {
+          try {
+            const ffmpegCommand = `ffmpeg -y -i "${filePath}" -vf "select=eq(n\\,0)" -vframes 1 "${tempImagePath}"`;
+            await execAsync(ffmpegCommand, { maxBuffer: 1024 * 1024 * 10 });
+            
+            if (await fileExists(tempImagePath)) {
+              imageBuffer = await readFile(tempImagePath);
+              console.log('✅ Frame de vídeo extraído como thumbnail');
+            }
+          } catch (frameError) {
+            console.log('⚠️ Erro ao extrair frame de vídeo');
+          }
+        }
+
       } catch (error) {
-        console.error('Erro ao executar comando ffmpeg:', error);
-        return new NextResponse('', { status: 404 });
+        console.error('❌ Erro ao processar arquivo para thumbnail:', error);
       }
-      
-      const imageBuffer = await readFile(tempImagePath);
-      
-      if (tempImagePath) {
+
+      // Limpar arquivo temporário se existir
+      if (tempImagePath && await fileExists(tempImagePath)) {
         try {
           await unlink(tempImagePath);
         } catch (cleanupError) {
-          console.warn('Erro ao limpar arquivo temporário:', cleanupError);
+          console.warn('⚠️ Erro ao limpar arquivo temporário:', cleanupError);
         }
       }
 
+      // Se conseguiu extrair imagem, usar ela
+      if (imageBuffer) {
+        const cacheEntry: ThumbnailCache = {
+          buffer: imageBuffer,
+          timestamp: Date.now(),
+          contentType: 'image/jpeg'
+        };
+        thumbnailCache.set(cacheKey, cacheEntry);
+        cleanupCache();
+
+        return new NextResponse(imageBuffer, {
+          headers: {
+            'Content-Type': 'image/jpeg',
+            'Cache-Control': 'public, max-age=31536000',
+            'X-Cache': 'MISS'
+          }
+        });
+      }
+
+      // Se não conseguiu extrair nenhuma imagem, retornar thumbnail padrão
+      console.log('⚠️ Nenhum artwork encontrado, usando thumbnail padrão');
+      const defaultBuffer = await generateDefaultThumbnail(decodedFilename);
+      
+      // Cache o thumbnail padrão também para evitar reprocessamento
       const cacheEntry: ThumbnailCache = {
-        buffer: imageBuffer,
+        buffer: defaultBuffer,
         timestamp: Date.now(),
-        contentType: 'image/jpeg'
+        contentType: 'image/svg+xml'
       };
       thumbnailCache.set(cacheKey, cacheEntry);
       cleanupCache();
 
-      return new NextResponse(imageBuffer, {
+      return new NextResponse(defaultBuffer, {
         headers: {
-          'Content-Type': 'image/jpeg',
-          'Cache-Control': 'public, max-age=31536000',
-          'X-Cache': 'MISS'
+          'Content-Type': 'image/svg+xml',
+          'Cache-Control': 'public, max-age=3600',
+          'X-Cache': 'DEFAULT'
         }
       });
+
     } catch (error) {
-      console.error('Erro ao extrair thumbnail:', error);
+      console.error('❌ Erro ao extrair thumbnail:', error);
       
-      if (tempImagePath) {
-        try {
-          await unlink(tempImagePath);
-        } catch (cleanupError) {
-          console.warn('Erro ao limpar arquivo temporário:', cleanupError);
+      // Retornar thumbnail padrão em caso de erro
+      const defaultBuffer = await generateDefaultThumbnail(decodedFilename);
+      return new NextResponse(defaultBuffer, {
+        headers: {
+          'Content-Type': 'image/svg+xml',
+          'Cache-Control': 'public, max-age=3600',
+          'X-Cache': 'ERROR-DEFAULT'
         }
-      }
-      
-      return new NextResponse('Erro ao extrair thumbnail', { status: 500 });
+      });
     } finally {
       processingCache.delete(cacheKey);
-    }
-  } catch (error) {
-    console.error('Erro ao extrair thumbnail:', error);
-    
-    if (tempImagePath) {
-      try {
-        await unlink(tempImagePath);
-      } catch (cleanupError) {
-        console.warn('Erro ao limpar arquivo temporário:', cleanupError);
+      
+      // Limpar arquivo temporário se ainda existir
+      if (tempImagePath) {
+        try {
+          if (await fileExists(tempImagePath)) {
+            await unlink(tempImagePath);
+          }
+        } catch (cleanupError) {
+          console.warn('⚠️ Erro ao limpar arquivo temporário final:', cleanupError);
+        }
       }
     }
+  } catch (error) {
+    console.error('❌ Erro geral ao extrair thumbnail:', error);
     
-    return new NextResponse('Erro ao extrair thumbnail', { status: 500 });
+    // Limpar processamento
+    const { filename } = await params;
+    if (filename && processingCache.has(decodeURIComponent(filename))) {
+      processingCache.delete(decodeURIComponent(filename));
+    }
+    
+    // Retornar thumbnail padrão
+    try {
+      const defaultBuffer = await generateDefaultThumbnail(decodeURIComponent(filename || 'unknown'));
+      return new NextResponse(defaultBuffer, {
+        headers: {
+          'Content-Type': 'image/svg+xml',
+          'Cache-Control': 'public, max-age=3600',
+          'X-Cache': 'FINAL-DEFAULT'
+        }
+      });
+    } catch (defaultError) {
+      return new NextResponse('Erro ao gerar thumbnail', { status: 500 });
+    }
   }
 } 

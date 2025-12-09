@@ -5,7 +5,8 @@ import { mkdir, access, unlink, readdir, readFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { constants } from 'fs';
 import NodeID3 from 'node-id3';
-import { sendProgressEvent } from '../download-progress/route';
+import { sendProgressEvent } from '@/lib/utils/progressEventService';
+import { hasValidCookiesFile } from '@/app/api/utils/common';
 
 const execAsync = promisify(exec);
 
@@ -19,6 +20,58 @@ async function fileExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function deduplicateLabel(label: string): string {
+  if (!label) return '';
+  
+  // Primeiro, limpar e normalizar o label
+  let cleaned = label.trim();
+  
+  // Casos específicos conhecidos de duplicação
+  const specificCases = [
+    { pattern: /BMG Rights Management \(UK\) LimitedBMG Limited/gi, replacement: 'BMG Rights Management (UK) Limited' },
+    { pattern: /Sony Music EntertainmentSony Music/gi, replacement: 'Sony Music Entertainment' },
+    { pattern: /Warner Music GroupWarner Music/gi, replacement: 'Warner Music Group' }
+  ];
+  
+  // Aplicar correções específicas
+  for (const case_ of specificCases) {
+    cleaned = cleaned.replace(case_.pattern, case_.replacement);
+  }
+  
+  // Detectar e remover duplicação específica como "LimitedBMG Limited"
+  // Padrão: palavra seguida imediatamente pela mesma palavra (sem espaço)
+  cleaned = cleaned.replace(/([A-Z][a-z]+)\\1/g, '$1');
+  
+  // Detectar e remover duplicação no final (como "LimitedBMG Limited")
+  // Padrão: palavra seguida imediatamente pela mesma palavra
+  const match = cleaned.match(/^(.+?)([A-Z][a-z]+)\\2$/);
+  if (match) {
+    cleaned = match[1] + match[2];
+  }
+  
+  // Remover duplicação de palavras consecutivas
+  cleaned = cleaned
+    .replace(/(\w+)\s+\1/gi, '$1') // Remove palavras consecutivas duplicadas
+    .replace(/\s+/g, ' ') // Normalize espaços
+    .trim();
+  
+  // Se ainda houver duplicação óbvia, tentar uma abordagem mais agressiva
+  const words = cleaned.split(/\s+/);
+  const uniqueWords: string[] = [];
+  
+  for (const word of words) {
+    // Verificar se a palavra já existe (case-insensitive)
+    const exists = uniqueWords.some(existing => 
+      existing.toLowerCase() === word.toLowerCase()
+    );
+    if (!exists) {
+      uniqueWords.push(word);
+    }
+  }
+  
+  return uniqueWords.join(' ').trim();
 }
 
 async function getDownloadsPath() {
@@ -42,6 +95,8 @@ export async function GET(request: NextRequest) {
     const url = searchParams.get('url');
     const format = searchParams.get('format') || 'flac';
     const useBeatport = searchParams.get('useBeatport') === 'true';
+    const showBeatportPage = searchParams.get('showBeatportPage') === 'true';
+    const skipMetadata = searchParams.get('skipMetadata') !== 'false';
     downloadId = searchParams.get('downloadId');
     
     if (!url) {
@@ -51,7 +106,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log('Iniciando download para URL:', url, 'Formato:', format, 'Beatport:', useBeatport, 'DownloadID:', downloadId);
+    console.log('Iniciando download para URL:', url, 'Formato:', format, 'Beatport:', useBeatport, 'ShowBeatportPage:', showBeatportPage, 'SkipMetadata:', skipMetadata, 'DownloadID:', downloadId);
 
     // Enviar evento inicial
     if (downloadId) {
@@ -94,15 +149,39 @@ export async function GET(request: NextRequest) {
     }
 
     // Obter informações do vídeo
-    const { stdout: infoJson } = await execAsync(
-      `yt-dlp --dump-json ` +
-      `--cookies "cookies.txt" ` +
-      `--default-search "ytsearch" ` +
-      `"${url}"`,
-      {
-        maxBuffer: 1024 * 1024 * 10 // 10MB buffer
+    const hasValidCookies = await hasValidCookiesFile();
+    let infoJson: string;
+    
+    try {
+      const cookiesFlag = hasValidCookies ? '--cookies "cookies.txt" ' : '';
+      const { stdout } = await execAsync(
+        `yt-dlp --dump-json ` +
+        `${cookiesFlag}` +
+        `--default-search "ytsearch" ` +
+        `"${url}"`,
+        {
+          maxBuffer: 1024 * 1024 * 10 // 10MB buffer
+        }
+      );
+      infoJson = stdout;
+    } catch (error) {
+      // Se falhar com cookies, tentar sem cookies
+      if (hasValidCookies && error instanceof Error && error.message.includes('does not look like a Netscape format')) {
+        console.log('Cookies inválidos, tentando sem cookies...');
+        const { stdout } = await execAsync(
+          `yt-dlp --dump-json ` +
+          `--default-search "ytsearch" ` +
+          `"${url}"`,
+          {
+            maxBuffer: 1024 * 1024 * 10 // 10MB buffer
+          }
+        );
+        infoJson = stdout;
+      } else {
+        throw error;
       }
-    );
+    }
+    
     const videoInfo = JSON.parse(infoJson);
 
     // Evento: Informações extraídas
@@ -143,18 +222,44 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const { stdout } = await execAsync(
-      `yt-dlp -x --audio-format ${format} --audio-quality 10 ` +
-      `--embed-thumbnail --convert-thumbnails jpg ` +
-      `--add-metadata ` +
-      `--cookies "cookies.txt" ` +
-      `--default-search "ytsearch" ` +
-      `-o "${downloadsFolder}/%(title)s.%(ext)s" ` +
-      `--no-part --force-overwrites "${url}"`,
-      {
-        maxBuffer: 1024 * 1024 * 10 // 10MB buffer
+    const cookiesFlag = hasValidCookies ? '--cookies "cookies.txt" ' : '';
+    let stdout: string;
+    
+    try {
+      const result = await execAsync(
+        `yt-dlp -x --audio-format ${format} --audio-quality 10 ` +
+        `--embed-thumbnail --convert-thumbnails jpg ` +
+        `--add-metadata ` +
+        `${cookiesFlag}` +
+        `--default-search "ytsearch" ` +
+        `-o "${downloadsFolder}/%(title)s.%(ext)s" ` +
+        `--no-part --force-overwrites "${url}"`,
+        {
+          maxBuffer: 1024 * 1024 * 10 // 10MB buffer
+        }
+      );
+      stdout = result.stdout;
+    } catch (error) {
+      // Se falhar com cookies, tentar sem cookies
+      if (hasValidCookies && error instanceof Error && error.message.includes('does not look like a Netscape format')) {
+        console.log('Cookies inválidos no download, tentando sem cookies...');
+        const result = await execAsync(
+          `yt-dlp -x --audio-format ${format} --audio-quality 10 ` +
+          `--embed-thumbnail --convert-thumbnails jpg ` +
+          `--add-metadata ` +
+          `--default-search "ytsearch" ` +
+          `-o "${downloadsFolder}/%(title)s.%(ext)s" ` +
+          `--no-part --force-overwrites "${url}"`,
+          {
+            maxBuffer: 1024 * 1024 * 10 // 10MB buffer
+          }
+        );
+        stdout = result.stdout;
+      } else {
+        throw error;
       }
-    );
+    }
+    
     console.log('Download concluído:', stdout);
 
     // Evento: Download do áudio concluído
@@ -180,7 +285,7 @@ export async function GET(request: NextRequest) {
       });
     }
     
-    await new Promise(resolve => setTimeout(resolve, 2000)); // 2 segundos de delay
+    await new Promise(resolve => setTimeout(resolve, 500)); // Reduzido de 2s para 500ms
 
     // Evento: Iniciando busca de metadados
     if (downloadId) {
@@ -210,7 +315,9 @@ export async function GET(request: NextRequest) {
         body: JSON.stringify({ 
           title: videoInfo.title, 
           artist: videoInfo.uploader,
-          useBeatport: useBeatport
+          useBeatport: useBeatport,
+          showBeatportPage: showBeatportPage,
+          skipMetadata: skipMetadata
         })
       });
       
@@ -227,6 +334,7 @@ export async function GET(request: NextRequest) {
         console.log(`      • Genre: ${metadata.genre || 'N/A'}`);
         console.log(`      • Label: ${metadata.label || 'N/A'}`);
         console.log(`      • Year: ${metadata.year || 'N/A'}`);
+        console.log(`      • Published Date: ${metadata.publishedDate || 'N/A'}`);
         console.log(`      • Album: ${metadata.album || 'N/A'}`);
         
         // Evento: Metadados encontrados
@@ -313,10 +421,10 @@ export async function GET(request: NextRequest) {
           album: metadata.album || '',
           year: metadata.year?.toString() || '',
           genre: metadata.genre || '',
-          label: metadata.label || '',
+          label: deduplicateLabel(metadata.label || ''),
           bpm: metadata.bpm?.toString() || '',
           key: metadata.key || '',
-          comment: `BPM: ${metadata.bpm || 'N/A'} | Key: ${metadata.key || 'N/A'} | Sources: ${metadata.sources?.join(', ') || 'None'}`
+          comment: `BPM: ${metadata.bpm || 'N/A'} | Key: ${metadata.key || 'N/A'} | Published: ${metadata.publishedDate || 'N/A'} | Sources: ${metadata.sources?.join(', ') || 'None'}`
         };
         
         console.log(`   🏷️  Tags que serão escritas no arquivo:`);
@@ -348,7 +456,22 @@ export async function GET(request: NextRequest) {
             // Helper function to escape metadata values
             const escapeValue = (value: string): string => {
               if (!value) return '';
-              return value.replace(/"/g, '\\"').replace(/\|/g, '-').trim();
+              // PowerShell-safe escaping - melhorado para Windows
+              return value
+                .replace(/"/g, '\\"')        // Escapar aspas duplas
+                .replace(/\$/g, '\\$')       // Escapar $ (PowerShell variables)
+                .replace(/`/g, '\\`')        // Escapar backticks (PowerShell escape char)
+                .replace(/&/g, '\\&')        // Escapar & (PowerShell command separator)
+                .replace(/\|/g, '\\|')       // Escapar | (PowerShell pipe)
+                .replace(/;/g, '\\;')        // Escapar ; (PowerShell command separator)
+                .replace(/</g, '\\<')        // Escapar < (PowerShell redirect)
+                .replace(/>/g, '\\>')        // Escapar > (PowerShell redirect)
+                .replace(/:/g, '\\:')        // Escapar : (PowerShell drive separator)
+                .replace(/\*/g, '\\*')       // Escapar * (PowerShell wildcard)
+                .replace(/\?/g, '\\?')       // Escapar ? (PowerShell wildcard)
+                .replace(/\[/g, '\\[')       // Escapar [ (PowerShell wildcard)
+                .replace(/\]/g, '\\]')       // Escapar ] (PowerShell wildcard)
+                .trim();
             };
             
             // Construir comando FFmpeg com Vorbis comments e especificar formato explicitamente
@@ -361,8 +484,12 @@ export async function GET(request: NextRequest) {
             // Adicionar metadados opcionais apenas se existirem
             if (tags.album) ffmpegCmd += ` -metadata "album=${escapeValue(tags.album)}"`;
             if (tags.year) ffmpegCmd += ` -metadata "date=${tags.year}"`;
+            if (metadata.publishedDate) ffmpegCmd += ` -metadata "publisher_date=${escapeValue(metadata.publishedDate)}"`;
             if (tags.genre) ffmpegCmd += ` -metadata "genre=${escapeValue(tags.genre)}"`;
-            if (tags.label) ffmpegCmd += ` -metadata "label=${escapeValue(tags.label)}"`;
+            if (tags.label) {
+              ffmpegCmd += ` -metadata "publisher=${escapeValue(tags.label)}"`;
+              ffmpegCmd += ` -metadata "label=${escapeValue(tags.label)}"`;
+            }
             if (tags.bpm) ffmpegCmd += ` -metadata "bpm=${tags.bpm}"`;
             if (tags.key) ffmpegCmd += ` -metadata "initialkey=${escapeValue(tags.key)}"`;
             if (tags.comment) ffmpegCmd += ` -metadata "comment=${escapeValue(tags.comment)}"`;
@@ -562,6 +689,120 @@ export async function GET(request: NextRequest) {
     
     // 🔧 Enviar evento de erro via SSE se downloadId estiver disponível
     const errorMessage = error instanceof Error ? error.message : 'Erro ao processar o vídeo';
+    
+    if (downloadId) {
+      console.log(`❌ Enviando evento ERROR para downloadId: ${downloadId}`);
+      sendProgressEvent(downloadId, {
+        type: 'error',
+        step: 'Erro no download',
+        progress: 0,
+        detail: errorMessage
+      });
+    }
+    
+    return NextResponse.json(
+      { error: errorMessage },
+      { status: 500 }
+    );
+  }
+} 
+
+export async function POST(request: NextRequest) {
+  let downloadId: string | null = null;
+  
+  try {
+    const body = await request.json();
+    const { url, downloadId: bodyDownloadId, format = 'flac', useBeatport = false, showBeatportPage = false, isPlaylist = false } = body;
+    
+    downloadId = bodyDownloadId;
+    
+    if (!url) {
+      return NextResponse.json(
+        { error: 'URL é obrigatória' },
+        { status: 400 }
+      );
+    }
+
+    console.log('Iniciando download via POST para URL:', url, 'Formato:', format, 'Beatport:', useBeatport, 'ShowBeatportPage:', showBeatportPage, 'Playlist:', isPlaylist, 'DownloadID:', downloadId);
+
+    // Enviar evento inicial
+    if (downloadId) {
+      console.log(`🎯 Enviando evento inicial para downloadId: ${downloadId}`);
+      sendProgressEvent(downloadId, {
+        type: 'init',
+        step: 'Preparando download...',
+        progress: 5,
+        detail: `Formato: ${format.toUpperCase()}, Beatport: ${useBeatport ? 'Ativado' : 'Desativado'}, Página Beatport: ${showBeatportPage ? 'Visível' : 'Oculta'}, Playlist: ${isPlaylist ? 'Sim' : 'Não'}`
+      });
+    }
+
+    // Se for playlist, usar o serviço de playlist
+    if (isPlaylist) {
+      const { playlistDownloadService } = await import('@/lib/services/playlistDownloadService');
+      
+      console.log('🎵 Iniciando download de playlist com serviço dedicado...');
+      
+      const result = await playlistDownloadService.downloadPlaylist(url, {
+        format: format as 'mp3' | 'flac' | 'wav',
+        enhanceMetadata: true,
+        maxConcurrent: 3,
+        useBeatport,
+        showBeatportPage,
+        downloadId: downloadId || undefined
+      });
+
+      if (result.success) {
+        return NextResponse.json({
+          status: 'concluído',
+          message: 'Download da playlist concluído com sucesso',
+          details: {
+            totalTracks: result.totalTracks,
+            processedTracks: result.processedTracks,
+            enhancedTracks: result.enhancedTracks,
+            enhancementRate: result.totalTracks > 0 ? 
+              Math.round((result.enhancedTracks / result.totalTracks) * 100) : 0,
+            downloadPath: result.downloadPath,
+            errors: result.errors,
+            beatportMode: useBeatport
+          }
+        });
+      } else {
+        return NextResponse.json({
+          status: 'erro',
+          message: 'Erro no download da playlist',
+          details: {
+            totalTracks: result.totalTracks,
+            processedTracks: result.processedTracks,
+            enhancedTracks: result.enhancedTracks,
+            errors: result.errors,
+            beatportMode: useBeatport
+          }
+        }, { status: 500 });
+      }
+    } else {
+      // Para downloads individuais, usar o fluxo existente do GET
+      const searchParams = new URLSearchParams();
+      searchParams.set('url', url);
+      searchParams.set('format', format);
+      searchParams.set('useBeatport', useBeatport.toString());
+      if (downloadId) {
+        searchParams.set('downloadId', downloadId);
+      }
+      
+      // Criar uma nova requisição GET com os parâmetros
+      const getRequest = new NextRequest(
+        new URL(`/api/download?${searchParams.toString()}`, request.url),
+        { method: 'GET' }
+      );
+      
+      // Chamar o método GET existente
+      return await GET(getRequest);
+    }
+
+  } catch (error) {
+    console.error('Erro detalhado ao processar download via POST:', error);
+    
+    const errorMessage = error instanceof Error ? error.message : 'Erro ao processar o download';
     
     if (downloadId) {
       console.log(`❌ Enviando evento ERROR para downloadId: ${downloadId}`);

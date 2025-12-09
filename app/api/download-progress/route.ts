@@ -1,11 +1,9 @@
 import { NextRequest } from 'next/server';
+import { registerProgressStream, unregisterProgressStream } from '@/lib/utils/progressEventService';
 
 // 🔧 Configurações necessárias para SSE no Next.js
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-// Store para manter os streams ativos
-const activeStreams = new Map<string, ReadableStreamDefaultController>();
 
 // 🔧 Tratar OPTIONS para CORS preflight
 export async function OPTIONS(request: NextRequest) {
@@ -38,8 +36,8 @@ export async function GET(request: NextRequest) {
     start(controller) {
       console.log(`📡 Stream iniciado para downloadId: ${downloadId}`);
       
-      // Registrar o controller para este download
-      activeStreams.set(downloadId, controller);
+      // Registrar o controller usando o serviço
+      registerProgressStream(downloadId, controller);
       
       // Enviar evento inicial
       const initialData = `data: ${JSON.stringify({
@@ -58,26 +56,22 @@ export async function GET(request: NextRequest) {
 
       // Enviar heartbeat a cada 30 segundos para manter a conexão viva
       const heartbeatInterval = setInterval(() => {
-        if (activeStreams.has(downloadId)) {
-          try {
-            const heartbeat = `data: ${JSON.stringify({
-              type: 'heartbeat',
-              timestamp: new Date().toISOString()
-            })}\n\n`;
-            controller.enqueue(new TextEncoder().encode(heartbeat));
-          } catch (error) {
-            console.error(`❌ Erro no heartbeat para ${downloadId}:`, error);
-            clearInterval(heartbeatInterval);
-            activeStreams.delete(downloadId);
-          }
-        } else {
+        try {
+          const heartbeat = `data: ${JSON.stringify({
+            type: 'heartbeat',
+            timestamp: new Date().toISOString()
+          })}\n\n`;
+          controller.enqueue(new TextEncoder().encode(heartbeat));
+        } catch (error) {
+          console.error(`❌ Erro no heartbeat para ${downloadId}:`, error);
           clearInterval(heartbeatInterval);
+          unregisterProgressStream(downloadId);
         }
       }, 30000);
     },
     cancel() {
       // Limpar o controller quando a conexão for fechada
-      activeStreams.delete(downloadId);
+      unregisterProgressStream(downloadId);
       console.log(`🔌 Stream fechado para downloadId: ${downloadId}`);
     }
   });
@@ -109,118 +103,4 @@ export async function GET(request: NextRequest) {
       'Expires': '0',
     },
   });
-}
-
-// Cache para evitar logs repetitivos de streams não encontrados
-const notFoundCache = new Set<string>();
-
-// Função para enviar eventos de progresso
-export function sendProgressEvent(downloadId: string, data: {
-  type: string;
-  step: string;
-  progress?: number;
-  substep?: string;
-  detail?: string;
-  metadata?: any;
-  playlistIndex?: number;
-}) {
-  // Garantir que downloadId seja uma string limpa
-  const cleanDownloadId = downloadId?.toString().trim();
-  
-  if (!cleanDownloadId) {
-    console.warn(`⚠️  downloadId inválido ou vazio: "${downloadId}"`);
-    return;
-  }
-  
-  const controller = activeStreams.get(cleanDownloadId);
-  if (controller) {
-    // Remover do cache de não encontrados se estava lá
-    notFoundCache.delete(cleanDownloadId);
-    
-    const eventData = `data: ${JSON.stringify({
-      ...data,
-      timestamp: new Date().toISOString()
-    })}\n\n`;
-    
-    try {
-      controller.enqueue(new TextEncoder().encode(eventData));
-      
-      // Log apenas para eventos importantes (não heartbeat)
-      if (data.type !== 'heartbeat') {
-        console.log(`📡 Evento enviado para ${cleanDownloadId}: ${data.type} - ${data.step} (${data.progress || 0}%)`);
-      }
-    } catch (error) {
-      // Stream foi fechado, remover da lista
-      console.error(`❌ Erro ao enviar evento para ${cleanDownloadId}:`, error);
-      activeStreams.delete(cleanDownloadId);
-      notFoundCache.add(cleanDownloadId);
-    }
-  } else {
-    // Só tentar busca por ID similar e logar se não estiver no cache
-    if (!notFoundCache.has(cleanDownloadId)) {
-      const allKeys = Array.from(activeStreams.keys());
-      const similarKey = allKeys.find(key => key.includes(cleanDownloadId) || cleanDownloadId.includes(key));
-      
-      if (similarKey) {
-        console.warn(`🔄 Encontrado downloadId similar: "${similarKey}" para "${cleanDownloadId}"`);
-        const similarController = activeStreams.get(similarKey);
-        if (similarController) {
-          const eventData = `data: ${JSON.stringify({
-            ...data,
-            timestamp: new Date().toISOString()
-          })}\n\n`;
-          
-          try {
-            similarController.enqueue(new TextEncoder().encode(eventData));
-            console.log(`📡 Evento enviado para ID similar ${similarKey}: ${data.type} - ${data.step}`);
-            return;
-          } catch (error) {
-            console.error(`❌ Erro ao enviar evento para ID similar ${similarKey}:`, error);
-            activeStreams.delete(similarKey);
-          }
-        }
-      }
-      
-      // Log apenas uma vez por downloadId não encontrado
-      console.warn(`⚠️  Stream não encontrado para downloadId: "${cleanDownloadId}"`);
-      if (allKeys.length > 0) {
-        console.warn(`📋 Streams ativos: [${allKeys.join(', ')}]`);
-      }
-      
-      // Adicionar ao cache para evitar logs futuros
-      notFoundCache.add(cleanDownloadId);
-    }
-  }
-}
-
-// Função para finalizar o stream
-export function closeProgressStream(downloadId: string) {
-  const controller = activeStreams.get(downloadId);
-  if (controller) {
-    try {
-      const finalData = `data: ${JSON.stringify({
-        type: 'complete',
-        step: 'Download concluído!',
-        progress: 100,
-        timestamp: new Date().toISOString()
-      })}\n\n`;
-      
-      controller.enqueue(new TextEncoder().encode(finalData));
-      console.log(`🎉 Stream finalizado para downloadId: ${downloadId}`);
-      
-      // Aguardar um pouco antes de fechar para garantir que o evento seja recebido
-      setTimeout(() => {
-        try {
-          controller.close();
-        } catch (error) {
-          // Ignorar erros de stream já fechado
-        }
-      }, 1000);
-    } catch (error) {
-      console.error(`❌ Erro ao finalizar stream para ${downloadId}:`, error);
-    }
-    activeStreams.delete(downloadId);
-  } else {
-    console.warn(`⚠️  Tentativa de fechar stream inexistente: ${downloadId}`);
-  }
 }

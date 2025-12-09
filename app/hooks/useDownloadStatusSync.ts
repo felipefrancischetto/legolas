@@ -17,7 +17,6 @@ export function useDownloadStatusSync(
   onProgressUpdate?: (progress: PlaylistProgressUpdate) => void
 ) {
   const { 
-    fetchAndSyncPlaylistStatus, 
     updateQueueItem, 
     getPlaylistProgressData,
     setDownloadStatus 
@@ -32,8 +31,6 @@ export function useDownloadStatusSync(
     if (isPlaylist) {
       // Para playlists, fazer polling a cada 2 segundos
       intervalRef.current = setInterval(async () => {
-        await fetchAndSyncPlaylistStatus();
-        
         const progressData = getPlaylistProgressData(currentDownloadId);
         if (progressData) {
           const currentProgress: PlaylistProgressUpdate = {
@@ -51,27 +48,11 @@ export function useDownloadStatusSync(
               lastProgress.errors !== currentProgress.errors ||
               lastProgress.downloading !== currentProgress.downloading) {
             
-            // Atualizar status de download
-            const remaining = currentProgress.total - currentProgress.current;
-            setDownloadStatus(prev => ({
-              ...prev,
-              status: `Playlist: ${currentProgress.completed} concluídas, ${remaining} restantes, ${currentProgress.errors} erros`,
-              progress: Math.round((currentProgress.completed / currentProgress.total) * 100)
-            }));
-
             // Chamar callback se fornecido
             onProgressUpdate?.(currentProgress);
             
             // Verificar se a playlist foi concluída
             if (currentProgress.current >= currentProgress.total) {
-              setDownloadStatus(prev => ({
-                ...prev,
-                status: `Playlist concluída! ${currentProgress.completed}/${currentProgress.total} músicas baixadas, ${currentProgress.errors} erros`,
-                success: true,
-                loading: false,
-                progress: 100
-              }));
-              
               updateQueueItem(currentDownloadId, { 
                 status: 'completed', 
                 progress: 100 
@@ -94,12 +75,6 @@ export function useDownloadStatusSync(
       intervalRef.current = setInterval(() => {
         progress += 5;
         if (progress <= 100) {
-          setDownloadStatus(prev => ({
-            ...prev,
-            progress,
-            status: `Processando... ${progress}%`
-          }));
-          
           updateQueueItem(currentDownloadId, { 
             status: 'downloading', 
             progress 
@@ -107,14 +82,6 @@ export function useDownloadStatusSync(
         }
         
         if (progress >= 100) {
-          setDownloadStatus(prev => ({
-            ...prev,
-            status: 'Download concluído!',
-            success: true,
-            loading: false,
-            progress: 100
-          }));
-          
           updateQueueItem(currentDownloadId, { 
             status: 'completed', 
             progress: 100 
@@ -135,7 +102,7 @@ export function useDownloadStatusSync(
         intervalRef.current = null;
       }
     };
-  }, [currentDownloadId, isPlaylist, fetchAndSyncPlaylistStatus, getPlaylistProgressData, updateQueueItem, setDownloadStatus, onProgressUpdate]);
+  }, [currentDownloadId, isPlaylist, getPlaylistProgressData, updateQueueItem, setDownloadStatus, onProgressUpdate]);
 
   // Cleanup no unmount
   useEffect(() => {

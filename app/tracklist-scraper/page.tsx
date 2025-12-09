@@ -1,5 +1,5 @@
 import { Metadata } from 'next';
-import TracklistScraper from '@/components/TracklistScraper';
+import TracklistScraper from '../components/TracklistScraper';
 
 export const metadata: Metadata = {
   title: 'Tracklist Scraper POTÊNCIA MÁXIMA | Extract Music Links',

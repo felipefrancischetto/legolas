@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import DetailedProgressDisplay from './DetailedProgressDisplay';
+import { getCachedDominantColor } from '../utils/colorExtractor';
+import LoadingSpinner from './LoadingSpinner';
 
 interface DownloadStatusIndicatorProps {
   type: 'individual' | 'playlist';
@@ -26,6 +28,8 @@ interface DownloadStatusIndicatorProps {
   autoMinimizeAfter?: number; // segundos para minimizar automaticamente
   allowMinimize?: boolean; // se permite minimizar
   steps?: any[]; // DownloadStep[]
+  beatportData?: boolean; // se os dados vieram do Beatport
+  thumbnail?: string; // thumbnail da música/playlist
 }
 
 export default function DownloadStatusIndicator({
@@ -44,11 +48,31 @@ export default function DownloadStatusIndicator({
   defaultMinimized = false,
   autoMinimizeAfter = 0, // 0 = desabilitado
   allowMinimize = true,
-  steps
+  steps,
+  beatportData = false,
+  thumbnail
 }: DownloadStatusIndicatorProps) {
   const [isMinimized, setIsMinimized] = useState(defaultMinimized);
   const [userInteracted, setUserInteracted] = useState(false);
   const [willAutoMinimize, setWillAutoMinimize] = useState(false);
+  const [dominantColor, setDominantColor] = useState<string>('rgba(75, 85, 99, 0.2)');
+
+  // Extrai cor da thumbnail
+  useEffect(() => {
+    if (thumbnail) {
+      const extractColor = async () => {
+        try {
+          const colorData = await getCachedDominantColor(thumbnail);
+          setDominantColor(colorData.rgba(0.15));
+        } catch (error) {
+          setDominantColor('rgba(75, 85, 99, 0.2)');
+        }
+      };
+      extractColor();
+    } else {
+      setDominantColor('rgba(75, 85, 99, 0.2)');
+    }
+  }, [thumbnail]);
 
   // Auto-minimizar após um tempo se estiver baixando
   useEffect(() => {
@@ -145,14 +169,6 @@ export default function DownloadStatusIndicator({
   };
 
   const colors = getStatusColors();
-
-  // Animação de loading
-  const LoadingSpinner = ({ className = "w-4 h-4" }: { className?: string }) => (
-    <svg className={`${className} animate-spin`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" className="opacity-25" />
-      <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" className="opacity-75" />
-    </svg>
-  );
 
   // Status específico para playlist
   const renderPlaylistStatus = () => {
@@ -254,161 +270,153 @@ export default function DownloadStatusIndicator({
   // Renderizar versão minimizada
   if (isMinimized) {
     return (
-      <div className={`${colors.bg} ${colors.border} border rounded-lg p-3 animate-bounce-in transition-all duration-300`}>
-        <div className="space-y-2">
+      <div 
+        className="border rounded-xl p-3 animate-bounce-in transition-all duration-300 sm:p-2 backdrop-blur-sm"
+        style={{ 
+          background: `linear-gradient(135deg, ${dominantColor} 0%, rgba(0, 0, 0, 0.8) 100%)`,
+          borderColor: dominantColor.replace('0.15', '0.4')
+        }}
+      >
+        <div className="space-y-2 sm:space-y-1">
           <div className="flex items-center justify-between">
             {/* Informações básicas */}
-            <div className="flex items-center gap-3 flex-1 min-w-0">
-              <div className={`${colors.text} flex-shrink-0`}>
-                {getTypeIcon()}
-              </div>
+            <div className="flex items-center gap-3 flex-1 min-w-0 sm:gap-2">
+              {thumbnail ? (
+                <div className="w-10 h-10 rounded-lg overflow-hidden bg-gray-800 flex-shrink-0 sm:w-8 sm:h-8">
+                  <img src={thumbnail} alt={title} className="w-full h-full object-cover" />
+                </div>
+              ) : (
+                <div className={`${colors.text} flex-shrink-0`}>
+                  {getTypeIcon()}
+                </div>
+              )}
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-white font-medium text-sm truncate">{title}</h3>
-                  <span className={`${colors.text} text-xs px-1.5 py-0.5 rounded bg-zinc-800`}>
+                <div className="flex items-center gap-2 sm:gap-1">
+                  <h3 className="text-white font-medium text-sm truncate sm:text-xs">{title}</h3>
+                  <span className={`${colors.text} text-xs px-1.5 py-0.5 rounded bg-zinc-800 sm:text-[10px] sm:px-1`}>
                     {type === 'individual' ? 'Música' : 'Playlist'}
                   </span>
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  {(status === 'downloading' || loading) && <LoadingSpinner className="w-3 h-3" />}
-                  {isConnected && (
-                    <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" title="Conectado ao servidor" />
+                  {beatportData && (
+                    <span className="bg-orange-500/20 text-orange-400 px-1.5 py-0.5 rounded text-xs border border-orange-500/30 sm:text-[10px] sm:px-1">
+                      Beatport
+                    </span>
                   )}
-                  <span className={`${colors.text} text-xs`}>
+                </div>
+                <div className="flex items-center gap-2 mt-1 sm:gap-1">
+                  <LoadingSpinner 
+                    size="xs" 
+                    className="sm:w-2 sm:h-2" 
+                    isLoading={status === 'downloading' || loading}
+                    timeout={60000}
+                  />
+                  {isConnected && (
+                    <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse sm:w-1 sm:h-1" title="Conectado ao servidor" />
+                  )}
+                  <span className={`${colors.text} text-xs sm:text-[10px]`}>
                     {currentStep || getStatusText()}
                   </span>
-                                  {/* Progresso inline para versão minimizada */}
-                {(status === 'downloading' || loading) && (
-                  <span className="text-zinc-400 text-xs font-mono">
-                    {type === 'playlist' && playlistProgress 
-                      ? `${playlistProgress.current}/${playlistProgress.total}`
-                      : `${progress}%`
-                    }
-                  </span>
-                )}
+                  {/* Progresso inline para versão minimizada */}
+                  {(status === 'downloading' || loading) && (
+                    <span className="text-zinc-400 text-xs font-mono sm:text-[10px]">
+                      {type === 'playlist' && playlistProgress 
+                        ? `${playlistProgress.current}/${playlistProgress.total}`
+                        : `${progress}%`
+                      }
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
             
-            {/* Controles */}
-            <div className="flex items-center gap-1">
-              {/* Botão expandir */}
+            {/* Controles minimizados */}
+            <div className="flex items-center gap-1 flex-shrink-0">
               {allowMinimize && (
                 <button
-                  onClick={() => handleToggleMinimize(false)}
-                  className="text-zinc-400 hover:text-white transition-colors flex-shrink-0 p-1"
+                  onClick={() => setIsMinimized(false)}
+                  className="text-gray-400 hover:text-white transition-colors p-1 sm:p-0.5"
                   title="Expandir"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 sm:w-3 sm:h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
                 </button>
               )}
-              
-              {/* Botão de fechar */}
-              {onClose && status === 'completed' && (
+              {onClose && (
                 <button
                   onClick={onClose}
-                  className="text-zinc-400 hover:text-white transition-colors flex-shrink-0 p-1"
+                  className="text-gray-400 hover:text-white transition-colors p-1 sm:p-0.5"
                   title="Fechar"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 sm:w-3 sm:h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               )}
             </div>
           </div>
-          
-          {/* Barra de progresso compacta para versão minimizada */}
-          {(status === 'downloading' || loading) && (
-            <div className="w-full">
-              {type === 'playlist' && playlistProgress ? (
-                // Progresso da playlist
-                <div className="w-full bg-zinc-700 rounded-full h-1.5">
-                  <div className="flex h-full rounded-full overflow-hidden">
-                    {/* Faixas concluídas */}
-                    <div 
-                      className="bg-green-500 transition-all duration-500 ease-out"
-                      style={{ width: `${(playlistProgress.completed / playlistProgress.total) * 100}%` }}
-                    />
-                    {/* Faixas baixadas mas processando metadados */}
-                    <div 
-                      className="bg-yellow-500 transition-all duration-500 ease-out"
-                      style={{ width: `${((playlistProgress.downloading || 0) / playlistProgress.total) * 100}%` }}
-                    />
-                    {/* Faixa atual em progresso */}
-                    <div 
-                      className="bg-blue-500 animate-pulse transition-all duration-500 ease-out"
-                      style={{ width: `${(playlistProgress.current > 0 ? 1 / playlistProgress.total : 0) * 100}%` }}
-                    />
-                    {/* Faixas com erro */}
-                    <div 
-                      className="bg-red-500 transition-all duration-500 ease-out"
-                      style={{ width: `${(playlistProgress.errors / playlistProgress.total) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              ) : (
-                // Progresso individual
-                <div className="w-full bg-zinc-700 rounded-full h-1.5">
-                  <div
-                    className="h-full bg-blue-500 rounded-full transition-all duration-500"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* Erro minimizado */}
-          {error && (
-            <div className="text-red-400 text-xs truncate">
-              ⚠️ {error}
-            </div>
-          )}
         </div>
       </div>
     );
   }
 
-  // Renderizar versão expandida (padrão)
+  // Renderizar versão expandida
   return (
-    <div className={`${colors.bg} ${colors.border} border rounded-lg p-4 animate-bounce-in transition-all duration-300 ${status === 'downloading' ? 'animate-pulse-glow' : ''}`}>
-      {/* Header */}
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          {/* Ícone do tipo */}
-          <div className={`${colors.text} flex-shrink-0`}>
-            {getTypeIcon()}
-          </div>
+    <div 
+      className="border rounded-xl p-4 animate-bounce-in transition-all duration-300 sm:p-2 backdrop-blur-sm"
+      style={{ 
+        background: `linear-gradient(135deg, ${dominantColor} 0%, rgba(0, 0, 0, 0.9) 100%)`,
+        borderColor: dominantColor.replace('0.15', '0.4')
+      }}
+    >
+      <div className="space-y-3 sm:space-y-2">
+        <div className="flex items-start justify-between gap-3 sm:gap-2">
+          {/* Thumbnail ou ícone do tipo */}
+          {thumbnail ? (
+            <div className="w-12 h-12 rounded-lg overflow-hidden bg-gray-800 flex-shrink-0 sm:w-10 sm:h-10">
+              <img src={thumbnail} alt={title} className="w-full h-full object-cover" />
+            </div>
+          ) : (
+            <div className={`${colors.text} flex-shrink-0 mt-1`}>
+              {getTypeIcon()}
+            </div>
+          )}
           
-          {/* Título e tipo */}
+          {/* Informações principais */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <h3 className="text-white font-medium text-sm truncate">{title}</h3>
-              <span className={`${colors.text} text-xs px-2 py-1 rounded-full bg-zinc-800`}>
+            <div className="flex items-center gap-2 mb-1 sm:gap-1">
+              <h3 className="text-white font-medium text-sm truncate sm:text-xs">{title}</h3>
+              <span className={`${colors.text} text-xs px-2 py-1 rounded-full bg-zinc-800 sm:text-[10px] sm:px-1`}>
                 {type === 'individual' ? 'Música' : 'Playlist'}
               </span>
+              {beatportData && (
+                <span className="bg-orange-500/20 text-orange-400 px-2 py-1 rounded-full text-xs border border-orange-500/30 sm:text-[10px] sm:px-1">
+                  🎵 Beatport
+                </span>
+              )}
             </div>
             
             {/* Status atual */}
             <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                {(status === 'downloading' || loading) && <LoadingSpinner />}
+              <div className="flex items-center gap-2 sm:gap-1">
+                <LoadingSpinner 
+                  size="sm" 
+                  className="sm:w-3 sm:h-3" 
+                  isLoading={status === 'downloading' || loading}
+                  timeout={60000}
+                />
                 {isConnected && (
-                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" title="Conectado ao servidor" />
+                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse sm:w-1.5 sm:h-1.5" title="Conectado ao servidor" />
                 )}
-                <span className={`${colors.text} text-sm font-medium`}>
+                <span className={`${colors.text} text-sm font-medium sm:text-xs`}>
                   {currentStep || getStatusText()}
                 </span>
               </div>
               
               {/* Substep */}
               {currentSubstep && (
-                <div className="flex items-center gap-2 pl-4">
+                <div className="flex items-center gap-2 pl-4 sm:gap-1 sm:pl-2">
                   <div className="w-1 h-1 bg-zinc-500 rounded-full" />
-                  <span className="text-zinc-400 text-xs">
+                  <span className="text-zinc-400 text-xs sm:text-[10px]">
                     {currentSubstep}
                   </span>
                 </div>
@@ -416,7 +424,7 @@ export default function DownloadStatusIndicator({
               
               {/* Detail */}
               {detail && (
-                <div className="text-zinc-500 text-xs pl-4 truncate">
+                <div className="text-zinc-500 text-xs pl-4 truncate sm:pl-2 sm:text-[10px]">
                   {detail}
                 </div>
               )}
@@ -425,83 +433,54 @@ export default function DownloadStatusIndicator({
         </div>
         
         {/* Controles */}
-        <div className="flex items-center gap-1">
-          {/* Aviso de auto-minimize */}
-          {willAutoMinimize && (
-            <div className="flex items-center gap-1 text-yellow-400 text-xs px-2 py-1 bg-yellow-900/20 rounded animate-pulse">
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.464 0L4.35 16.5c-.77.833.192 2.5 1.732 2.5z" />
-              </svg>
-              <span>Será minimizado em breve</span>
-            </div>
-          )}
+        <div className="flex items-center justify-between gap-2 sm:gap-1">
+          <div className="flex items-center gap-2 sm:gap-1">
+            {(status === 'downloading' || loading) && (
+              <span className="text-zinc-400 text-xs font-mono sm:text-[10px]">
+                {type === 'playlist' && playlistProgress 
+                  ? `${playlistProgress.current}/${playlistProgress.total}`
+                  : `${progress}%`
+                }
+              </span>
+            )}
+          </div>
           
-          {/* Botão minimizar */}
-          {allowMinimize && (
-            <button
-              onClick={() => handleToggleMinimize(true)}
-              className={`transition-colors flex-shrink-0 p-1 ${
-                willAutoMinimize 
-                  ? 'text-yellow-400 hover:text-yellow-300 animate-bounce' 
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-              title="Minimizar"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-              </svg>
-            </button>
-          )}
-          
-          {/* Botão de fechar */}
-          {onClose && status === 'completed' && (
-            <button
-              onClick={onClose}
-              className="text-zinc-400 hover:text-white transition-colors flex-shrink-0 p-1"
-              title="Fechar"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          )}
+          <div className="flex items-center gap-1">
+            {allowMinimize && (
+              <button
+                onClick={() => setIsMinimized(true)}
+                className="text-gray-400 hover:text-white transition-colors p-1 sm:p-0.5"
+                title="Minimizar"
+              >
+                <svg className="w-4 h-4 sm:w-3 sm:h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                </svg>
+              </button>
+            )}
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="text-gray-400 hover:text-white transition-colors p-1 sm:p-0.5"
+                title="Fechar"
+              >
+                <svg className="w-4 h-4 sm:w-3 sm:h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Barras de progresso */}
+        {type === 'playlist' ? renderPlaylistStatus() : renderIndividualStatus()}
+
+        {/* Erro */}
+        {error && (
+          <div className="bg-red-900/30 border border-red-700 rounded p-2 text-red-400 text-xs animate-status-change sm:p-1 sm:text-[10px]">
+            {error}
+          </div>
+        )}
       </div>
-
-      {/* Conteúdo específico por tipo - só na versão expandida */}
-      {type === 'playlist' ? renderPlaylistStatus() : renderIndividualStatus()}
-      
-      {/* Mensagem de erro */}
-      {error && (
-        <div className="mt-3 p-2 bg-red-900/20 border border-red-500/20 rounded text-red-400 text-sm">
-          <p className="font-medium">Erro:</p>
-          <p className="text-xs mt-1">{error}</p>
-        </div>
-      )}
-
-      {/* Progresso detalhado - para downloads individuais ou playlist em andamento */}
-      {type === 'playlist' && steps && steps.length > 0 && (
-        <DetailedProgressDisplay
-          currentStep={currentStep || ''}
-          currentSubstep={currentSubstep}
-          progress={progress}
-          detail={detail}
-          isConnected={isConnected}
-          type={type}
-          steps={steps}
-        />
-      )}
-      {type !== 'playlist' && steps && steps.length > 0 && (
-        <DetailedProgressDisplay
-          currentStep={currentStep || ''}
-          currentSubstep={currentSubstep}
-          progress={progress}
-          detail={detail}
-          isConnected={isConnected}
-          type={type}
-          steps={steps}
-        />
-      )}
     </div>
   );
 

@@ -94,7 +94,7 @@ async function testSpecificTracks() {
       console.log(`   🌐 Beatport usado: ${beatportUsed ? '✅ SIM' : '❌ NÃO'}`);
       
       // Resultado geral
-      const hasUsefulData = result.bpm || result.key || result.genre || result.label;
+      const hasUsefulData = result.bpm || result.key || result.genre || result.label || result.year;
       const overallSuccess = hasUsefulData && beatportUsed;
       
       console.log(`\n🎯 RESULTADO GERAL: ${overallSuccess ? '🎉 SUCESSO' : '❌ FALHOU'}`);

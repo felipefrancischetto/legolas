@@ -4,23 +4,12 @@ import { join } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
+import { getDownloadsPath, formatDurationShort } from '../utils/common';
 
 const execAsync = promisify(exec);
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-async function getDownloadsPath() {
-  try {
-    const configPath = join(process.cwd(), 'downloads.config.json');
-    const config = await readFile(configPath, 'utf-8');
-    const { path } = JSON.parse(config);
-    return join(process.cwd(), path);
-  } catch (error) {
-    // Se não houver configuração, use o caminho padrão
-    return join(process.cwd(), 'downloads');
-  }
-}
 
 async function extractAudioMetadata(filePath: string) {
   try {
@@ -69,17 +58,21 @@ async function extractAudioMetadata(filePath: string) {
       }
     }
 
+    // Extrair label de múltiplas fontes
+    const label = tags.publisher || tags.Publisher || tags.label || tags.Label || tags.LABEL || null;
+
     return {
       title: tags.title || tags.TITLE || null,
       artist: artist,
-      duration: formatDuration(parseFloat(info.format?.duration || '0')),
+      duration: formatDurationShort(parseFloat(info.format?.duration || '0')),
       bpm: bpm,
       key: key,
       genre: genre,
       album: tags.album || tags.Album || tags.ALBUM || null,
-      label: tags.publisher || tags.Publisher || tags.label || tags.Label || tags.LABEL || null,
+      label: label,
       thumbnail: thumbnailUrl,
-      ano: tags.year || tags.date || tags.YEAR || tags.DATE || null
+      ano: tags.year || tags.date || tags.YEAR || tags.DATE || null,
+      publishedDate: tags.publisher_date || tags.PUBLISHER_DATE || tags.publishedDate || tags.PUBLISHED_DATE || null
     };
   } catch (error) {
     console.error('Erro ao extrair metadados:', error);
@@ -87,15 +80,9 @@ async function extractAudioMetadata(filePath: string) {
   }
 }
 
-function formatDuration(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.floor(seconds % 60);
-  return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
-}
-
 export async function GET(request: NextRequest) {
   try {
-    // Obter o caminho de downloads
+    // Obter o caminho de downloads usando utilitário compartilhado
     const downloadsFolder = await getDownloadsPath();
 
     let files: string[] = [];

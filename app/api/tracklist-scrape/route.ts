@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const browser = await puppeteer.launch({
-      headless: true,
+      headless: false, // Browser visível para debug
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
     const page = await browser.newPage();

@@ -4,7 +4,7 @@ async function testSimpleExtraction() {
   console.log('🎯 Teste ultra-simples: extração direta da página específica\n');
   
   const browser = await puppeteer.launch({ 
-    headless: true,
+    headless: false, // Browser visível para debug
     args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
   

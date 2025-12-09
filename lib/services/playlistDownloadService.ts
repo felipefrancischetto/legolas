@@ -3,11 +3,12 @@ import { promisify } from 'util';
 import { mkdir, access, readFile, readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { constants } from 'fs';
+import { existsSync } from 'fs';
 import NodeID3 from 'node-id3';
 import { metadataAggregator } from './metadataService';
 import { logger } from '../utils/logger';
 import { scrapeTracklist } from '../tracklistScraper';
-import { sendProgressEvent } from '../../app/api/download-progress/route';
+import { sendProgressEvent } from '../utils/progressEventService';
 
 const execAsync = promisify(exec);
 
@@ -17,6 +18,7 @@ export interface PlaylistDownloadOptions {
   enhanceMetadata?: boolean;
   maxConcurrent?: number;
   useBeatport?: boolean;
+  showBeatportPage?: boolean;
   downloadId?: string; // Para eventos SSE
 }
 
@@ -43,7 +45,63 @@ async function getDownloadsPath() {
 }
 
 function sanitizeTitle(title: string): string {
-  return title.replace(/[^\w\s\-\(\)\[\]]/g, '').replace(/\s+/g, ' ').trim();
+  // Preservar caracteres especiais importantes para música, mas remover caracteres problemáticos para arquivos
+  return title
+    .replace(/[<>:"/\\|?*]/g, '') // Remover apenas caracteres inválidos para nomes de arquivo
+    .replace(/\s+/g, ' ') // Normalizar espaços múltiplos
+    .trim();
+}
+
+function deduplicateLabel(label: string): string {
+  if (!label) return '';
+  
+  // Primeiro, limpar e normalizar o label
+  let cleaned = label.trim();
+  
+  // Casos específicos conhecidos de duplicação
+  const specificCases = [
+    { pattern: /BMG Rights Management \(UK\) LimitedBMG Limited/gi, replacement: 'BMG Rights Management (UK) Limited' },
+    { pattern: /Sony Music EntertainmentSony Music/gi, replacement: 'Sony Music Entertainment' },
+    { pattern: /Warner Music GroupWarner Music/gi, replacement: 'Warner Music Group' }
+  ];
+  
+  // Aplicar correções específicas
+  for (const case_ of specificCases) {
+    cleaned = cleaned.replace(case_.pattern, case_.replacement);
+  }
+  
+  // Detectar e remover duplicação específica como "LimitedBMG Limited"
+  // Padrão: palavra seguida imediatamente pela mesma palavra (sem espaço)
+  cleaned = cleaned.replace(/([A-Z][a-z]+)\1/g, '$1');
+  
+  // Detectar e remover duplicação no final (como "LimitedBMG Limited")
+  // Padrão: palavra seguida imediatamente pela mesma palavra
+  const match = cleaned.match(/^(.+?)([A-Z][a-z]+)\2$/);
+  if (match) {
+    cleaned = match[1] + match[2];
+  }
+  
+  // Remover duplicação de palavras consecutivas
+  cleaned = cleaned
+    .replace(/(\w+)\s+\1/gi, '$1') // Remove palavras consecutivas duplicadas
+    .replace(/\s+/g, ' ') // Normalize espaços
+    .trim();
+  
+  // Se ainda houver duplicação óbvia, tentar uma abordagem mais agressiva
+  const words = cleaned.split(/\s+/);
+  const uniqueWords: string[] = [];
+  
+  for (const word of words) {
+    // Verificar se a palavra já existe (case-insensitive)
+    const exists = uniqueWords.some(existing => 
+      existing.toLowerCase() === word.toLowerCase()
+    );
+    if (!exists) {
+      uniqueWords.push(word);
+    }
+  }
+  
+  return uniqueWords.join(' ').trim();
 }
 
 function cleanArtistName(artist: string): string {
@@ -68,8 +126,17 @@ export class PlaylistDownloadService {
       enhanceMetadata = true,
       maxConcurrent = 3,
       useBeatport = false,
+      showBeatportPage = false,
       downloadId
     } = options;
+
+    logger.info(`🎵 Playlist download options:`, {
+      format,
+      enhanceMetadata,
+      useBeatport,
+      showBeatportPage,
+      maxConcurrent
+    });
 
     const downloadsFolder = await getDownloadsPath();
     await mkdir(downloadsFolder, { recursive: true });
@@ -99,25 +166,164 @@ export class PlaylistDownloadService {
         });
       }
       
-      const { stdout: playlistInfo } = await execAsync(
-        `yt-dlp --dump-json --flat-playlist "${url}"`,
-        { maxBuffer: 1024 * 1024 * 50 } // 50MB buffer for large playlists
-      );
+      // Usar comando melhorado para garantir que todas as faixas sejam extraídas
+      // --playlist-end 0 significa sem limite (todas as faixas)
+      // --no-playlist-reverse mantém a ordem original
+      let playlistInfo = '';
+      let playlistStderr = '';
+      
+      // REMOVIDO: Verificação de cookies - usando apenas métodos sem cookies (mais rápido)
+      logger.info(`[DEBUG] Usando métodos SEM cookies (mais rápido)`);
+      
+      // Lista de métodos de extração SEM cookies (prioridade: Android > iOS > Web > básico)
+      const extractionMethods: string[] = [
+        // Método 1: Android client (menos detectável)
+        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=android" "${url}"`,
+        // Método 2: iOS client
+        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=ios" "${url}"`,
+        // Método 3: Web client
+        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=web" "${url}"`,
+        // Método 4: Básico sem limite
+        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 "${url}"`,
+        // Método 5: Básico com limite alto
+        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 999999 "${url}"`,
+        // Método 6: Comando básico
+        `yt-dlp --dump-json --flat-playlist "${url}"`
+      ];
+      
+      let extractionSuccess = false;
+      let bestMethodIndex = -1;
+      let maxLinesFound = 0;
+      
+      // Tentar todos os métodos e escolher o que retornar mais linhas
+      for (let methodIndex = 0; methodIndex < extractionMethods.length; methodIndex++) {
+        try {
+          const methodType = 'SEM cookies';
+          logger.info(`[DEBUG] Tentando método de extração ${methodIndex + 1}/${extractionMethods.length} (${methodType})...`);
+          
+          const result = await execAsync(
+            extractionMethods[methodIndex],
+            { maxBuffer: 1024 * 1024 * 100 } // 100MB buffer para playlists muito grandes
+          );
+          
+          const testInfo = result.stdout;
+          const testStderr = result.stderr || '';
+          
+          // Verificar se obtivemos resultados
+          const testLines = testInfo.split('\n').filter(l => l.trim()).length;
+          logger.info(`[DEBUG] Método ${methodIndex + 1} retornou ${testLines} linhas`);
+          
+          // Se este método retornou mais linhas que os anteriores, usar ele
+          if (testLines > maxLinesFound) {
+            maxLinesFound = testLines;
+            bestMethodIndex = methodIndex;
+            playlistInfo = testInfo;
+            playlistStderr = testStderr;
+            extractionSuccess = true;
+            logger.info(`✅ Método ${methodIndex + 1} é o melhor até agora com ${testLines} linhas`);
+          }
+          
+          // Se retornou muitas linhas (mais de 10), provavelmente pegou todas
+          // Mas continuar testando todos os métodos para garantir que pegamos o máximo possível
+          if (testLines > 10) {
+            logger.info(`✅ Método ${methodIndex + 1} retornou ${testLines} linhas - bom resultado! Continuando para verificar se há mais...`);
+          }
+        } catch (error: any) {
+          const errorMsg = error instanceof Error ? error.message.substring(0, 100) : 'Unknown error';
+          logger.warn(`⚠️ Método ${methodIndex + 1} falhou: ${errorMsg}`);
+          
+          // Se for erro de cookies inválidos, continuar para próximo método
+          if (errorMsg.includes('does not look like a Netscape format') || errorMsg.includes('cookie')) {
+            logger.warn(`⚠️ Erro de cookies detectado, tentando próximo método...`);
+            continue;
+          }
+          
+          if (methodIndex === extractionMethods.length - 1 && !extractionSuccess) {
+            // Se todos os métodos falharam, lançar erro
+            logger.error(`❌ Todos os métodos de extração falharam`);
+            throw error;
+          }
+        }
+      }
+      
+      // Usar o melhor método encontrado
+      if (bestMethodIndex >= 0) {
+        logger.info(`✅ Usando método ${bestMethodIndex + 1} que retornou ${maxLinesFound} linhas`);
+        
+        // ⚠️ AVISO CRÍTICO: Se encontrou poucas faixas, pode ser um problema
+        if (maxLinesFound <= 4) {
+          logger.warn(`⚠️ ATENÇÃO: Apenas ${maxLinesFound} faixas encontradas!`);
+          logger.warn(`⚠️ Isso pode indicar que o YouTube está limitando o acesso.`);
+          logger.warn(`⚠️ URL testada: ${url}`);
+        }
+      }
+      
+      if (!extractionSuccess || !playlistInfo) {
+        throw new Error('Falha ao extrair informações da playlist após tentar todos os métodos');
+      }
 
-      const playlistEntries = playlistInfo
-        .split('\n')
-        .filter(line => line.trim())
-        .map(line => {
+      // Log do stderr para debug
+      if (playlistStderr) {
+        logger.info(`[DEBUG] yt-dlp stderr: ${playlistStderr.substring(0, 500)}`);
+      }
+
+      // Processar linhas JSON - algumas podem estar vazias ou inválidas
+      const rawLines = playlistInfo.split('\n');
+      logger.info(`[DEBUG] Total de linhas brutas recebidas: ${rawLines.length}`);
+      
+      const playlistEntries = rawLines
+        .map((line, index) => {
+          const trimmed = line.trim();
+          if (!trimmed) return null;
+          
           try {
-            return JSON.parse(line);
-          } catch {
+            const parsed = JSON.parse(trimmed);
+            // Verificar se é uma entrada válida (deve ter id e title)
+            if (parsed && (parsed.id || parsed.url)) {
+              return parsed;
+            }
+            return null;
+          } catch (parseError) {
+            // Log apenas se não for linha vazia
+            if (trimmed.length > 0) {
+              logger.warn(`[DEBUG] Erro ao fazer parse da linha ${index + 1}: ${trimmed.substring(0, 100)}`);
+            }
             return null;
           }
         })
-        .filter(entry => entry !== null);
+        .filter(entry => entry !== null && entry !== undefined);
 
       result.totalTracks = playlistEntries.length;
-      logger.info(`📊 Found ${result.totalTracks} tracks in playlist`);
+      logger.info(`📊 Found ${result.totalTracks} tracks in playlist (de ${rawLines.length} linhas brutas)`);
+      
+      // ⚠️ AVISO: Se encontrou poucas faixas, pode ser um problema de limite do yt-dlp
+      if (result.totalTracks <= 4 && rawLines.length <= 4) {
+        logger.warn(`⚠️ ATENÇÃO: Apenas ${result.totalTracks} faixas encontradas. Isso pode indicar um limite do yt-dlp ou problema de acesso.`);
+        logger.warn(`⚠️ Se o álbum tem mais faixas, pode haver restrições do YouTube.`);
+      }
+      
+      // Verificar se há entradas duplicadas ou problemas
+      const uniqueIds = new Set(playlistEntries.map(e => e.id || e.url));
+      if (uniqueIds.size !== playlistEntries.length) {
+        logger.warn(`⚠️ Detectadas ${playlistEntries.length - uniqueIds.size} entradas duplicadas na playlist`);
+      }
+      
+      // Log detalhado das entradas para debug
+      if (playlistEntries.length > 0) {
+        logger.info(`[DEBUG] Primeira entrada: ${JSON.stringify(playlistEntries[0]).substring(0, 200)}`);
+        if (playlistEntries.length > 1) {
+          logger.info(`[DEBUG] Última entrada: ${JSON.stringify(playlistEntries[playlistEntries.length - 1]).substring(0, 200)}`);
+        }
+        // Log de todas as entradas se houver poucas (para debug)
+        if (playlistEntries.length <= 10) {
+          logger.info(`[DEBUG] Todas as ${playlistEntries.length} entradas encontradas:`);
+          playlistEntries.forEach((entry, idx) => {
+            logger.info(`[DEBUG]   ${idx + 1}. ${entry.title || entry.id || 'sem título'} (ID: ${entry.id || 'N/A'})`);
+          });
+        }
+      } else {
+        logger.error(`❌ NENHUMA entrada válida encontrada na playlist!`);
+      }
       
       if (downloadId) {
         sendProgressEvent(downloadId, {
@@ -151,6 +357,7 @@ export class PlaylistDownloadService {
         quality,
         enhanceMetadata,
         useBeatport,
+        showBeatportPage,
         result,
         downloadId // Passar downloadId
       );
@@ -222,17 +429,64 @@ export class PlaylistDownloadService {
     quality: string,
     enhanceMetadata: boolean,
     useBeatport: boolean,
+    showBeatportPage: boolean,
     result: PlaylistDownloadResult,
     downloadId?: string
   ): Promise<void> {
     logger.info(`🚀 Processing ${playlistEntries.length} tracks sequentially...`);
+    
+    // Verificação crítica: garantir que temos entradas válidas
+    if (!playlistEntries || playlistEntries.length === 0) {
+      logger.error(`❌ Nenhuma entrada válida na playlist!`);
+      result.errors.push('Playlist vazia ou sem entradas válidas');
+      return;
+    }
+    
+    // Log detalhado das entradas - CRÍTICO para debug
+    logger.info(`[DEBUG] ==========================================`);
+    logger.info(`[DEBUG] INÍCIO DO PROCESSAMENTO DA PLAYLIST`);
+    logger.info(`[DEBUG] Total de entradas para processar: ${playlistEntries.length}`);
+    logger.info(`[DEBUG] ==========================================`);
+    
+    // Listar TODAS as entradas se houver 10 ou menos, ou as primeiras e últimas se houver mais
+    if (playlistEntries.length <= 10) {
+      logger.info(`[DEBUG] TODAS as ${playlistEntries.length} entradas encontradas:`);
+      playlistEntries.forEach((entry, idx) => {
+        logger.info(`[DEBUG]   ${idx + 1}. ID: ${entry.id || 'N/A'}, Título: ${entry.title || 'sem título'}, URL: ${entry.url || 'N/A'}`);
+      });
+    } else {
+      logger.info(`[DEBUG] Primeiras 5 entradas:`);
+      playlistEntries.slice(0, 5).forEach((entry, idx) => {
+        logger.info(`[DEBUG]   ${idx + 1}. ID: ${entry.id || 'N/A'}, Título: ${entry.title || 'sem título'}`);
+      });
+      logger.info(`[DEBUG] ... (${playlistEntries.length - 10} entradas omitidas) ...`);
+      logger.info(`[DEBUG] Últimas 5 entradas:`);
+      playlistEntries.slice(-5).forEach((entry, idx) => {
+        const realIdx = playlistEntries.length - 5 + idx;
+        logger.info(`[DEBUG]   ${realIdx + 1}. ID: ${entry.id || 'N/A'}, Título: ${entry.title || 'sem título'}`);
+      });
+    }
+    logger.info(`[DEBUG] ==========================================`);
+
+    // Contador para verificar se todas as faixas foram processadas
+    let tracksProcessed = 0;
+    let tracksSkipped = 0;
+    let tracksFailed = 0;
 
     for (let i = 0; i < playlistEntries.length; i++) {
       const entry = playlistEntries[i];
       const trackNumber = i + 1;
       const totalTracks = playlistEntries.length;
       
-      logger.info(`\n🎵 [${trackNumber}/${totalTracks}] Processing: "${entry.title}"`);
+      // Verificar se a entrada é válida antes de processar
+      if (!entry || (!entry.id && !entry.url)) {
+        logger.warn(`⚠️ Entrada ${trackNumber} inválida (sem ID ou URL), pulando...`);
+        tracksSkipped++;
+        continue;
+      }
+      
+      logger.info(`\n🎵 [${trackNumber}/${totalTracks}] Processing: "${entry.title || entry.id || 'Unknown'}" (ID: ${entry.id || 'N/A'})`);
+      tracksProcessed++;
 
       // Calcular progresso baseado na faixa atual (30-90%)
       const trackProgress = 30 + Math.round((trackNumber / totalTracks) * 60);
@@ -262,69 +516,289 @@ export class PlaylistDownloadService {
         // 1. Download individual track
         const trackUrl = `https://www.youtube.com/watch?v=${entry.id}`;
         
-        // Nome temporário para o download inicial
-        const tempFilename = sanitizeTitle(entry.title || 'Unknown');
+        // Nome temporário para o download inicial - INCLUIR ID para evitar conflitos entre versões
+        const baseTitle = sanitizeTitle(entry.title || 'Unknown');
+        const tempFilename = `${baseTitle} [${entry.id}]`; // Incluir ID para garantir unicidade
         const outputPath = `${downloadsFolder}/${tempFilename}.%(ext)s`;
+        
+        logger.info(`   📝 Nome do arquivo temporário: ${tempFilename}.${format}`);
 
         logger.info(`   ⬇️ Downloading track ${trackNumber}...`);
         
-        // Tentativa 1: Com cookies normais
+        // Estratégia diferente: Tentar múltiplos métodos com diferentes clientes do YouTube
         let downloadOutput = '';
         let downloadSuccess = false;
         let hadYouTubeIssues = false;
         
-        try {
-          const { stdout } = await execAsync(
-            `yt-dlp -x --audio-format ${format} --audio-quality ${quality} ` +
-            `--embed-thumbnail --convert-thumbnails jpg ` +
-            `--add-metadata ` +
-            `--cookies "cookies.txt" ` +
-            `--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" ` +
-            `--sleep-interval 2 --max-sleep-interval 5 ` +
-            `-o "${outputPath}" ` +
-            `--no-part --force-overwrites "${trackUrl}"`,
-            { maxBuffer: 1024 * 1024 * 20 } // 20MB buffer per track
-          );
-          downloadOutput = stdout;
-          downloadSuccess = true;
-          logger.info(`   ✅ Download successful with standard method`);
+        // Lista de estratégias de download SEM cookies (foco no que funciona)
+        const downloadStrategies = [
+          // Estratégia 1: Cliente Android (menos detectável)
+          {
+            name: 'Android Client',
+            command: `yt-dlp -x --audio-format ${format} --audio-quality ${quality} ` +
+              `--embed-thumbnail --convert-thumbnails jpg ` +
+              `--add-metadata ` +
+              `--extractor-args "youtube:player_client=android" ` +
+              `--sleep-interval 1 --max-sleep-interval 2 ` +
+              `-o "${outputPath}" ` +
+              `--no-part --force-overwrites "${trackUrl}"`
+          },
+          // Estratégia 2: Cliente iOS
+          {
+            name: 'iOS Client',
+            command: `yt-dlp -x --audio-format ${format} --audio-quality ${quality} ` +
+              `--embed-thumbnail --convert-thumbnails jpg ` +
+              `--add-metadata ` +
+              `--extractor-args "youtube:player_client=ios" ` +
+              `--sleep-interval 1 --max-sleep-interval 2 ` +
+              `-o "${outputPath}" ` +
+              `--no-part --force-overwrites "${trackUrl}"`
+          },
+          // Estratégia 3: Cliente Web (padrão)
+          {
+            name: 'Web Client',
+            command: `yt-dlp -x --audio-format ${format} --audio-quality ${quality} ` +
+              `--embed-thumbnail --convert-thumbnails jpg ` +
+              `--add-metadata ` +
+              `--extractor-args "youtube:player_client=web" ` +
+              `--sleep-interval 1 --max-sleep-interval 2 ` +
+              `-o "${outputPath}" ` +
+              `--no-part --force-overwrites "${trackUrl}"`
+          }
+        ];
+        
+        // Tentar cada estratégia até uma funcionar
+        for (let strategyIndex = 0; strategyIndex < downloadStrategies.length; strategyIndex++) {
+          const strategy = downloadStrategies[strategyIndex];
           
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          
-          if (errorMessage.includes('Sign in to confirm') || errorMessage.includes('not a bot')) {
-            hadYouTubeIssues = true;
-            logger.warn(`   ⚠️ YouTube bot detection triggered for track ${trackNumber}`);
-            logger.warn(`   🔄 Trying alternative method with browser cookies...`);
+          try {
+            logger.info(`   🔄 Tentando estratégia ${strategyIndex + 1}/${downloadStrategies.length}: ${strategy.name}...`);
             
-            // Tentativa 2: Com cookies do browser
-            try {
-              const { stdout } = await execAsync(
-                `yt-dlp -x --audio-format ${format} --audio-quality ${quality} ` +
-                `--embed-thumbnail --convert-thumbnails jpg ` +
-                `--add-metadata ` +
-                `--cookies-from-browser chrome ` +
-                `--user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" ` +
-                `--sleep-interval 5 --max-sleep-interval 10 ` +
-                `-o "${outputPath}" ` +
-                `--no-part --force-overwrites "${trackUrl}"`,
-                { maxBuffer: 1024 * 1024 * 20, timeout: 120000 } // 2 minutos timeout
-              );
-              downloadOutput = stdout;
-              downloadSuccess = true;
-              logger.info(`   ✅ Download successful with browser cookies method`);
-              
-            } catch (browserError) {
-              logger.error(`   ❌ Both download methods failed for track ${trackNumber}`);
-              logger.error(`   🚨 YouTube may be blocking access - consider waiting before retrying`);
-              throw new Error(`YouTube access blocked: ${errorMessage}`);
+            // Delay mínimo apenas se não for a primeira estratégia (reduzido para acelerar)
+            if (strategyIndex > 0) {
+              const delay = 500; // 500ms apenas - suficiente para não sobrecarregar
+              await new Promise(resolve => setTimeout(resolve, delay));
             }
-          } else {
-            throw error; // Re-throw se não for problema de bot detection
+            
+            const { stdout, stderr } = await execAsync(
+              strategy.command,
+              { maxBuffer: 1024 * 1024 * 20, timeout: 120000 } // 2 minutos timeout (reduzido)
+            );
+            
+            downloadOutput = stdout;
+            
+            // Log do stderr para debug (pode conter informações sobre o arquivo salvo)
+            if (stderr) {
+              logger.info(`   📋 yt-dlp stderr: ${stderr.substring(0, 500)}`);
+            }
+            
+            // Verificar se há mensagem de sucesso no stdout
+            if (stdout.includes('[download]') || stdout.includes('100%') || stdout.includes('Deleting original file')) {
+              downloadSuccess = true;
+              logger.info(`   ✅ Download successful com estratégia: ${strategy.name}`);
+              logger.info(`   📄 Output do yt-dlp: ${stdout.substring(0, 300)}`);
+              break; // Sucesso, sair do loop
+            } else {
+              // Mesmo sem mensagem clara, considerar sucesso se não houve erro
+              downloadSuccess = true;
+              logger.info(`   ✅ Download successful com estratégia: ${strategy.name} (sem mensagem explícita)`);
+              break; // Sucesso, sair do loop
+            }
+            
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            
+            // Log do erro mas continuar para próxima estratégia
+            if (strategyIndex < downloadStrategies.length - 1) {
+              logger.warn(`   ⚠️ Estratégia ${strategy.name} falhou: ${errorMessage.substring(0, 150)}`);
+              logger.info(`   🔄 Tentando próxima estratégia...`);
+              continue; // Tentar próxima estratégia
+            } else {
+              // Última estratégia falhou
+              logger.error(`   ❌ Todas as estratégias falharam para track ${trackNumber}`);
+              logger.error(`   ❌ Último erro: ${errorMessage.substring(0, 200)}`);
+              
+              // Verificar se é erro de bot detection
+              if (errorMessage.includes('Sign in to confirm') || 
+                  errorMessage.includes('not a bot') || 
+                  errorMessage.includes('bot') ||
+                  errorMessage.includes('blocked')) {
+                hadYouTubeIssues = true;
+                logger.warn(`   ⚠️ YouTube bot detection pode estar bloqueando downloads`);
+              }
+              
+              throw error; // Re-throw o erro
+            }
           }
         }
+        
+        // Se chegou aqui sem sucesso, lançar erro
+        if (!downloadSuccess) {
+          throw new Error('Todas as estratégias de download falharam');
+        }
 
-        const finalFilePath = `${downloadsFolder}/${tempFilename}.${format}`;
+        // Verificar se o download foi realmente bem-sucedido
+        if (!downloadSuccess) {
+          const errorMsg = `Download não foi marcado como bem-sucedido para track ${trackNumber}`;
+          logger.error(`   ❌ ${errorMsg}`);
+          result.errors.push(errorMsg);
+          result.processedTracks++; // Contar como processado mesmo com erro
+          continue; // Continuar com próxima faixa
+        }
+
+        // Aguardar um pouco para garantir que o arquivo foi escrito no disco (reduzido para acelerar)
+        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms é suficiente
+
+        // Verificar se o arquivo foi realmente criado e encontrar o nome correto
+        let finalFilePath = `${downloadsFolder}/${tempFilename}.${format}`;
+        
+        logger.info(`   🔍 Verificando se arquivo existe: ${finalFilePath}`);
+        
+        // Se o arquivo não existe com o nome esperado, tentar encontrar o arquivo real
+        if (!existsSync(finalFilePath)) {
+          logger.warn(`   ⚠️ Arquivo não encontrado com nome esperado: ${finalFilePath}`);
+          logger.info(`   🔍 Procurando arquivo baixado na pasta: ${downloadsFolder}`);
+          
+          try {
+            const files = await readdir(downloadsFolder);
+            logger.info(`   📁 Total de arquivos na pasta: ${files.length}`);
+            
+            // Listar todos os arquivos do formato correto criados recentemente (otimizado)
+            const now = Date.now();
+            const recentFormatFiles = [];
+            const searchVideoId = entry.id; // Usar nome diferente para evitar conflito
+            
+            // Buscar primeiro por ID do vídeo (mais rápido e preciso)
+            for (const file of files) {
+              const fileExt = file.split('.').pop()?.toLowerCase();
+              if (fileExt === format && searchVideoId && file.includes(searchVideoId)) {
+                try {
+                  const filePath = join(downloadsFolder, file);
+                  const stats = await stat(filePath);
+                  const age = now - stats.mtimeMs;
+                  if (age < 120000) { // Apenas últimos 2 minutos
+                    recentFormatFiles.push({ file, filePath, age, mtime: stats.mtimeMs });
+                  }
+                } catch {}
+              }
+            }
+            
+            // Se não encontrou por ID, buscar por nome parcial (mais lento)
+            if (recentFormatFiles.length === 0) {
+              for (const file of files) {
+                const fileExt = file.split('.').pop()?.toLowerCase();
+                if (fileExt === format) {
+                  try {
+                    const filePath = join(downloadsFolder, file);
+                    const stats = await stat(filePath);
+                    const age = now - stats.mtimeMs;
+                    if (age < 120000) { // Apenas últimos 2 minutos
+                      recentFormatFiles.push({ file, filePath, age, mtime: stats.mtimeMs });
+                    }
+                  } catch {}
+                }
+              }
+            }
+            
+            logger.info(`   📊 Arquivos ${format} encontrados: ${recentFormatFiles.length}`);
+            if (recentFormatFiles.length > 0) {
+              logger.info(`   📋 Últimos 5 arquivos ${format}:`);
+              recentFormatFiles
+                .sort((a, b) => b.mtime - a.mtime)
+                .slice(0, 5)
+                .forEach(f => {
+                  logger.info(`      - ${f.file} (${Math.round(f.age / 1000)}s atrás)`);
+                });
+            }
+            
+            // Procurar por arquivos que correspondam ao formato e tenham parte do título OU o ID do vídeo
+            const matchingFiles = recentFormatFiles.filter(({ file }) => {
+              const baseName = file.replace(/\.[^/.]+$/, '').toLowerCase();
+              
+              // PRIORIDADE 1: Buscar por ID do vídeo (mais confiável - garante que é o arquivo correto)
+              if (searchVideoId && baseName.includes(searchVideoId.toLowerCase())) {
+                logger.info(`   🎯 Arquivo encontrado por ID do vídeo: ${file}`);
+                return true;
+              }
+              
+              // PRIORIDADE 2: Buscar por nome parcial (primeiros 20 caracteres do título base)
+              const searchBase = baseTitle.toLowerCase().substring(0, Math.min(20, baseTitle.length));
+              if (searchBase && baseName.includes(searchBase)) {
+                logger.info(`   🎯 Arquivo encontrado por nome parcial: ${file}`);
+                return true;
+              }
+              
+              return false;
+            });
+            
+            logger.info(`   🎯 Arquivos com nome correspondente ou ID ${searchVideoId}: ${matchingFiles.length}`);
+            
+            if (matchingFiles.length > 0) {
+              // Ordenar por idade (mais recente primeiro) e priorizar arquivos com ID
+              matchingFiles.sort((a, b) => {
+                // PRIORIDADE 1: Arquivos que contêm o ID do vídeo (mais confiável)
+                const aHasId = searchVideoId && a.file.toLowerCase().includes(searchVideoId.toLowerCase());
+                const bHasId = searchVideoId && b.file.toLowerCase().includes(searchVideoId.toLowerCase());
+                if (aHasId !== bHasId) return aHasId ? -1 : 1;
+                
+                // PRIORIDADE 2: Arquivos criados nos últimos 2 minutos
+                const aRecent = a.age < 120000;
+                const bRecent = b.age < 120000;
+                if (aRecent !== bRecent) return aRecent ? -1 : 1;
+                
+                // PRIORIDADE 3: Data de modificação (mais recente primeiro)
+                return b.mtime - a.mtime;
+              });
+              
+              finalFilePath = matchingFiles[0].filePath;
+              const foundById = searchVideoId && matchingFiles[0].file.toLowerCase().includes(searchVideoId.toLowerCase());
+              logger.info(`   ✅ Arquivo encontrado${foundById ? ' por ID' : ' por nome'}: ${matchingFiles[0].file}`);
+            } else {
+              // Se não encontrou por nome, procurar o arquivo mais recente do formato correto
+              logger.warn(`   ⚠️ Nenhum arquivo correspondente encontrado por nome, procurando arquivo mais recente...`);
+              
+              if (recentFormatFiles.length > 0) {
+                // Pegar o arquivo mais recente (últimos 2 minutos)
+                recentFormatFiles.sort((a, b) => {
+                  const aRecent = a.age < 120000;
+                  const bRecent = b.age < 120000;
+                  if (aRecent !== bRecent) return aRecent ? -1 : 1;
+                  return b.mtime - a.mtime;
+                });
+                
+                if (recentFormatFiles[0] && recentFormatFiles[0].age < 120000) {
+                  finalFilePath = recentFormatFiles[0].filePath;
+                  logger.info(`   ✅ Usando arquivo mais recente: ${recentFormatFiles[0].file}`);
+                } else {
+                  // Se não há arquivo recente, tentar o mais recente mesmo assim
+                  if (recentFormatFiles.length > 0) {
+                    finalFilePath = recentFormatFiles[0].filePath;
+                    logger.warn(`   ⚠️ Usando arquivo mais recente (pode não ser o correto): ${recentFormatFiles[0].file}`);
+                  } else {
+                    throw new Error(`Arquivo não encontrado após download: ${tempFilename}.${format}`);
+                  }
+                }
+              } else {
+                throw new Error(`Arquivo não encontrado após download: ${tempFilename}.${format}`);
+              }
+            }
+          } catch (fileError) {
+            const errorMsg = `Failed to locate downloaded file for track ${trackNumber}: ${fileError instanceof Error ? fileError.message : 'Unknown error'}`;
+            logger.error(`   ❌ ${errorMsg}`);
+            result.errors.push(errorMsg);
+            result.processedTracks++; // Contar como processado mesmo com erro
+            continue; // Continuar com próxima faixa
+          }
+        }
+        
+        // Verificar novamente se o arquivo existe antes de processar
+        if (!existsSync(finalFilePath)) {
+          const errorMsg = `Downloaded file does not exist: ${finalFilePath}`;
+          logger.error(`   ❌ ${errorMsg}`);
+          result.errors.push(errorMsg);
+          result.processedTracks++; // Contar como processado mesmo com erro
+          continue; // Continuar com próxima faixa
+        }
         
         // 2. Enhance metadata immediately after download
         if (enhanceMetadata) {
@@ -352,21 +826,34 @@ export class PlaylistDownloadService {
             });
           }
           
-          const enhanced = await this.enhanceFileMetadata(
-            finalFilePath, 
-            tempFilename, 
-            useBeatport, 
-            entry
-          );
+          try {
+            // Remover ID do vídeo do filename antes de passar para enhanceFileMetadata
+            // O ID está no formato "Título [VIDEO_ID]", precisamos remover a parte "[VIDEO_ID]"
+            const filenameWithoutId = baseTitle; // Usar baseTitle que já não tem o ID
+            logger.info(`   📝 Filename para metadata (sem ID): ${filenameWithoutId}`);
+            
+            const enhanced = await this.enhanceFileMetadata(
+              finalFilePath, 
+              filenameWithoutId, // Passar sem o ID do vídeo
+              useBeatport, 
+              showBeatportPage,
+              entry
+            );
 
-          if (enhanced.success) {
-            result.enhancedTracks++;
-            if (enhanced.fromBeatport) {
-              result.beatportTracksFound = (result.beatportTracksFound || 0) + 1;
+            if (enhanced.success) {
+              result.enhancedTracks++;
+              if (enhanced.fromBeatport) {
+                result.beatportTracksFound = (result.beatportTracksFound || 0) + 1;
+              }
+              logger.info(`   ✅ Metadata enhanced successfully!`);
+            } else {
+              logger.warn(`   ⚠️ Failed to enhance metadata`);
             }
-            logger.info(`   ✅ Metadata enhanced successfully!`);
-          } else {
-            logger.warn(`   ⚠️ Failed to enhance metadata`);
+          } catch (metadataError) {
+            const errorMsg = `Failed to enhance metadata for track ${trackNumber}: ${metadataError instanceof Error ? metadataError.message : 'Unknown error'}`;
+            logger.error(`   ❌ ${errorMsg}`);
+            result.errors.push(errorMsg);
+            // Continuar mesmo se falhar metadata enhancement
           }
         }
 
@@ -405,26 +892,75 @@ export class PlaylistDownloadService {
           logger.info(`📊 Progress Report: ${result.processedTracks}/${totalTracks} processed, ${result.enhancedTracks} enhanced (${successRate}%), ${result.beatportTracksFound || 0} from Beatport`);
         }
 
-        // Smart delay based on success/failure
+        // Delay mínimo entre tracks (reduzido para acelerar)
         if (trackNumber < totalTracks) {
           if (hadYouTubeIssues) {
-            // Longer delay if we had YouTube issues
-            logger.info(`   ⏳ Extended delay (15s) due to YouTube issues...`);
-            await new Promise(resolve => setTimeout(resolve, 15000));
+            // Delay maior apenas se houver problemas do YouTube
+            logger.info(`   ⏳ Delay (3s) devido a problemas do YouTube...`);
+            await new Promise(resolve => setTimeout(resolve, 3000)); // Reduzido de 8s para 3s
           } else {
-            // Normal delay
-            await new Promise(resolve => setTimeout(resolve, 3000));
+            // Delay mínimo normal
+            await new Promise(resolve => setTimeout(resolve, 300)); // Reduzido de 1s para 300ms
           }
         }
 
       } catch (error) {
-        const errorMessage = `Failed to process track ${trackNumber} ("${entry.title}"): ${error instanceof Error ? error.message : 'Unknown error'}`;
+        tracksFailed++;
+        const errorMessage = `Failed to process track ${trackNumber} ("${entry.title || entry.id || 'Unknown'}"): ${error instanceof Error ? error.message : 'Unknown error'}`;
+        const errorStack = error instanceof Error ? error.stack : undefined;
         result.errors.push(errorMessage);
         logger.error(`   ❌ ${errorMessage}`);
+        if (errorStack) {
+          logger.error(`   📋 Stack trace: ${errorStack}`);
+        }
+        
+        // Enviar evento de erro para esta faixa específica
+        if (downloadId) {
+          sendProgressEvent(downloadId, {
+            type: 'error',
+            step: `Erro ao processar faixa ${trackNumber}/${totalTracks}`,
+            progress: Math.round((trackNumber / totalTracks) * 90),
+            detail: errorMessage,
+            playlistIndex: i,
+            metadata: {
+              totalTracks: totalTracks,
+              downloadedTracks: result.processedTracks,
+              processedTracks: result.enhancedTracks,
+              errors: result.errors.length,
+              currentTrack: trackNumber
+            }
+          });
+        }
+        
+        // Incrementar contador mesmo em caso de erro para manter progresso correto
+        result.processedTracks++;
         
         // Continue with next track instead of failing entire playlist
+        logger.info(`   ⏭️ Continuando com próxima faixa... (${result.processedTracks}/${totalTracks} processadas até agora)`);
         continue;
       }
+    }
+    
+    // Log final detalhado
+    logger.info(`\n[DEBUG] ==========================================`);
+    logger.info(`[DEBUG] FIM DO PROCESSAMENTO DA PLAYLIST`);
+    logger.info(`[DEBUG] ==========================================`);
+    logger.info(`[DEBUG] Estatísticas do loop:`);
+    logger.info(`[DEBUG]   - Entradas na playlist: ${playlistEntries.length}`);
+    logger.info(`[DEBUG]   - Tracks processadas (iniciadas): ${tracksProcessed}`);
+    logger.info(`[DEBUG]   - Tracks puladas (inválidas): ${tracksSkipped}`);
+    logger.info(`[DEBUG]   - Tracks com falha: ${tracksFailed}`);
+    logger.info(`[DEBUG]   - Tracks completadas: ${result.processedTracks}`);
+    logger.info(`[DEBUG] ==========================================`);
+    
+    logger.info(`\n✅ Loop de download concluído. Processadas ${result.processedTracks}/${playlistEntries.length} faixas.`);
+
+    // Verificar discrepância
+    if (result.processedTracks < playlistEntries.length) {
+      const missing = playlistEntries.length - result.processedTracks;
+      logger.warn(`⚠️ ATENÇÃO: ${missing} faixa(s) não foram processadas!`);
+      logger.warn(`⚠️ Esperado: ${playlistEntries.length}, Processado: ${result.processedTracks}`);
+      logger.warn(`⚠️ Puladas: ${tracksSkipped}, Falhas: ${tracksFailed}`);
     }
 
     // Final summary
@@ -444,7 +980,8 @@ export class PlaylistDownloadService {
     playlistEntries: any[],
     maxConcurrent: number,
     result: PlaylistDownloadResult,
-    useBeatport: boolean = false
+    useBeatport: boolean = false,
+    showBeatportPage: boolean = false
   ): Promise<void> {
     logger.info(`Starting metadata enhancement... (Beatport mode: ${useBeatport})`);
 
@@ -494,7 +1031,7 @@ export class PlaylistDownloadService {
         // **PRESERVAR data de criação original antes da modificação**
         const originalCreationTime = fileInfo.created;
         
-        const enhanced = await this.enhanceFileMetadata(fileInfo.filePath, fileInfo.filename, useBeatport, fileInfo.matchingEntry);
+        const enhanced = await this.enhanceFileMetadata(fileInfo.filePath, fileInfo.filename, useBeatport, showBeatportPage, fileInfo.matchingEntry);
         
         if (enhanced.success) {
           result.enhancedTracks++;
@@ -520,9 +1057,9 @@ export class PlaylistDownloadService {
         logger.error(errorMessage);
       }
 
-      // Small delay between files to avoid overwhelming APIs
+      // Delay mínimo entre arquivos (reduzido para acelerar)
       if (i < fileInfos.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 200)); // Reduzido de 1s para 200ms
       }
     }
   }
@@ -531,6 +1068,7 @@ export class PlaylistDownloadService {
     filePath: string, 
     filename: string, 
     useBeatport: boolean = false,
+    showBeatportPage: boolean = false,
     playlistEntry?: any
   ): Promise<{ success: boolean; fromBeatport: boolean }> {
     logger.info(`[DEBUG] Iniciando enhanceFileMetadata para: ${filename}`);
@@ -560,12 +1098,30 @@ export class PlaylistDownloadService {
     cleanArtist = cleanArtistName(cleanArtist);
     logger.info(`[DEBUG] cleanTitle: ${cleanTitle}, cleanArtist: ${cleanArtist}`);
 
-    // NOVO: Normalizar para padrão 'Artista - Título' antes de buscar metadados
+    // **MELHORADO: Normalizar para padrão 'Artista - Título' antes de buscar metadados**
     function extractArtistAndTitle(str: string) {
-      const match = str.match(/^(.+?)\s*-\s*(.+)$/);
-      if (match) {
-        return { artist: match[1].trim(), title: match[2].trim() };
+      // Padrão "Artist - Title"
+      const dashMatch = str.match(/^(.+?)\s*-\s*(.+)$/);
+      if (dashMatch) {
+        return { artist: dashMatch[1].trim(), title: dashMatch[2].trim() };
       }
+      
+      // Padrão "Title feat. Artist"
+      const featMatch = str.match(/(.+?)\s+(?:feat\.?|featuring|ft\.?|by)\s+(.+?)(?:\s*\(|$)/i);
+      if (featMatch) {
+        return { artist: featMatch[2].trim(), title: featMatch[1].trim() };
+      }
+      
+      // Padrão "Title (Artist)"
+      const parenMatch = str.match(/(.+?)\s*\(([^)]+?)\)$/);
+      if (parenMatch) {
+        const possibleArtist = parenMatch[2].trim();
+        // Verificar se não é um tipo de mix/edit
+        if (!/(remix|edit|mix|version|vocal|dub|bootleg|rework|extended|club|radio|original)/i.test(possibleArtist)) {
+          return { artist: possibleArtist, title: parenMatch[1].trim() };
+        }
+      }
+      
       return { artist: '', title: str };
     }
 
@@ -576,35 +1132,77 @@ export class PlaylistDownloadService {
     if (extracted.artist && extracted.title) {
       normArtist = extracted.artist;
       normTitle = extracted.title;
+      logger.info(`[DEBUG] Extraído do título: artist='${normArtist}', title='${normTitle}'`);
+    } else {
+      logger.info(`[DEBUG] Usando dados originais: artist='${normArtist}', title='${normTitle}'`);
     }
 
-    logger.info(`[DEBUG] Normalized for metadata search: artist='${normArtist}', title='${normTitle}'`);
-
-    // Buscar metadados usando padrão normalizado
-    const metadata = await metadataAggregator.searchMetadata(
-      normTitle,
-      normArtist
-    );
+    // **MELHORADO: Tentar múltiplas variações de busca**
+    let metadata = null;
+    
+    // Primeira tentativa: com dados normalizados
+    if (normArtist && normTitle) {
+      logger.info(`[DEBUG] Tentativa 1: Buscando com dados normalizados`);
+      metadata = await metadataAggregator.searchMetadata(
+        normTitle,
+        normArtist,
+        { useBeatport, showBeatportPage }
+      );
+    }
+    
+    // Segunda tentativa: se não encontrou, tentar com dados originais
+    if (!metadata || (!metadata.bpm && !metadata.key && !metadata.genre && !metadata.label)) {
+      logger.info(`[DEBUG] Tentativa 2: Buscando com dados originais`);
+      const originalMetadata = await metadataAggregator.searchMetadata(
+        cleanTitle,
+        cleanArtist,
+        { useBeatport, showBeatportPage }
+      );
+      
+      // Mesclar resultados se necessário
+      if (originalMetadata && (originalMetadata.bpm || originalMetadata.key || originalMetadata.genre || originalMetadata.label)) {
+        metadata = { ...metadata, ...originalMetadata };
+        logger.info(`[DEBUG] Dados originais forneceram metadados adicionais`);
+      }
+    }
+    
+    // Terceira tentativa: limpar ainda mais o título (remover versões)
+    if (!metadata || (!metadata.bpm && !metadata.key && !metadata.genre && !metadata.label)) {
+      const strippedTitle = normTitle.replace(/\s*\([^)]*\)/g, '').trim();
+      if (strippedTitle !== normTitle) {
+        logger.info(`[DEBUG] Tentativa 3: Buscando com título limpo: '${strippedTitle}'`);
+        const strippedMetadata = await metadataAggregator.searchMetadata(
+          strippedTitle,
+          normArtist,
+          { useBeatport, showBeatportPage }
+        );
+        
+        if (strippedMetadata && (strippedMetadata.bpm || strippedMetadata.key || strippedMetadata.genre || strippedMetadata.label)) {
+          metadata = { ...metadata, ...strippedMetadata };
+          logger.info(`[DEBUG] Título limpo forneceu metadados adicionais`);
+        }
+      }
+    }
     logger.info(`[DEBUG] metadataAggregator.searchMetadata retornou: ${JSON.stringify(metadata)}`);
 
     // Check if we got useful enhanced data
-    const hasEnhancedData = metadata.bpm || metadata.key || metadata.label || 
-                           metadata.genre || metadata.album || metadata.artist;
+    const hasEnhancedData = metadata && (metadata.bpm || metadata.key || metadata.label || 
+                           metadata.genre || metadata.album || metadata.artist || metadata.year);
 
     if (!hasEnhancedData) {
       logger.warn(`[DEBUG] No enhanced metadata found for: ${normTitle} - ${normArtist}`);
       return { success: false, fromBeatport: false };
     }
 
-    const fromBeatport = metadata.sources?.includes('Beatport') || false;
+    const fromBeatport = metadata?.sources?.includes('Beatport') || false;
 
     // Usar artista/título do Beatport se disponíveis
-    let finalArtist = metadata.artist || normArtist || artist;
-    let finalTitle = metadata.title || normTitle;
+    let finalArtist = metadata?.artist || normArtist || artist;
+    let finalTitle = metadata?.title || normTitle;
     finalArtist = cleanArtistName(finalArtist);
     finalTitle = finalTitle.trim();
-    logger.info(`[DEBUG] Final artist determined: "${finalArtist}" (from Beatport: ${!!metadata.artist})`);
-    logger.info(`[DEBUG] Final title determined: "${finalTitle}" (from Beatport: ${!!metadata.title})`);
+    logger.info(`[DEBUG] Final artist determined: "${finalArtist}" (from Beatport: ${!!metadata?.artist})`);
+    logger.info(`[DEBUG] Final title determined: "${finalTitle}" (from Beatport: ${!!metadata?.title})`);
 
     // Evitar duplicidade de sufixos/remix/version
     function removeDuplicateSuffix(title: string) {
@@ -625,13 +1223,27 @@ export class PlaylistDownloadService {
     if (version && !finalTitle.endsWith(`(${version})`)) {
       fileBase += ` (${version})`;
     }
-    if (metadata.label) fileBase += ` [${metadata.label}]`;
+    if (metadata?.label) {
+      const deduplicatedLabel = deduplicateLabel(metadata.label);
+      if (deduplicatedLabel) {
+        fileBase += ` [${deduplicatedLabel}]`;
+      }
+    }
     const sanitizedNewFilename = sanitizeTitle(fileBase);
 
     // Renomear o arquivo com o novo nome formatado
     const fileDir = filePath.substring(0, filePath.lastIndexOf('/'));
     const fileExt = filePath.split('.').pop();
     const newFilePath = `${fileDir}/${sanitizedNewFilename}.${fileExt}`;
+    
+    // Verificar se o arquivo de destino já existe (pode ser versão diferente)
+    if (existsSync(newFilePath) && newFilePath !== filePath) {
+      logger.warn(`   ⚠️ Arquivo com nome similar já existe: ${sanitizedNewFilename}.${fileExt}`);
+      logger.warn(`   ⚠️ Mantendo arquivo original para evitar sobrescrita de versão diferente`);
+      // Não renomear se já existe - pode ser uma versão diferente
+      return { success: true, fromBeatport };
+    }
+    
     try {
       const { rename } = require('fs/promises');
       await rename(filePath, newFilePath);
@@ -646,20 +1258,21 @@ export class PlaylistDownloadService {
 
     if (fileExtension === 'mp3') {
       // Use NodeID3 for MP3 files
-      const enhancedTags = {
-        title: metadata.title || finalTitle,
-        artist: finalArtist,
-        album: existingTags.album || '',
-        year: metadata.year?.toString() || existingTags.year || '',
-        genre: metadata.genre || existingTags.genre || '',
-        publisher: metadata.label || existingTags.publisher || '',
-        bpm: metadata.bpm?.toString() || '',
-        initialkey: metadata.key || '',
-        comment: {
-          language: 'por',
-          text: `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${metadata.label || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`
-        }
-      };
+      const deduplicatedLabel = metadata?.label ? deduplicateLabel(metadata.label) : '';
+              const enhancedTags = {
+          title: metadata?.title || finalTitle,
+          artist: finalArtist,
+          album: existingTags.album || '',
+          year: metadata?.year?.toString() || existingTags.year || '',
+          genre: metadata?.genre || existingTags.genre || '',
+          publisher: deduplicatedLabel || existingTags.publisher || '',
+          bpm: metadata?.bpm?.toString() || '',
+          initialkey: metadata?.key || '',
+          comment: {
+            language: 'por',
+            text: `Enhanced metadata -- BPM: ${metadata?.bpm || 'N/A'} -- Key: ${metadata?.key || 'N/A'} -- Genre: ${metadata?.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${deduplicatedLabel || 'N/A'} -- Published: ${metadata?.publishedDate || 'N/A'} -- Sources: ${metadata?.sources?.join(', ') || 'None'}`
+          }
+        };
       logger.info(`[DEBUG] enhancedTags a serem escritos: ${JSON.stringify(enhancedTags)}`);
       const writeResult = NodeID3.write(enhancedTags, filePath);
       success = writeResult === true;
@@ -693,16 +1306,21 @@ export class PlaylistDownloadService {
       // Helper function to escape metadata values for ffmpeg in PowerShell
       const escapeMetadataValue = (value: string): string => {
         if (!value) return '';
-        // PowerShell-safe escaping (NÃO normalizar & nem | para genre, apenas remover chars perigosos)
+        // PowerShell-safe escaping - melhorado para Windows
         return value
-          // .replace(/\|/g, '-')        // REMOVIDO: Não substituir pipes
-          .replace(/:/g, ' -')        // Replace colons (PowerShell interprets : as command separator)
-          .replace(/"/g, "'")         // Replace double quotes with single quotes
-          .replace(/\$/g, '')         // Remove $ signs (PowerShell variables)
-          .replace(/`/g, "'")         // Replace backticks (PowerShell escape char)
-          // .replace(/&/g, 'and')       // REMOVIDO: Não substituir &
-          .replace(/<|>/g, '')        // Remove redirects
-          .replace(/;/g, ',')         // Replace semicolons
+          .replace(/"/g, '\\"')        // Escapar aspas duplas
+          .replace(/\$/g, '\\$')       // Escapar $ (PowerShell variables)
+          .replace(/`/g, '\\`')        // Escapar backticks (PowerShell escape char)
+          .replace(/&/g, '\\&')        // Escapar & (PowerShell command separator)
+          .replace(/\|/g, '\\|')       // Escapar | (PowerShell pipe)
+          .replace(/;/g, '\\;')        // Escapar ; (PowerShell command separator)
+          .replace(/</g, '\\<')        // Escapar < (PowerShell redirect)
+          .replace(/>/g, '\\>')        // Escapar > (PowerShell redirect)
+          .replace(/:/g, '\\:')        // Escapar : (PowerShell drive separator)
+          .replace(/\*/g, '\\*')       // Escapar * (PowerShell wildcard)
+          .replace(/\?/g, '\\?')       // Escapar ? (PowerShell wildcard)
+          .replace(/\[/g, '\\[')       // Escapar [ (PowerShell wildcard)
+          .replace(/\]/g, '\\]')       // Escapar ] (PowerShell wildcard)
           .trim();
       };
       
@@ -721,6 +1339,9 @@ export class PlaylistDownloadService {
       if (metadata.year) {
         ffmpegArgs.push('-metadata', `"date=${metadata.year}"`);
       }
+      if (metadata.publishedDate) {
+        ffmpegArgs.push('-metadata', `"publisher_date=${escapeMetadataValue(metadata.publishedDate)}"`);
+      }
       if (metadata.genre) {
         // Use both 'genre' and 'Genre' for better compatibility
         const escapedGenre = escapeMetadataValue(metadata.genre);
@@ -728,10 +1349,13 @@ export class PlaylistDownloadService {
         ffmpegArgs.push('-metadata', `"Genre=${escapedGenre}"`);
       }
       if (metadata.label) {
-        // Use both 'publisher' and 'label' fields that the API reads
-        const escapedLabel = escapeMetadataValue(metadata.label);
-        ffmpegArgs.push('-metadata', `"publisher=${escapedLabel}"`);
-        ffmpegArgs.push('-metadata', `"label=${escapedLabel}"`);
+        // Use both 'publisher' and 'label' fields for better compatibility
+        const deduplicatedLabel = deduplicateLabel(metadata.label);
+        if (deduplicatedLabel) {
+          const escapedLabel = escapeMetadataValue(deduplicatedLabel);
+          ffmpegArgs.push('-metadata', `"publisher=${escapedLabel}"`);
+          ffmpegArgs.push('-metadata', `"label=${escapedLabel}"`);
+        }
       }
       if (metadata.bpm) {
         // Use both 'BPM' and 'bpm' for better compatibility
@@ -748,7 +1372,8 @@ export class PlaylistDownloadService {
       }
 
       // Add comment with source info (escape pipes to avoid shell interpretation)
-      const commentText = `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${metadata.label || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`;
+      const deduplicatedLabel = metadata.label ? deduplicateLabel(metadata.label) : '';
+      const commentText = `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${deduplicatedLabel || 'N/A'} -- Published: ${metadata.publishedDate || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`;
       ffmpegArgs.push('-metadata', `"comment=${escapeMetadataValue(commentText)}"`);
 
       // Specify FLAC format explicitly and output to temp file
@@ -820,6 +1445,13 @@ export class PlaylistDownloadService {
       .replace(/\s*\[Lyric.*?\]/gi, '')
       .replace(/\s*\(Visualizer\)/gi, '')
       .replace(/\s*\[Visualizer\]/gi, '')
+      // **MELHORADO: Preservar Extended Mix, Remix, Edit, etc. mas limpar duplicatas**
+      .replace(/\s*\(Extended Mix\)\s*\(Extended Mix\)/gi, ' (Extended Mix)')
+      .replace(/\s*\(Remix\)\s*\(Remix\)/gi, ' (Remix)')
+      .replace(/\s*\(Edit\)\s*\(Edit\)/gi, ' (Edit)')
+      .replace(/\s*\(Original Mix\)\s*\(Original Mix\)/gi, ' (Original Mix)')
+      .replace(/\s*\(Club Mix\)\s*\(Club Mix\)/gi, ' (Club Mix)')
+      .replace(/\s*\(Radio Edit\)\s*\(Radio Edit\)/gi, ' (Radio Edit)')
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -829,34 +1461,48 @@ export class PlaylistDownloadService {
       return existingArtist;
     }
 
-    // Try to extract artist from title patterns like "Artist - Title"
-    const dashMatch = title.match(/^([^-]+)\s*-\s*(.+)$/);
+    // **MELHORADO: Extrair artista de padrões mais complexos**
+    
+    // 1. Padrão "Artist - Title"
+    const dashMatch = title.match(/^([^-]+?)\s*-\s*(.+)$/);
     if (dashMatch) {
       const possibleArtist = dashMatch[1].trim();
-      // Only use if it looks like an artist name (not too long, contains letters)
+      // Verificar se parece um nome de artista válido
+      if (possibleArtist.length <= 50 && /[a-zA-Z]/.test(possibleArtist) && 
+          !/(remix|edit|mix|version|vocal|dub|bootleg|rework|extended|club|radio)/i.test(possibleArtist)) {
+        return possibleArtist;
+      }
+    }
+
+    // 2. Padrão "Title feat. Artist" ou "Title by Artist"
+    const featMatch = title.match(/(.+?)\s+(?:feat\.?|featuring|ft\.?|by)\s+([^-]+?)(?:\s*\(|$)/i);
+    if (featMatch) {
+      const possibleArtist = featMatch[2].trim();
       if (possibleArtist.length <= 50 && /[a-zA-Z]/.test(possibleArtist)) {
         return possibleArtist;
       }
     }
 
-    // Try patterns like "Title by Artist" or "Title feat. Artist"
-    const byMatch = title.match(/(.+)\s+(?:by|feat\.?|featuring)\s+([^-]+)$/i);
-    if (byMatch) {
-      const possibleArtist = byMatch[2].trim();
-      if (possibleArtist.length <= 50 && /[a-zA-Z]/.test(possibleArtist)) {
-        return possibleArtist;
-      }
-    }
-
-    // Try parentheses pattern "Title (Artist)"
-    const parenMatch = title.match(/(.+)\s*\(([^)]+)\)$/);
+    // 3. Padrão "Title (Artist)" - mas evitar remixes/edits
+    const parenMatch = title.match(/(.+?)\s*\(([^)]+?)\)$/);
     if (parenMatch) {
       const possibleArtist = parenMatch[2].trim();
-      // Only if it doesn't look like a remix or edit
+      // Verificar se não é um tipo de mix/edit
       if (possibleArtist.length <= 50 && 
           /[a-zA-Z]/.test(possibleArtist) && 
-          !/(remix|edit|mix|version|vocal|dub|bootleg|rework)/i.test(possibleArtist)) {
+          !/(remix|edit|mix|version|vocal|dub|bootleg|rework|extended|club|radio|original)/i.test(possibleArtist)) {
         return possibleArtist;
+      }
+    }
+
+    // 4. Padrão "Artist & Artist" ou "Artist vs Artist"
+    const collabMatch = title.match(/^([^&\-]+?)\s*(?:&|vs|feat\.?|featuring)\s+([^&\-]+?)(?:\s*\(|$)/i);
+    if (collabMatch) {
+      const artist1 = collabMatch[1].trim();
+      const artist2 = collabMatch[2].trim();
+      if (artist1.length <= 30 && artist2.length <= 30 && 
+          /[a-zA-Z]/.test(artist1) && /[a-zA-Z]/.test(artist2)) {
+        return `${artist1} & ${artist2}`;
       }
     }
 

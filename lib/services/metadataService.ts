@@ -6,6 +6,7 @@ export interface EnhancedMetadata {
   artist: string;
   album?: string;
   year?: number;
+  publishedDate?: string; // **NOVO: Data de publicação por extenso**
   genre?: string;
   label?: string;
   bpm?: number;
@@ -43,19 +44,19 @@ class BeatportProviderV2 implements MetadataProvider {
     return true;
   }
 
-  async search(title: string, artist: string): Promise<Partial<EnhancedMetadata> | null> {
-    const timeoutMs = 30000;
+  async search(title: string, artist: string, showBeatportPage: boolean = false): Promise<Partial<EnhancedMetadata> | null> {
+    const timeoutMs = 15000;
     console.log(`⏰ [Beatport] Iniciando busca com timeout de ${timeoutMs/1000}s`);
     
     return Promise.race([
-      this.performBeatportSearch(title, artist),
+      this.performBeatportSearch(title, artist, showBeatportPage),
       new Promise<null>((_, reject) => 
-        setTimeout(() => reject(new Error('Beatport timeout após 30s')), timeoutMs)
+        setTimeout(() => reject(new Error('Beatport timeout após 15s')), timeoutMs)
       )
     ]);
   }
 
-  private async performBeatportSearch(title: string, artist: string): Promise<Partial<EnhancedMetadata> | null> {
+  private async performBeatportSearch(title: string, artist: string, showBeatportPage: boolean = false): Promise<Partial<EnhancedMetadata> | null> {
     console.log(`🚀 [Beatport] Lançando browser para busca: "${title}" - "${artist}"`);
     let browser;
     try {
@@ -64,9 +65,9 @@ class BeatportProviderV2 implements MetadataProvider {
       
       console.log(`🔧 [Beatport] Configurando opções do browser...`);
       const browserOptions = { 
-        headless: false,
-        timeout: 15000,
-        protocolTimeout: 20000,
+        headless: !showBeatportPage, // Browser visível apenas se showBeatportPage for true
+        timeout: 10000,
+        protocolTimeout: 15000,
         args: [
           '--no-sandbox', 
           '--disable-setuid-sandbox',
@@ -75,7 +76,13 @@ class BeatportProviderV2 implements MetadataProvider {
           '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
           '--disable-gpu',
-          '--window-size=1920,1080'
+          '--window-size=1920,1080',
+          '--disable-extensions',
+          '--disable-plugins',
+          '--disable-images',
+          '--disable-javascript',
+          '--memory-pressure-off',
+          '--max_old_space_size=4096'
         ]
       };
       console.log(`⚙️ [Beatport] Opções do browser:`, browserOptions);
@@ -91,10 +98,19 @@ class BeatportProviderV2 implements MetadataProvider {
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
       await page.setViewport({ width: 1920, height: 1080 });
       
+      // **MELHORADO: Limpeza do título para busca mais eficaz**
+      let cleanedTitle = title;
+      
+      // Remover versões apenas para busca, mas preservar para o resultado final
+      const versionMatch = title.match(/\(([^)]*?(?:mix|edit|remix|version)[^)]*)\)/i);
+      if (versionMatch) {
+        cleanedTitle = title.replace(/\s*\([^)]*?(?:mix|edit|remix|version)[^)]*\)/gi, '').trim();
+      }
+      
       // Buscar na página de search
-      const searchUrl = `https://www.beatport.com/search?q=${encodeURIComponent(`${artist} ${title}`)}`;
-      await page.goto(searchUrl, { waitUntil: 'networkidle0', timeout: 15000 });
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const searchUrl = `https://www.beatport.com/search?q=${encodeURIComponent(`${artist} ${cleanedTitle}`)}`;
+      await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // Aceitar cookies se necessário
       try {
@@ -121,16 +137,39 @@ class BeatportProviderV2 implements MetadataProvider {
           
           let score = 0;
           
-          // Deve conter o título
-          if (text.includes(titleLower)) score += 100;
+          // **MELHORADO: Algoritmo de scoring mais flexível**
           
-          // Deve conter o artista
-          if (text.includes(artistLower)) score += 50;
+          // Deve conter o título (ou parte dele)
+          const titleWords = titleLower.split(/\s+/).filter(word => word.length > 2);
+          let titleMatches = 0;
+          titleWords.forEach(word => {
+            if (text.includes(word)) titleMatches++;
+          });
+          if (titleMatches > 0) {
+            score += (titleMatches / titleWords.length) * 100;
+          }
+          
+          // Deve conter o artista (ou parte dele)
+          const artistWords = artistLower.split(/\s+/).filter(word => word.length > 2);
+          let artistMatches = 0;
+          artistWords.forEach(word => {
+            if (text.includes(word)) artistMatches++;
+          });
+          if (artistMatches > 0) {
+            score += (artistMatches / artistWords.length) * 50;
+          }
           
           // Bonus para match completo
-          if (text.includes(titleLower) && text.includes(artistLower)) score += 200;
+          if (titleMatches > 0 && artistMatches > 0) score += 100;
           
-          console.log(`   ${i + 1}. "${link.textContent?.trim()}" (Score: ${score})`);
+          // Bonus para match exato
+          if (text.includes(titleLower)) score += 50;
+          if (text.includes(artistLower)) score += 25;
+          
+          // Penalidade para títulos muito diferentes
+          if (text.length > titleLower.length * 2) score -= 20;
+          
+          console.log(`   ${i + 1}. "${link.textContent?.trim()}" (Score: ${score}, Title: ${titleMatches}/${titleWords.length}, Artist: ${artistMatches}/${artistWords.length})`);
           
           if (score > bestScore) {
             bestScore = score;
@@ -148,31 +187,31 @@ class BeatportProviderV2 implements MetadataProvider {
         console.log(`   ============================================\n`);
         
         return bestMatch;
-      }, title, artist);
+      }, cleanedTitle, artist);
       
       console.log(`🔗 [Beatport] Track URL encontrada: ${trackUrl}`);
       
       if (!trackUrl) {
-        console.log(`❌ [Beatport] Nenhuma URL de track encontrada para "${title}" - "${artist}"`);
+        console.log(`❌ [Beatport] Nenhuma URL de track encontrada para "${cleanedTitle}" - "${artist}"`);
         await browser.close();
         return null;
       }
       
       // LOG da URL encontrada para validação
       console.log(`\n🎯 [Beatport] VALIDAÇÃO DE URL ENCONTRADA:`);
-      console.log(`   🔍 Busca: "${title}" - "${artist}"`);
+      console.log(`   🔍 Busca: "${cleanedTitle}" - "${artist}"`);
       console.log(`   🌐 URL: ${trackUrl}`);
       console.log(`   📋 Copie esta URL para validar manualmente no browser`);
       console.log(`   ======================================================\n`);
       
       // Ir para a página da música
       console.log(`🌐 [Beatport] Navegando para URL: ${trackUrl}`);
-      await page.goto(trackUrl, { waitUntil: 'networkidle0', timeout: 15000 });
+      await page.goto(trackUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
       console.log(`✅ [Beatport] Página carregada com sucesso`);
       
       // Aguardar um tempo menor para garantir que o conteúdo dinâmico seja carregado
       console.log(`⏳ [Beatport] Aguardando carregamento do conteúdo dinâmico...`);
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 1000));
       console.log(`✅ [Beatport] Tempo de espera concluído`);
       
       // Extrair metadados usando seletores específicos do Beatport
@@ -182,153 +221,197 @@ class BeatportProviderV2 implements MetadataProvider {
           artist: string;
           duration: number;
           year: number;
+          publishedDate: string; // **NOVO: Data de publicação por extenso**
           bpm: number;
           key: string;
           genre: string;
           label: string;
         }> = {};
-
-        // DEBUG: Logar todos os elementos com classes que contenham 'Meta'
-        console.log('\n🔍 [DEBUG] ELEMENTOS ENCONTRADOS:');
-        const allElements = document.querySelectorAll('[class*="Meta"]');
-        console.log(`Total de elementos com 'Meta' no nome da classe: ${allElements.length}`);
-        
-        allElements.forEach((el, idx) => {
-          console.log(`\nElemento #${idx + 1}:`);
-          console.log(`  • Classe: ${el.className}`);
-          console.log(`  • HTML: ${el.outerHTML}`);
-          console.log(`  • Texto: ${el.textContent?.trim()}`);
-        });
-
-        // DEBUG: Logar todos os MetaWrappers e seus labels/valores
-        const wrappers = Array.from(document.querySelectorAll('[class*="MetaWrapper"]'));
-        console.log(`\n📦 [DEBUG] METAWRAPPERS ENCONTRADOS (${wrappers.length}):`);
-        
-        wrappers.forEach((wrapper, idx) => {
-          console.log(`\nMetaWrapper #${idx + 1}:`);
-          console.log(`  • Classe: ${wrapper.className}`);
-          console.log(`  • HTML: ${wrapper.outerHTML}`);
-          
-          const metaItems = wrapper.querySelectorAll('[class*="MetaItem"]');
-          console.log(`  • MetaItems encontrados: ${metaItems.length}`);
-          
-          metaItems.forEach((item, itemIdx) => {
-            const label = item.querySelector('div, span')?.textContent?.trim();
-            const value = item.querySelector('span:last-child')?.textContent?.trim();
-            console.log(`    Item #${itemIdx + 1}:`);
-            console.log(`      - Label: '${label}'`);
-            console.log(`      - Value: '${value}'`);
-            console.log(`      - HTML: ${item.outerHTML}`);
-          });
-        });
-
-        // Título da música
+        // **MELHORADO: Título da música - preservar versões importantes**
         const titleEl = document.querySelector('h1[data-testid="track-title"], h1');
         if (titleEl) {
-          console.log('\n🎵 [DEBUG] TÍTULO ENCONTRADO:');
-          console.log(`  • Texto: ${titleEl.textContent?.trim()}`);
-          console.log(`  • HTML: ${titleEl.outerHTML}`);
-          result.title = titleEl.textContent?.trim().replace(/\s+(Original Mix|Extended Mix|Club Mix|Radio Edit).*$/i, '');
+          const rawTitle = titleEl.textContent?.trim() || '';
+          // Preservar Extended Mix, Remix, Edit, etc. mas remover duplicatas
+          result.title = rawTitle
+            .replace(/\s*\(Extended Mix\)\s*\(Extended Mix\)/gi, ' (Extended Mix)')
+            .replace(/\s*\(Remix\)\s*\(Remix\)/gi, ' (Remix)')
+            .replace(/\s*\(Edit\)\s*\(Edit\)/gi, ' (Edit)')
+            .replace(/\s*\(Original Mix\)\s*\(Original Mix\)/gi, ' (Original Mix)')
+            .replace(/\s*\(Club Mix\)\s*\(Club Mix\)/gi, ' (Club Mix)')
+            .replace(/\s*\(Radio Edit\)\s*\(Radio Edit\)/gi, ' (Radio Edit)')
+            .replace(/\s+/g, ' ')
+            .trim();
         }
-
-        // Artista
-        const artistEl = document.querySelector('a[data-testid="artist-link"], a[href*="/artist/"]');
-        if (artistEl) {
-          console.log('\n👨‍🎤 [DEBUG] ARTISTA ENCONTRADO:');
-          console.log(`  • Texto: ${artistEl.textContent?.trim()}`);
-          console.log(`  • HTML: ${artistEl.outerHTML}`);
-          result.artist = artistEl.textContent?.trim();
+        // **CORRIGIDO: Extração de artistas específicos da música atual**
+        console.log('🔍 [Beatport] Iniciando extração de artistas...');
+        
+        // Primeiro, tentar encontrar o container específico da música
+        const trackContainer = document.querySelector('[data-testid="track-header"], .track-header, .track-info');
+        let artistElements: NodeListOf<Element> = document.querySelectorAll('div'); // Inicializar com seletor válido
+        
+        console.log(`🔍 [Beatport] Track container encontrado: ${!!trackContainer}`);
+        
+        if (trackContainer) {
+          // Buscar artistas apenas dentro do container da música
+          artistElements = trackContainer.querySelectorAll('a[data-testid="artist-link"], a[href*="/artist/"], .artist-link');
+          console.log(`🔍 [Beatport] Artistas no container específico: ${artistElements.length}`);
+        } else {
+          // Fallback: buscar por artistas próximos ao título
+          const titleEl = document.querySelector('h1[data-testid="track-title"], h1');
+          console.log(`🔍 [Beatport] Título encontrado: ${!!titleEl}`);
+          
+          if (titleEl) {
+            // Buscar artistas que estão próximos ao título (dentro do mesmo container ou próximo)
+            let parent = titleEl.parentElement;
+            let depth = 0;
+            while (parent && depth < 3) {
+              if (parent.querySelectorAll) {
+                artistElements = parent.querySelectorAll('a[data-testid="artist-link"], a[href*="/artist/"], .artist-link');
+                console.log(`🔍 [Beatport] Profundidade ${depth}: ${artistElements.length} artistas encontrados`);
+                if (artistElements.length > 0) break;
+              }
+              parent = parent.parentElement;
+              depth++;
+            }
+          }
         }
-
+        
+        // **CORRIGIDO: Fallback mais específico - NÃO usar todos os artistas da página**
+        if (artistElements.length === 0) {
+          console.log('⚠️ [Beatport] Nenhum artista específico encontrado, tentando fallback específico...');
+          
+          // Tentar buscar artistas apenas na área do título da música
+          const titleArea = document.querySelector('h1[data-testid="track-title"], h1')?.closest('div');
+          if (titleArea) {
+            artistElements = titleArea.querySelectorAll('a[href*="/artist/"]');
+            console.log(`🔍 [Beatport] Artistas na área do título: ${artistElements.length}`);
+          }
+          
+          // Se ainda não encontrou, tentar buscar por artistas que contenham o nome do artista original
+          if (artistElements.length === 0) {
+            console.log('⚠️ [Beatport] Nenhum artista específico encontrado, usando artista original');
+            // Não definir result.artist aqui, deixar que use o artista original
+          }
+        }
+        
+        // **NOVO: Se ainda não encontrou artistas específicos, usar o artista original**
+        if (artistElements.length === 0) {
+          console.log('⚠️ [Beatport] Nenhum artista encontrado, usando artista original');
+          // Não definir result.artist aqui, deixar que use o artista original
+        }
+        
+        if (artistElements.length > 0) {
+          const artists = Array.from(artistElements)
+            .map(el => el.textContent?.trim())
+            .filter(artist => artist && artist.length > 0);
+          
+          console.log(`🔍 [Beatport] Artistas encontrados: [${artists.map(a => `"${a}"`).join(', ')}]`);
+          
+          // **SIMPLIFICADO: Usar apenas os primeiros artistas encontrados (máximo 2)**
+          if (artists.length === 1) {
+            result.artist = artists[0];
+            console.log(`✅ [Beatport] Artista definido: "${result.artist}"`);
+          } else if (artists.length > 1) {
+            // **CORRIGIDO: Juntar múltiplos artistas com vírgula em vez de "&"**
+            result.artist = artists.slice(0, 2).join(', '); // Máximo 2 artistas
+            console.log(`✅ [Beatport] Artistas definidos: "${result.artist}"`);
+          } else {
+            console.log(`⚠️ [Beatport] Nenhum artista encontrado, usando artista original: "${artist}"`);
+            // Não definir result.artist, deixar que use o artista original
+          }
+        }
         // Estratégia: tentar pegar o MetaWrapper logo após o título
         let metaWrapper = null;
         if (titleEl) {
-          console.log('\n🔍 [DEBUG] PROCURANDO METAWRAPPER APÓS TÍTULO:');
           let el = titleEl.nextElementSibling;
           let depth = 0;
           while (el && depth < 5) {
-            console.log(`  • Elemento ${depth + 1}: ${el.className}`);
             if (el.className && el.className.includes('MetaWrapper')) {
               metaWrapper = el;
-              console.log('  ✅ MetaWrapper encontrado após título!');
               break;
             }
             el = el.nextElementSibling;
             depth++;
           }
         }
-        
         if (!metaWrapper) {
-          console.log('\n⚠️ [DEBUG] MetaWrapper não encontrado após título, tentando querySelector...');
           metaWrapper = document.querySelector('[class*="MetaWrapper"]');
-          if (metaWrapper) {
-            console.log('  ✅ MetaWrapper encontrado via querySelector!');
-          }
         }
-
         if (metaWrapper) {
-          console.log('\n📦 [DEBUG] EXTRAINDO DADOS DO METAWRAPPER:');
           const metaItems = metaWrapper.querySelectorAll('[class*="MetaItem"]');
           let foundFields = 0;
-          
-          metaItems.forEach((item, idx) => {
+          metaItems.forEach((item) => {
             const label = item.querySelector('div, span')?.textContent?.trim().toLowerCase();
             const value = item.querySelector('span:last-child')?.textContent?.trim();
-            
-            console.log(`\n  Item #${idx + 1}:`);
-            console.log(`    • Label: '${label}'`);
-            console.log(`    • Value: '${value}'`);
-            console.log(`    • HTML: ${item.outerHTML}`);
-            
-            if (!label || !value) {
-              console.log('    ❌ Label ou value vazio, pulando...');
-              return;
-            }
-            
+            if (!label || !value) return;
             if (label.includes('tamanho')) {
               const [min, sec] = value.split(':').map(Number);
               result.duration = min * 60 + sec;
               foundFields++;
-              console.log('    ✅ Duration extraído!');
-            } else if (label.includes('lançamento')) {
-              result.year = parseInt(value.split('-')[0]);
-              foundFields++;
-              console.log('    ✅ Year extraído!');
+            } else if (label.includes('lançamento') || label.includes('release')) {
+              // **MELHORADO: Processamento de datas mais robusto**
+              const dateValue = value.trim();
+              
+              console.log(`📅 [Beatport] Data encontrada: "${dateValue}"`);
+              
+              // **NOVO: Salvar data de publicação por extenso**
+              result.publishedDate = dateValue;
+              console.log(`📅 [Beatport] Data de publicação salva: "${result.publishedDate}"`);
+              
+              // Tentar diferentes formatos de data para extrair o ano
+              const yearMatch = dateValue.match(/(\d{4})/);
+              if (yearMatch) {
+                const year = parseInt(yearMatch[1]);
+                // Validar se é um ano razoável (entre 1900 e ano atual + 1)
+                const currentYear = new Date().getFullYear();
+                if (year >= 1900 && year <= currentYear + 1) {
+                  result.year = year;
+                  foundFields++;
+                  console.log(`📅 [Beatport] Ano extraído: ${result.year}`);
+                }
+              }
             } else if (label.includes('bpm')) {
-              result.bpm = parseInt(value);
-              foundFields++;
-              console.log('    ✅ BPM extraído!');
-            } else if (label.includes('tom')) {
+              const bpmValue = parseInt(value);
+              if (bpmValue > 0 && bpmValue <= 200) {
+                result.bpm = bpmValue;
+                foundFields++;
+              }
+            } else if (label.includes('tom') || label.includes('key')) {
               result.key = value;
               foundFields++;
-              console.log('    ✅ Key extraído!');
             } else if (label.includes('gênero') || label.includes('genre')) {
               result.genre = value;
               foundFields++;
-              console.log('    ✅ Genre extraído!');
             } else if (label.includes('gravadora') || label.includes('label')) {
               result.label = value;
               foundFields++;
-              console.log('    ✅ Label extraído!');
-            } else {
-              console.log('    ⚠️ Label não reconhecido');
             }
           });
-          
-          console.log(`\n📊 [DEBUG] RESUMO DA EXTRAÇÃO:`);
-          console.log(`  • Total de campos encontrados: ${foundFields}`);
-          console.log(`  • Dados extraídos:`, result);
-        } else {
-          console.log('\n❌ [DEBUG] NENHUM METAWRAPPER ENCONTRADO!');
+          // Fallback: sempre rodar regex para garantir extração do key
+          const wrapperText = metaWrapper?.textContent || '';
+          let regexKey = null;
+          const keyMatch = wrapperText.match(/Key[:\s]*([A-G][#♯♭b]?\s*(?:Minor|Major|Min|Maj|m|M))/i);
+          if (keyMatch) {
+            regexKey = keyMatch[1].trim();
+          } else {
+            const keyPatternMatch = wrapperText.match(/([A-G][#♯♭b]?\s*(?:Minor|Major|Min|Maj|m|M))/i);
+            if (keyPatternMatch) {
+              regexKey = keyPatternMatch[1].trim();
+            }
+          }
+          // Só sobrescreve se não encontrou no label
+          if (!result.key && regexKey) {
+            result.key = regexKey;
+          }
         }
-
         return result;
       });
       
       await browser.close();
       
       // LOG DETALHADO DOS METADADOS EXTRAÍDOS
-      if (metadata && (metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.artist)) {
+      console.log('[DEBUG NODE] Key extraído:', metadata.key);
+      if (metadata && (metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.artist || metadata.year)) {
         console.log(`\n✅ [Beatport] METADADOS EXTRAÍDOS COM SUCESSO:`);
         console.log(`   🌐 URL Beatport: ${trackUrl}`);
         console.log(`   👨‍🎤 Artist: ${metadata.artist || 'N/A'}`);
@@ -338,6 +421,7 @@ class BeatportProviderV2 implements MetadataProvider {
         console.log(`   🎭 Genre: ${metadata.genre || 'N/A'}`);
         console.log(`   🏷️ Label: ${metadata.label || 'N/A'}`);
         console.log(`   📅 Year: ${metadata.year ?? 'N/A'}`);
+        console.log(`   📅 Published Date: ${metadata.publishedDate || 'N/A'}`);
         console.log(`   =========================================================`);
         console.log(`   🔗 VALIDAÇÃO: Copie a URL acima e verifique se os dados conferem!`);
         console.log(`   =========================================================\n`);
@@ -366,8 +450,27 @@ class BeatportProviderV2 implements MetadataProvider {
 }
 
 export class MetadataAggregator {
-  async searchMetadata(title: string, artist: string): Promise<EnhancedMetadata> {
-    console.log(`\n🔍 [MetadataAggregator] Iniciando busca Beatport para: "${title}" - "${artist}"`);
+  async searchMetadata(title: string, artist: string, options: { useBeatport?: boolean; showBeatportPage?: boolean } = {}): Promise<EnhancedMetadata> {
+    const { useBeatport = false, showBeatportPage = false } = options;
+
+    console.log(`\n🔍 [MetadataAggregator] Iniciando busca com opções:`, {
+      title,
+      artist,
+      useBeatport,
+      showBeatportPage,
+    });
+    
+    // Se useBeatport estiver desabilitado, retornar dados básicos sem buscar
+    if (!useBeatport) {
+      console.log(`⏭️ [MetadataAggregator] Beatport desabilitado (useBeatport: ${useBeatport}), pulando busca.`);
+      return {
+        title,
+        artist,
+        sources: []
+      };
+    }
+    
+    console.log(`\n🚀 [MetadataAggregator] Iniciando busca Beatport para: "${title}" - "${artist}"`);
     
     const beatportProvider = new BeatportProviderV2();
     const startTime = Date.now();
@@ -375,7 +478,7 @@ export class MetadataAggregator {
     console.log(`⏳ [Beatport] Iniciando busca...`);
     
     try {
-      const result = await beatportProvider.search(title, artist);
+      const result = await beatportProvider.search(title, artist, showBeatportPage);
       const duration = Date.now() - startTime;
       
       if (result) {
@@ -387,6 +490,7 @@ export class MetadataAggregator {
         console.log(`      • Genre: ${result.genre || 'N/A'}`);
         console.log(`      • Label: ${result.label || 'N/A'}`);
         console.log(`      • Year: ${result.year || 'N/A'}`);
+        console.log(`      • Published Date: ${result.publishedDate || 'N/A'}`);
         
         const aggregated: EnhancedMetadata = {
           title: result.title || title,
@@ -397,6 +501,7 @@ export class MetadataAggregator {
           bpm: result.bpm,
           key: result.key,
           year: result.year,
+          publishedDate: result.publishedDate, // **NOVO: Incluir data de publicação**
           sources: ['BeatportV2']
         };
         
@@ -408,7 +513,8 @@ export class MetadataAggregator {
         console.log(`      • Genre: ${aggregated.genre || 'N/A'}`);
         console.log(`      • Label: ${aggregated.label || 'N/A'}`);
         console.log(`      • Year: ${aggregated.year || 'N/A'}`);
-        const hasUsefulData = aggregated.bpm || aggregated.key || aggregated.genre || aggregated.label;
+        console.log(`      • Published Date: ${aggregated.publishedDate || 'N/A'}`);
+        const hasUsefulData = aggregated.bpm || aggregated.key || aggregated.genre || aggregated.label || aggregated.year;
         console.log(`   ✨ Metadados úteis encontrados: ${hasUsefulData ? 'SIM' : 'NÃO'}`);
         if (hasUsefulData) {
           console.log('🎉 [MetadataAggregator] BEATPORT FUNCIONOU! Dados obtidos com sucesso!');

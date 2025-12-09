@@ -8,6 +8,58 @@ import { spawn } from 'child_process';
 import { mkdtempSync, existsSync, renameSync } from 'fs';
 import os from 'os';
 
+function deduplicateLabel(label: string): string {
+  if (!label) return '';
+  
+  // Primeiro, limpar e normalizar o label
+  let cleaned = label.trim();
+  
+  // Casos específicos conhecidos de duplicação
+  const specificCases = [
+    { pattern: /BMG Rights Management \(UK\) LimitedBMG Limited/gi, replacement: 'BMG Rights Management (UK) Limited' },
+    { pattern: /Sony Music EntertainmentSony Music/gi, replacement: 'Sony Music Entertainment' },
+    { pattern: /Warner Music GroupWarner Music/gi, replacement: 'Warner Music Group' }
+  ];
+  
+  // Aplicar correções específicas
+  for (const case_ of specificCases) {
+    cleaned = cleaned.replace(case_.pattern, case_.replacement);
+  }
+  
+  // Detectar e remover duplicação específica como "LimitedBMG Limited"
+  // Padrão: palavra seguida imediatamente pela mesma palavra (sem espaço)
+  cleaned = cleaned.replace(/([A-Z][a-z]+)\\1/g, '$1');
+  
+  // Detectar e remover duplicação no final (como "LimitedBMG Limited")
+  // Padrão: palavra seguida imediatamente pela mesma palavra
+  const match = cleaned.match(/^(.+?)([A-Z][a-z]+)\\2$/);
+  if (match) {
+    cleaned = match[1] + match[2];
+  }
+  
+  // Remover duplicação de palavras consecutivas
+  cleaned = cleaned
+    .replace(/(\w+)\s+\1/gi, '$1') // Remove palavras consecutivas duplicadas
+    .replace(/\s+/g, ' ') // Normalize espaços
+    .trim();
+  
+  // Se ainda houver duplicação óbvia, tentar uma abordagem mais agressiva
+  const words = cleaned.split(/\s+/);
+  const uniqueWords: string[] = [];
+  
+  for (const word of words) {
+    // Verificar se a palavra já existe (case-insensitive)
+    const exists = uniqueWords.some(existing => 
+      existing.toLowerCase() === word.toLowerCase()
+    );
+    if (!exists) {
+      uniqueWords.push(word);
+    }
+  }
+  
+  return uniqueWords.join(' ').trim();
+}
+
 async function fileExists(path: string): Promise<boolean> {
   try {
     await access(path, constants.F_OK);
@@ -71,7 +123,7 @@ export async function POST(req: NextRequest) {
         if (album) tags.album = album;
         if (safeYear) tags.year = safeYear;
         if (genre) tags.genre = genre;
-        if (label) tags.publisher = label;
+        if (label) tags.publisher = deduplicateLabel(label);
         if (bpm) tags.TBPM = bpm.toString();
         if (key) tags.initialKey = key;
         if (duration) tags.length = duration.toString();
@@ -90,7 +142,7 @@ export async function POST(req: NextRequest) {
         if (album) args.push('-metadata', `album=${album}`);
         if (safeYear) args.push('-metadata', `date=${safeYear}`);
         if (genre) args.push('-metadata', `genre=${genre}`);
-        if (label) args.push('-metadata', `publisher=${label}`);
+        if (label) args.push('-metadata', `publisher=${deduplicateLabel(label)}`);
         if (bpm) args.push('-metadata', `bpm=${bpm}`);
         if (key) args.push('-metadata', `key=${key}`);
         if (duration) args.push('-metadata', `duration=${duration}`);
@@ -151,7 +203,7 @@ export async function POST(req: NextRequest) {
       album: metadata.album || '',
       year: metadata.ano || '',
       genre: metadata.genero || '',
-      publisher: metadata.label || '',
+      publisher: deduplicateLabel(metadata.label || ''),
       comment: { language: 'por', text: metadata.descricao || '' }
     }, filePath);
     if (!success) {

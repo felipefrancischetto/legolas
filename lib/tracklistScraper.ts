@@ -281,7 +281,7 @@ class TracklistScraper {
     const startTime = Date.now();
     
     const browser = await puppeteer.launch({
-      headless: true,
+      headless: false, // Browser visível para debug
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
       timeout: options.timeout
     });
@@ -386,7 +386,7 @@ class TracklistScraper {
     const startTime = Date.now();
     
     const browser = await chromium.launch({ 
-      headless: true,
+      headless: false, // Browser visível para debug
       timeout: options.timeout,
       args: [
         '--no-sandbox',

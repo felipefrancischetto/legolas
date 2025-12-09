@@ -3,6 +3,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ScrapingResult, ScrapingOptions, ScrapeResponse, Track } from '@/lib/types';
+import LoadingSpinner from './LoadingSpinner';
 
 interface TracklistScraperProps {
   onResult?: (result: ScrapingResult) => void;
@@ -145,13 +146,13 @@ export default function TracklistScraper({ onResult }: TracklistScraperProps) {
   // Prevent hydration mismatch by not rendering until mounted
   if (!mounted) {
     return (
-      <div className="max-w-6xl mx-auto p-6 space-y-8">
-        <div className="text-center space-y-4">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+      <div className="max-w-6xl mx-auto p-6 space-y-8 sm:max-w-full sm:p-4 sm:space-y-6">
+        <div className="text-center space-y-4 sm:space-y-3">
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent sm:text-2xl">
             🎵 Tracklist Scraper POTÊNCIA MÁXIMA
           </h1>
-          <p className="text-gray-600 text-lg">
-            Loading...
+          <p className="text-gray-600 text-lg sm:text-sm">
+            Extraia tracklists de qualquer fonte com links para múltiplas plataformas!
           </p>
         </div>
       </div>
@@ -159,167 +160,74 @@ export default function TracklistScraper({ onResult }: TracklistScraperProps) {
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-8">
-      {/* Header */}
-      <div className="text-center space-y-4">
-        <motion.h1 
-          className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent"
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-        >
+    <div className="max-w-6xl mx-auto p-6 space-y-8 sm:max-w-full sm:p-4 sm:space-y-6">
+      <div className="text-center space-y-4 sm:space-y-3">
+        <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent sm:text-2xl">
           🎵 Tracklist Scraper POTÊNCIA MÁXIMA
-        </motion.h1>
-        <motion.p 
-          className="text-gray-600 text-lg"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.5, delay: 0.2 }}
-        >
-          Extract music links from 1001tracklists.com with advanced scraping technology
-        </motion.p>
+        </h1>
+        <p className="text-gray-600 text-lg sm:text-sm">
+          Extraia tracklists de qualquer fonte com links para múltiplas plataformas!
+        </p>
       </div>
 
-      {/* Input Section */}
-      <motion.div 
-        className="bg-white rounded-2xl shadow-xl p-8 border border-gray-100"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, delay: 0.3 }}
-      >
-        <div className="space-y-6">
-          {/* URL Input */}
+      {/* Formulário de entrada */}
+      <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 sm:p-4">
+        <div className="space-y-4 sm:space-y-3">
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              1001tracklists.com URL
+            <label className="block text-sm font-medium text-gray-700 mb-2 sm:text-xs sm:mb-1">
+              URL ou Texto da Tracklist
             </label>
             <div className="relative">
               <input
-                type="url"
+                type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://www.1001tracklists.com/tracklist/..."
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                placeholder="Cole aqui a URL ou texto da tracklist..."
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 sm:px-3 sm:py-2 sm:text-sm"
                 disabled={loading}
               />
-              {url && (
-                <motion.div 
-                  className="absolute right-3 top-3"
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                >
-                  {url.includes('1001tracklists.com') ? '✅' : '❌'}
-                </motion.div>
-              )}
+              <div className="absolute right-3 top-1/2 transform -translate-y-1/2 sm:right-2">
+                <LoadingSpinner size="sm" variant="dots" isLoading={loading} />
+              </div>
             </div>
           </div>
 
-          {/* Advanced Options Toggle */}
-          <div className="flex items-center justify-between">
-            <button
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="text-blue-600 hover:text-blue-700 font-medium transition-colors duration-200"
-            >
-              {showAdvanced ? '🔽' : '▶️'} Advanced Options
-            </button>
-            
-            <button
-              onClick={handleScrape}
-              disabled={loading || !url.trim()}
-              className="px-8 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold rounded-lg hover:from-blue-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 transform hover:scale-105 active:scale-95"
-            >
-              {loading ? (
-                <div className="flex items-center space-x-2">
-                  <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
-                  <span>Scraping...</span>
-                </div>
-              ) : (
-                '🚀 Extract Tracks'
-              )}
-            </button>
-          </div>
-
-          {/* Advanced Options */}
-          <AnimatePresence>
-            {showAdvanced && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.3 }}
-                className="overflow-hidden"
-              >
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4 bg-gray-50 rounded-lg">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Scraping Method
-                    </label>
-                    <select
-                      value={options.method}
-                      onChange={(e) => setOptions({...options, method: e.target.value as any})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
-                      disabled={loading}
-                    >
-                      <option value="auto">🤖 Auto</option>
-                      <option value="cheerio">⚡ Cheerio (Fast)</option>
-                      <option value="puppeteer">🎭 Puppeteer (Robust)</option>
-                      <option value="playwright">🎪 Playwright (Advanced)</option>
-                    </select>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id="useCache"
-                      checked={options.useCache}
-                      onChange={(e) => setOptions({...options, useCache: e.target.checked})}
-                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                      disabled={loading}
-                    />
-                    <label htmlFor="useCache" className="text-sm font-medium text-gray-700">
-                      💾 Use Cache
-                    </label>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id="validateLinks"
-                      checked={options.validateLinks}
-                      onChange={(e) => setOptions({...options, validateLinks: e.target.checked})}
-                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                      disabled={loading}
-                    />
-                    <label htmlFor="validateLinks" className="text-sm font-medium text-gray-700">
-                      ✅ Validate Links
-                    </label>
-                  </div>
-                </div>
-              </motion.div>
+          <button
+            onClick={handleScrape}
+            disabled={loading || !url.trim()}
+            className="w-full px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold rounded-lg hover:from-blue-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 transform hover:scale-[1.02] sm:px-4 sm:py-2 sm:text-sm"
+          >
+            {loading ? (
+              <div className="flex items-center justify-center gap-2">
+                <LoadingSpinner size="sm" color="white" variant="wave" isLoading={loading} />
+                <span>Processando...</span>
+              </div>
+            ) : (
+              '🚀 Extrair Tracklist'
             )}
-          </AnimatePresence>
+          </button>
         </div>
-      </motion.div>
+      </div>
 
-      {/* Error Display */}
+      {/* Seção de erro */}
       <AnimatePresence>
         {error && (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="bg-red-50 border border-red-200 rounded-lg p-4"
+            className="bg-red-50 border border-red-200 rounded-lg p-4 sm:p-3"
           >
             <div className="flex items-center space-x-2">
               <span className="text-red-500">❌</span>
-              <span className="text-red-700 font-medium">Error:</span>
-              <span className="text-red-600">{error}</span>
+              <span className="text-red-700 font-medium sm:text-sm">Error:</span>
+              <span className="text-red-600 sm:text-sm">{error}</span>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Results Section */}
+      {/* Seção de resultados */}
       <AnimatePresence>
         {result && (
           <motion.div
@@ -327,89 +235,91 @@ export default function TracklistScraper({ onResult }: TracklistScraperProps) {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.5 }}
-            className="space-y-6"
+            className="space-y-6 sm:space-y-4"
           >
-            {/* Stats */}
-            <div className="bg-gradient-to-r from-green-50 to-blue-50 rounded-xl p-6 border border-green-200">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* Estatísticas */}
+            <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-6 border border-blue-200 sm:p-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:grid-cols-2 sm:gap-3">
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600">{result.tracks.length}</div>
-                  <div className="text-sm text-gray-600">Total Tracks</div>
+                  <div className="text-2xl font-bold text-green-600 sm:text-xl">{result.tracks.length}</div>
+                  <div className="text-sm text-gray-600 sm:text-xs">Total Tracks</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-blue-600">{result.stats.tracksWithLinks}</div>
-                  <div className="text-sm text-gray-600">With Links</div>
+                  <div className="text-2xl font-bold text-blue-600 sm:text-xl">{result.stats.tracksWithLinks}</div>
+                  <div className="text-sm text-gray-600 sm:text-xs">With Links</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-purple-600">{result.stats.uniquePlatforms.length}</div>
-                  <div className="text-sm text-gray-600">Platforms</div>
+                  <div className="text-2xl font-bold text-purple-600 sm:text-xl">{result.stats.uniquePlatforms.length}</div>
+                  <div className="text-sm text-gray-600 sm:text-xs">Platforms</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-orange-600">
+                  <div className="text-2xl font-bold text-orange-600 sm:text-xl">
                     {processingTime ? `${(processingTime / 1000).toFixed(1)}s` : `${(result.stats.scrapingTime / 1000).toFixed(1)}s`}
                   </div>
-                  <div className="text-sm text-gray-600">
+                  <div className="text-sm text-gray-600 sm:text-xs">
                     {cached ? '💾 Cached' : '⚡ Processing Time'}
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Playlist Info */}
-            <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <h2 className="text-2xl font-bold text-gray-800">{result.metadata.title}</h2>
-                  <p className="text-lg text-gray-600">by {result.metadata.artist}</p>
+            {/* Informações da playlist */}
+            {result.metadata && (
+              <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 sm:p-4">
+                <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 sm:text-lg sm:mb-3">
+                  <span>📋</span>
+                  Playlist Info
+                </h3>
+                <div className="grid md:grid-cols-2 gap-4 sm:grid-cols-1 sm:gap-3">
+                  <div>
+                    <span className="font-semibold text-gray-700 sm:text-sm">Title:</span>
+                    <p className="text-gray-600 sm:text-sm">{result.metadata.title}</p>
+                  </div>
+                  <div>
+                    <span className="font-semibold text-gray-700 sm:text-sm">Artist:</span>
+                    <p className="text-gray-600 sm:text-sm">{result.metadata.artist}</p>
+                  </div>
                   {result.metadata.venue && (
-                    <p className="text-sm text-gray-500">📍 {result.metadata.venue}</p>
+                    <div>
+                      <span className="font-semibold text-gray-700 sm:text-sm">Venue:</span>
+                      <p className="text-gray-600 sm:text-sm">{result.metadata.venue}</p>
+                    </div>
                   )}
                   {result.metadata.date && (
-                    <p className="text-sm text-gray-500">📅 {result.metadata.date}</p>
+                    <div>
+                      <span className="font-semibold text-gray-700 sm:text-sm">Date:</span>
+                      <p className="text-gray-600 sm:text-sm">{result.metadata.date}</p>
+                    </div>
                   )}
                 </div>
-                
-                {/* Export Buttons */}
-                <div className="flex space-x-2">
-                  <button
-                    onClick={() => handleExport('json')}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200"
-                  >
-                    📄 JSON
-                  </button>
-                  <button
-                    onClick={() => handleExport('csv')}
-                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors duration-200"
-                  >
-                    📊 CSV
-                  </button>
-                </div>
               </div>
+            )}
 
-              {/* Platform Summary */}
-              <div className="flex flex-wrap gap-2 mb-4">
-                {result.stats.uniquePlatforms.map(platform => (
-                  <span
-                    key={platform}
-                    className={`px-3 py-1 rounded-full text-white text-sm font-medium ${getPlatformColor(platform)}`}
-                  >
-                    {getPlatformIcon(platform)} {platform}
-                  </span>
-                ))}
+            {/* Lista de faixas */}
+            <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
+              <div className="p-6 border-b border-gray-200 sm:p-4">
+                <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2 sm:text-lg">
+                  <span>🎶</span>
+                  Tracks ({result.tracks.length})
+                </h3>
+              </div>
+              <div className="max-h-96 overflow-y-auto custom-scroll sm:max-h-80">
+                <div className="space-y-1 p-4 sm:p-2 sm:space-y-0.5">
+                  {result.tracks.map((track, index) => (
+                    <TrackItem key={index} track={track} index={index} />
+                  ))}
+                </div>
               </div>
             </div>
 
-            {/* Tracks List */}
-            <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
-              <div className="p-6 border-b border-gray-100">
-                <h3 className="text-xl font-bold text-gray-800">🎵 Tracks</h3>
-              </div>
-              
-              <div className="max-h-96 overflow-y-auto">
-                {result.tracks.map((track, index) => (
-                  <TrackItem key={track.id} track={track} index={index} />
-                ))}
-              </div>
+            {/* Botão de download */}
+            <div className="text-center">
+              <button
+                onClick={() => onResult?.(result)}
+                className="px-8 py-3 bg-gradient-to-r from-green-600 to-blue-600 text-white font-semibold rounded-lg hover:from-green-700 hover:to-blue-700 transition-all duration-200 transform hover:scale-105 shadow-lg sm:px-6 sm:py-2 sm:text-sm"
+              >
+                📥 Usar esta Tracklist
+              </button>
             </div>
           </motion.div>
         )}

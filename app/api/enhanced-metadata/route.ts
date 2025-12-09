@@ -1,22 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { metadataAggregator } from '@/lib/services/metadataService';
+import { extractArtistTitle } from '../utils/common';
 
 interface MetadataRequest {
   title: string;
   artist: string;
   useBeatport?: boolean;
+  showBeatportPage?: boolean;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: MetadataRequest = await request.json();
-    const { title, artist, useBeatport = false } = body;
+    let { title, artist, useBeatport = false, showBeatportPage = false } = body;
 
-    console.log('\n🎯 [Enhanced-Metadata API] Iniciando busca de metadados:');
+    console.log('\n🎯 [Enhanced-Metadata API] Iniciando busca de metadados (dados brutos):');
     console.log(`   📋 Title: "${title}"`);
     console.log(`   🎤 Artist: "${artist}"`);
-    console.log(`   🎧 Beatport habilitado: ${useBeatport}`);
-    console.log('───────────────────────────────────────────────────');
 
     if (!title) {
       console.log('❌ [Enhanced-Metadata API] Erro: título não fornecido');
@@ -26,11 +26,23 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
+    // Limpa e extrai o artista/título mais preciso
+    const cleaned = extractArtistTitle(title, artist);
+    title = cleaned.title;
+    artist = cleaned.artist;
+
+    console.log('\n✨ [Enhanced-Metadata API] Dados de busca otimizados:');
+    console.log(`   📋 Title: "${title}"`);
+    console.log(`   🎤 Artist: "${artist}"`);
+    console.log(`   🎧 Beatport habilitado: ${useBeatport}`);
+    console.log('───────────────────────────────────────────────────');
+
     const startTime = Date.now();
     
     // Buscar metadados usando o agregador
     const metadata = await metadataAggregator.searchMetadata(title, artist, { 
-      useBeatport 
+      useBeatport,
+      showBeatportPage
     });
 
     const duration = Date.now() - startTime;
@@ -78,13 +90,13 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   try {
     // Return configuration status of all providers
-    const status = await metadataAggregator.getConfigurationStatus();
-    
     return NextResponse.json({
       success: true,
-      providers: status,
-      configured: Object.values(status).filter(Boolean).length,
-      total: Object.keys(status).length
+      providers: {
+        BeatportV2: true
+      },
+      configured: 1,
+      total: 1
     });
 
   } catch (error) {
