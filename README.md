@@ -1,36 +1,123 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Legolas - Audio Player & Downloader
 
-## Getting Started
+Legolas é uma aplicação Next.js para download e gerenciamento de áudio com suporte a metadados, playlists e streaming.
 
-First, run the development server:
+## 🚀 Getting Started
 
+### Pré-requisitos
+
+- Node.js 18+ 
+- npm ou yarn
+- FFmpeg (para processamento de áudio)
+- Chrome/Chromium (para scraping com Puppeteer)
+
+### Instalação
+
+1. Clone o repositório:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone https://github.com/seu-usuario/legolas.git
+cd legolas
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Instale as dependências:
+```bash
+npm install
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. Configure o ambiente:
+```bash
+cp .env.example .env.local
+# Edite .env.local com suas configurações
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+4. Configure o caminho de downloads:
+```bash
+# Edite downloads.config.json com o caminho desejado
+```
 
-## Learn More
+5. Verifique o ambiente:
+```bash
+npm run check-env
+```
 
-To learn more about Next.js, take a look at the following resources:
+6. Execute em desenvolvimento:
+```bash
+npm run dev
+# ou
+npm run dev:audio  # Com otimizações para áudio
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial..
+Abra [http://localhost:3000](http://localhost:3000) no navegador.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### 🖥️ Versão Desktop (Electron) - Recomendado para uso local
 
-## Deploy on Vercel
+Para rodar como aplicação desktop com todas as dependências nativas funcionando:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npm run electron:dev
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Isso iniciará o Next.js e abrirá a aplicação em uma janela Electron. Todas as funcionalidades (download, ffmpeg, puppeteer) funcionarão perfeitamente!
+
+Consulte [electron/README.md](./electron/README.md) para mais informações sobre a versão Electron.
+
+## 📋 Scripts Disponíveis
+
+### Web (Next.js)
+- `npm run dev` - Inicia servidor de desenvolvimento
+- `npm run dev:audio` - Inicia com otimizações para áudio
+- `npm run build` - Cria build de produção
+- `npm start` - Inicia servidor de produção
+- `npm run lint` - Executa linter
+- `npm run check-env` - Verifica configuração do ambiente
+- `npm run legolas` - Inicia aplicação completa
+
+### Desktop (Electron) 🖥️
+- `npm run electron` - Inicia aplicação Electron (requer Next.js rodando)
+- `npm run electron:dev` - Inicia Next.js + Electron em desenvolvimento
+- `npm run electron:build` - Build para todas as plataformas
+- `npm run electron:build:win` - Build para Windows
+- `npm run electron:build:mac` - Build para macOS
+- `npm run electron:build:linux` - Build para Linux
+
+**💡 Recomendado para uso local:** Use `npm run electron:dev` para rodar a versão desktop com todas as funcionalidades funcionando!
+
+## 🏗️ Infraestrutura e Deploy
+
+⚠️ **IMPORTANTE**: Este projeto usa dependências nativas (ffmpeg, puppeteer, playwright) que **NÃO funcionam em ambientes serverless** como Vercel.
+
+Consulte [INFRASTRUCTURE.md](./INFRASTRUCTURE.md) para informações detalhadas sobre:
+- Opções de deploy (Railway, Render, VPS)
+- Configuração de variáveis de ambiente
+- Troubleshooting
+- Requisitos do sistema
+
+### Deploy Recomendado
+
+**Railway** ou **Render** são as melhores opções pois suportam dependências nativas.
+
+## 📚 Tecnologias
+
+- **Next.js 15** - Framework React
+- **TypeScript** - Tipagem estática
+- **Tailwind CSS** - Estilização
+- **FFmpeg** - Processamento de áudio
+- **Puppeteer/Playwright** - Web scraping
+- **yt-dlp** - Download de vídeos/áudio
+
+## 📖 Documentação
+
+- [INFRASTRUCTURE.md](./INFRASTRUCTURE.md) - Guia completo de infraestrutura e deploy
+- [.env.example](./.env.example) - Exemplo de variáveis de ambiente
+
+## 🤝 Contribuindo
+
+1. Faça fork do projeto
+2. Crie uma branch para sua feature (`git checkout -b feature/AmazingFeature`)
+3. Commit suas mudanças (`git commit -m 'Add some AmazingFeature'`)
+4. Push para a branch (`git push origin feature/AmazingFeature`)
+5. Abra um Pull Request
+
+## 📝 Licença
+
+Este projeto é privado.

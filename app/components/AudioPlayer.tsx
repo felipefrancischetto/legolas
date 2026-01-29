@@ -11,6 +11,7 @@ import { useFile } from '../contexts/FileContext';
 import { useSettings } from '../hooks/useSettings';
 import { useQuickPlaylist } from '../contexts/QuickPlaylistContext';
 import AlbumModal from './AlbumModal';
+import MusicStudyModal from './MusicStudyModal';
 import LoadingSpinner from './LoadingSpinner';
 import { SkeletonAudioPlayer } from './SkeletonComponents';
 import { logger } from '../utils/logger';
@@ -27,6 +28,7 @@ export default function AudioPlayer() {
   const [isMobile, setIsMobile] = useState(false);
   const [isClient, setIsClient] = useState(false);
   const [showAlbumModal, setShowAlbumModal] = useState(false);
+  const [showMusicStudyModal, setShowMusicStudyModal] = useState(false);
   const [playerDominantColor, setPlayerDominantColor] = useState('rgba(16, 185, 129, 0.2)');
   const [isWaveReady, setIsWaveReady] = useState(false);
 
@@ -741,6 +743,10 @@ export default function AudioPlayer() {
     setShowAlbumModal(true);
   }, []);
 
+  const handleMusicStudyClick = useCallback(() => {
+    setShowMusicStudyModal(true);
+  }, []);
+
   const handleAddToPlaylist = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -968,6 +974,16 @@ export default function AudioPlayer() {
                   )}
                 </button>
                 <button 
+                  onClick={handleMusicStudyClick}
+                  className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-white transition-colors rounded-full hover:bg-zinc-800/50 hover:scale-110 duration-200"
+                  style={{ color: themeColors.primaryLight }}
+                  title="Análise de Música Eletrônica"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                </button>
+                <button 
                   onClick={() => setPlayerMinimized(false)} 
                   className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-white transition-colors rounded-full hover:bg-zinc-800/50 hover:scale-110 duration-200"
                   style={{ color: themeColors.primaryLight }}
@@ -1068,6 +1084,12 @@ export default function AudioPlayer() {
             themeColors={themeColors}
           />
         )}
+
+        {/* Music Study Modal */}
+        <MusicStudyModal
+          isOpen={showMusicStudyModal}
+          onClose={() => setShowMusicStudyModal(false)}
+        />
       </>
     );
   }
@@ -1308,6 +1330,23 @@ export default function AudioPlayer() {
               </button>
             </div>
 
+            {/* Botão análise de música */}
+            <div className="flex-shrink-0 ml-3">
+              <button 
+                onClick={handleMusicStudyClick}
+                className="w-8 h-8 flex items-center justify-center transition-colors rounded-full hover:bg-zinc-800/50 hover:scale-110 duration-200"
+                style={{ 
+                  color: themeColors.primaryLight,
+                  backgroundColor: 'transparent'
+                }}
+                title="Análise de Música Eletrônica"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+              </button>
+            </div>
+
             {/* Botão minimizar */}
             <div className="flex-shrink-0 ml-3">
               <button 
@@ -1544,6 +1583,21 @@ export default function AudioPlayer() {
               )}
             </button>
 
+            {/* Botão análise de música */}
+            <button 
+              onClick={handleMusicStudyClick}
+              className="w-9 h-9 flex items-center justify-center transition-colors rounded-full hover:bg-zinc-800/50 hover:scale-110 duration-200"
+              style={{ 
+                color: themeColors.primaryLight,
+                backgroundColor: 'transparent'
+              }}
+              title="Análise de Música Eletrônica"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+            </button>
+
             {/* Botão minimizar */}
             <button 
               onClick={() => setPlayerMinimized(true)} 
@@ -1568,6 +1622,12 @@ export default function AudioPlayer() {
           themeColors={themeColors}
         />
       )}
+
+      {/* Music Study Modal */}
+      <MusicStudyModal
+        isOpen={showMusicStudyModal}
+        onClose={() => setShowMusicStudyModal(false)}
+      />
     </>
   );
 } 

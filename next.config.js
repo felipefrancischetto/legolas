@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Output standalone para Electron
+  output: process.env.ELECTRON_BUILD ? 'standalone' : undefined,
+  
   experimental: {
     serverActions: {
       bodySizeLimit: '50mb'

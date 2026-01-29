@@ -52,3 +52,12 @@ logs/
 
 # Examples folder
 examples/
+
+# Electron
+dist-electron/
+*.dmg
+*.exe
+*.AppImage
+*.deb
+*.rpm
+*.snap

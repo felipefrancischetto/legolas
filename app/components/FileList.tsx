@@ -234,7 +234,8 @@ const DynamicFileItem = memo(({
   files,
   isLoading,
   isAdding,
-  isRemoving
+  isRemoving,
+  addToast
 }: { 
   file: FileInfo; 
   isPlaying: boolean; 
@@ -252,6 +253,7 @@ const DynamicFileItem = memo(({
   isLoading: boolean;
   isAdding?: boolean;
   isRemoving?: boolean;
+  addToast?: (toast: { title: string }) => void;
 }) => {
   const [itemColor, setItemColor] = useState<{ rgb: string; rgba: (opacity: number) => string }>({
     rgb: '16, 185, 129',
@@ -495,6 +497,7 @@ const DynamicFileItem = memo(({
               onDownloadAlbum={onDownloadAlbum}
               onRemoveAlbum={onRemoveAlbum}
               files={files}
+              addToast={addToast}
             />
           </div>
         </div>
@@ -604,7 +607,7 @@ export default function FileList() {
   } = useUI();
 
   const { play, resume, pause, stop, playerState } = usePlayer();
-  const { queue, updateQueueItem, addToQueue, addToast } = useDownload();
+  const { queue = [], updateQueueItem = () => {}, addToQueue = () => {}, addToast = () => {} } = useDownload();
   const { settings } = useSettings();
   const resizingCol = useRef<number | null>(null);
   const startX = useRef<number>(0);
@@ -621,12 +624,16 @@ export default function FileList() {
     // Se não tiver álbum, tentar buscar usando artista e título
     if (!albumName) {
       if (!artistName || !trackTitle) {
-        addToast({ title: '❌ Este arquivo não tem informação suficiente (falta álbum, artista ou título)' });
+        if (addToast) {
+          addToast({ title: '❌ Este arquivo não tem informação suficiente (falta álbum, artista ou título)' });
+        }
         return;
       }
       
       // Tentar buscar álbum usando artista e título
-      addToast({ title: `🔍 Buscando álbum relacionado a "${artistName} - ${trackTitle}" no YouTube Music...` });
+      if (addToast) {
+        addToast({ title: `🔍 Buscando álbum relacionado a "${artistName} - ${trackTitle}" no YouTube Music...` });
+      }
       
       try {
         // Primeiro, tentar buscar a música para ver se tem informação de álbum
@@ -634,7 +641,9 @@ export default function FileList() {
         const searchResult = await searchResponse.json();
         
         if (searchResult.error || !searchResult.videoId) {
-          addToast({ title: '❌ Não foi possível encontrar informações da música' });
+          if (addToast) {
+            addToast({ title: '❌ Não foi possível encontrar informações da música' });
+          }
           return;
         }
         
@@ -643,7 +652,9 @@ export default function FileList() {
         const albumResult = await albumResponse.json();
         
         if (albumResult.error || !albumResult.tracks || albumResult.tracks.length === 0) {
-          addToast({ title: '❌ Não foi possível encontrar um álbum relacionado. Tente adicionar a informação de álbum manualmente.' });
+          if (addToast) {
+            addToast({ title: '❌ Não foi possível encontrar um álbum relacionado. Tente adicionar a informação de álbum manualmente.' });
+          }
           return;
         }
         
@@ -651,7 +662,9 @@ export default function FileList() {
         let addedCount = 0;
         const totalTracks = albumResult.tracks.length;
         
-        addToast({ title: `📥 Encontradas ${totalTracks} faixa${totalTracks !== 1 ? 's' : ''}. Adicionando à fila...` });
+        if (addToast) {
+          addToast({ title: `📥 Encontradas ${totalTracks} faixa${totalTracks !== 1 ? 's' : ''}. Adicionando à fila...` });
+        }
         
         for (const track of albumResult.tracks) {
           addToQueue({
@@ -669,32 +682,42 @@ export default function FileList() {
           
           // Atualizar toast a cada 5 faixas adicionadas
           if (addedCount % 5 === 0 || addedCount === totalTracks) {
-            addToast({ 
-              title: `📥 Adicionando faixas... (${addedCount}/${totalTracks})` 
-            });
+            if (addToast) {
+              addToast({ 
+                title: `📥 Adicionando faixas... (${addedCount}/${totalTracks})` 
+              });
+            }
           }
         }
 
-        addToast({ 
-          title: `✅ ${addedCount} faixa${addedCount !== 1 ? 's' : ''} relacionada${addedCount !== 1 ? 's' : ''} adicionada${addedCount !== 1 ? 's' : ''} à fila de download` 
-        });
+        if (addToast) {
+          addToast({ 
+            title: `✅ ${addedCount} faixa${addedCount !== 1 ? 's' : ''} relacionada${addedCount !== 1 ? 's' : ''} adicionada${addedCount !== 1 ? 's' : ''} à fila de download` 
+          });
+        }
         return;
       } catch (err: any) {
         console.error('Erro ao buscar álbum relacionado:', err);
-        addToast({ title: `❌ Erro ao buscar álbum: ${err.message || 'Erro desconhecido'}` });
+        if (addToast) {
+          addToast({ title: `❌ Erro ao buscar álbum: ${err.message || 'Erro desconhecido'}` });
+        }
         return;
       }
     }
 
     // Toast inicial de busca
     const searchToastId = `search-${Date.now()}`;
-    addToast({ title: `🔍 Buscando álbum "${albumName}"${artistName ? ` por ${artistName}` : ''} no YouTube Music...` });
+    if (addToast) {
+      addToast({ title: `🔍 Buscando álbum "${albumName}"${artistName ? ` por ${artistName}` : ''} no YouTube Music...` });
+    }
 
     try {
       // Atualizar toast durante a busca
       const updateSearchToast = (message: string) => {
         // Remover toast anterior e adicionar novo
-        addToast({ title: `🔍 ${message}` });
+        if (addToast) {
+          addToast({ title: `🔍 ${message}` });
+        }
       };
 
       updateSearchToast(`Buscando faixas do álbum "${albumName}"...`);
@@ -706,13 +729,17 @@ export default function FileList() {
       });
 
       if (result.error) {
-        addToast({ title: `❌ Erro ao buscar álbum: ${result.error}` });
+        if (addToast) {
+          addToast({ title: `❌ Erro ao buscar álbum: ${result.error}` });
+        }
         return;
       }
 
       // Se encontrou uma playlist URL, baixar a playlist diretamente (mais eficiente)
       if (result.playlistUrl) {
-        addToast({ title: `🎵 Playlist encontrada! Adicionando à fila de download...` });
+        if (addToast) {
+          addToast({ title: `🎵 Playlist encontrada! Adicionando à fila de download...` });
+        }
         
         addToQueue({
           url: result.playlistUrl,
@@ -727,19 +754,25 @@ export default function FileList() {
           steps: []
         });
 
-        addToast({ 
-          title: `✅ Playlist do álbum "${albumName}" adicionada à fila de download` 
-        });
+        if (addToast) {
+          addToast({ 
+            title: `✅ Playlist do álbum "${albumName}" adicionada à fila de download` 
+          });
+        }
         return;
       }
 
       if (!result.tracks || result.tracks.length === 0) {
-        addToast({ title: `❌ Nenhuma faixa do álbum "${albumName}" encontrada` });
+        if (addToast) {
+          addToast({ title: `❌ Nenhuma faixa do álbum "${albumName}" encontrada` });
+        }
         return;
       }
 
       // Se não encontrou playlist, adicionar todas as faixas individualmente
-      addToast({ title: `📥 Encontradas ${result.tracks.length} faixa${result.tracks.length !== 1 ? 's' : ''}. Adicionando à fila...` });
+      if (addToast) {
+        addToast({ title: `📥 Encontradas ${result.tracks.length} faixa${result.tracks.length !== 1 ? 's' : ''}. Adicionando à fila...` });
+      }
       
       let addedCount = 0;
       const totalTracks = result.tracks.length;
@@ -760,18 +793,24 @@ export default function FileList() {
         
         // Atualizar toast a cada 5 faixas adicionadas
         if (addedCount % 5 === 0 || addedCount === totalTracks) {
-          addToast({ 
-            title: `📥 Adicionando faixas... (${addedCount}/${totalTracks})` 
-          });
+          if (addToast) {
+            addToast({ 
+              title: `📥 Adicionando faixas... (${addedCount}/${totalTracks})` 
+            });
+          }
         }
       }
 
-      addToast({ 
-        title: `✅ ${addedCount} faixa${addedCount !== 1 ? 's' : ''} do álbum "${albumName}" adicionada${addedCount !== 1 ? 's' : ''} à fila de download` 
-      });
+      if (addToast) {
+        addToast({ 
+          title: `✅ ${addedCount} faixa${addedCount !== 1 ? 's' : ''} do álbum "${albumName}" adicionada${addedCount !== 1 ? 's' : ''} à fila de download` 
+        });
+      }
     } catch (err: any) {
       console.error('Erro ao baixar álbum:', err);
-      addToast({ title: `❌ Erro ao baixar álbum: ${err.message || 'Erro desconhecido'}` });
+      if (addToast) {
+        addToast({ title: `❌ Erro ao baixar álbum: ${err.message || 'Erro desconhecido'}` });
+      }
     }
   }, [addToQueue, addToast]);
 
@@ -1448,8 +1487,7 @@ export default function FileList() {
       // Mostrar toast se disponível
       if (addToast) {
         addToast({
-          type: 'success',
-          message: `${result.moved} arquivo(s) movido(s) para pasta nao-normalizadas`
+          title: `✅ ${result.moved} arquivo(s) movido(s) para pasta nao-normalizadas`
         });
       }
       
@@ -1457,8 +1495,7 @@ export default function FileList() {
       console.error('Erro ao organizar arquivos não normalizados:', error.message);
       if (addToast) {
         addToast({
-          type: 'error',
-          message: `Erro ao organizar arquivos: ${error.message}`
+          title: `❌ Erro ao organizar arquivos: ${error.message}`
         });
       }
     } finally {
@@ -2292,6 +2329,7 @@ export default function FileList() {
                         onDownloadAlbum={handleDownloadAlbum}
                         onRemoveAlbum={handleRemoveAlbum}
                         files={files}
+                        addToast={addToast}
                       />
                     </div>
                   </div>
@@ -2359,6 +2397,7 @@ export default function FileList() {
                   isLoading={playerState.isLoading}
                   isAdding={isAdding}
                   isRemoving={isRemoving}
+                  addToast={addToast}
                 />
                 );
               })}
@@ -2978,15 +3017,17 @@ function EditFileModal({ file, onClose, onSave, isListLoading, isUpdatingAll }: 
 }
 
 // Menu de ações mobile
-function MobileActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, onRemoveAlbum, files }: { 
+function MobileActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, onRemoveAlbum, files, addToast }: { 
   file: any, 
   onUpdate: (fileName: string, status: string) => void, 
   onEdit: (file: any) => void,
   onRemove: (fileName: string) => Promise<void>,
   onDownloadAlbum?: (file: any) => void,
   onRemoveAlbum?: (file: any) => Promise<void>,
-  files?: any[]
+  files?: any[],
+  addToast?: (toast: { title: string }) => void
 }) {
+  const [extractingKick, setExtractingKick] = useState(false);
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -3098,6 +3139,76 @@ function MobileActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, o
           >
             ✎ Editar
           </button>
+          <button
+            className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors rounded-md mx-1 ${
+              extractingKick 
+                ? 'bg-yellow-500/20 text-yellow-300 cursor-wait' 
+                : 'hover:bg-yellow-500/10 text-yellow-300'
+            }`}
+            onClick={async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (extractingKick) return;
+              
+              setExtractingKick(true);
+              setOpen(false);
+              
+              try {
+                const response = await fetch('/api/extract-kick', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    filename: file.name
+                  })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                  // Criar link de download
+                  const downloadUrl = `/api/downloads/kicks/${encodeURIComponent(data.kick.filename)}`;
+                  const link = document.createElement('a');
+                  link.href = downloadUrl;
+                  link.download = data.kick.filename;
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                  
+                  // Mostrar notificação de sucesso melhorada
+                  const isolationPercent = Math.round(data.kick.isolation || 0);
+                  const amplitudePercent = Math.round(data.kick.amplitude || 0);
+                  if (addToast) {
+                    addToast({ 
+                      title: `✅ Kick extraído com sucesso! 🎵\nTempo: ${data.kick.time.toFixed(2)}s | Amplitude: ${amplitudePercent}% | Isolamento: ${isolationPercent}% | Qualidade: ${data.kick.quality}%` 
+                    });
+                  } else {
+                    console.log(`✅ Kick extraído! Tempo: ${data.kick.time.toFixed(2)}s | Amplitude: ${amplitudePercent}% | Isolamento: ${isolationPercent}% | Qualidade: ${data.kick.quality}%`);
+                  }
+                } else {
+                  const errorMsg = `❌ Erro ao extrair kick: ${data.error || 'Erro desconhecido'}`;
+                  if (addToast) {
+                    addToast({ title: errorMsg });
+                  } else {
+                    console.error(errorMsg);
+                  }
+                }
+              } catch (error) {
+                console.error('Erro ao extrair kick:', error);
+                const errorMsg = `❌ Erro ao extrair kick: ${error instanceof Error ? error.message : 'Erro desconhecido'}`;
+                if (addToast) {
+                  addToast({ title: errorMsg });
+                }
+              } finally {
+                setExtractingKick(false);
+              }
+            }}
+            disabled={extractingKick}
+            title={extractingKick ? 'Extraindo kick...' : 'Extrair o melhor kick desta música'}
+          >
+            {extractingKick ? '⏳ Extraindo Kick...' : '🥾 Extrair Kick'}
+          </button>
           {onRemoveAlbum && file.album && files && (() => {
             const albumTracks = files.filter(f => f.album && f.album.toLowerCase().trim() === file.album.toLowerCase().trim());
             return albumTracks.length > 1 ? (
@@ -3141,16 +3252,18 @@ function MobileActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, o
 }
 
 // Menu de ações para cada linha
-function ActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, onRemoveAlbum, files }: { 
+function ActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, onRemoveAlbum, files, addToast }: { 
   file: any, 
   onUpdate: (fileName: string, status: string) => void, 
   onEdit: (file: any) => void,
   onRemove: (fileName: string) => Promise<void>,
   onDownloadAlbum?: (file: any) => void,
   onRemoveAlbum?: (file: any) => Promise<void>,
-  files?: any[]
+  files?: any[],
+  addToast?: (toast: { title: string }) => void
 }) {
   const [open, setOpen] = useState(false);
+  const [extractingKick, setExtractingKick] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [menuPosition, setMenuPosition] = useState<{top: number, left: number}>({top: 0, left: 0});
@@ -3314,6 +3427,76 @@ function ActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, onRemov
         }}
       >
         ✎ Editar
+      </button>
+      <button
+        className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors rounded-md mx-1 ${
+          extractingKick 
+            ? 'bg-yellow-500/20 text-yellow-300 cursor-wait' 
+            : 'hover:bg-yellow-500/10 text-yellow-300'
+        }`}
+        onClick={async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (extractingKick) return;
+          
+          setExtractingKick(true);
+          setOpen(false);
+          
+          try {
+            const response = await fetch('/api/extract-kick', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                filename: file.name
+              })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+              // Criar link de download
+              const downloadUrl = `/api/downloads/kicks/${encodeURIComponent(data.kick.filename)}`;
+              const link = document.createElement('a');
+              link.href = downloadUrl;
+              link.download = data.kick.filename;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              
+              // Mostrar notificação de sucesso melhorada
+              const isolationPercent = Math.round(data.kick.isolation || 0);
+              const amplitudePercent = Math.round(data.kick.amplitude || 0);
+              if (addToast) {
+                addToast({ 
+                  title: `✅ Kick extraído com sucesso! 🎵\nTempo: ${data.kick.time.toFixed(2)}s | Amplitude: ${amplitudePercent}% | Isolamento: ${isolationPercent}% | Qualidade: ${data.kick.quality}%` 
+                });
+              } else {
+                console.log(`✅ Kick extraído! Tempo: ${data.kick.time.toFixed(2)}s | Amplitude: ${amplitudePercent}% | Isolamento: ${isolationPercent}% | Qualidade: ${data.kick.quality}%`);
+              }
+            } else {
+              const errorMsg = `❌ Erro ao extrair kick: ${data.error || 'Erro desconhecido'}`;
+              if (addToast) {
+                addToast({ title: errorMsg });
+              } else {
+                console.error(errorMsg);
+              }
+            }
+          } catch (error) {
+            console.error('Erro ao extrair kick:', error);
+            const errorMsg = `❌ Erro ao extrair kick: ${error instanceof Error ? error.message : 'Erro desconhecido'}`;
+            if (addToast) {
+              addToast({ title: errorMsg });
+            }
+          } finally {
+            setExtractingKick(false);
+          }
+        }}
+        disabled={extractingKick}
+        title={extractingKick ? 'Extraindo kick...' : 'Extrair o melhor kick desta música'}
+      >
+        {extractingKick ? '⏳ Extraindo Kick...' : '🥾 Extrair Kick'}
       </button>
       {onRemoveAlbum && file.album && files && (() => {
         const albumTracks = files.filter(f => f.album && f.album.toLowerCase().trim() === file.album.toLowerCase().trim());

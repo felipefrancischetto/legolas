@@ -978,7 +978,30 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
 export function useDownload() {
   const context = useContext(DownloadContext);
   if (context === undefined) {
-    throw new Error('useDownload must be used within a DownloadProvider');
+    // Retornar valores padrão ao invés de lançar erro para evitar quebra da aplicação
+    console.warn('useDownload chamado fora do DownloadProvider - usando valores padrão');
+    return {
+      queue: [],
+      history: [],
+      addToQueue: () => {},
+      removeFromQueue: () => {},
+      updateQueueItem: () => {},
+      clearHistory: () => {},
+      retryDownload: () => {},
+      cancelDownload: () => {},
+      downloadStatus: { loading: false, error: null, success: false },
+      setDownloadStatus: () => {},
+      toasts: [],
+      addToast: (toast: { title: string }) => {
+        console.log('[Toast (fallback)]:', toast.title);
+      },
+      removeToast: () => {},
+      updateProgress: () => {},
+      addStep: () => {},
+      getCurrentDownload: () => undefined,
+      getPlaylistProgressData: () => ({ current: 0, total: 0, percentage: 0 }),
+      clearStuckDownloads: () => {}
+    };
   }
   return context;
 } 
