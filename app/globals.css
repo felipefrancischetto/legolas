@@ -103,6 +103,11 @@
   --background-end-rgb: 0, 0, 0;
 }
 
+html {
+  background: #000;
+  overflow-x: hidden;
+}
+
 body {
   color: rgb(var(--foreground-rgb));
   background: linear-gradient(
@@ -113,6 +118,9 @@ body {
   );
   backdrop-filter: blur(20px);
   min-height: 100vh;
+  overflow-x: hidden;
+  margin: 0;
+  padding: 0;
 }
 
 /* Transparência global para componentes - Melhorada */
@@ -271,6 +279,71 @@ body {
   }
 }
 
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(30px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes fade-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+    max-height: 500px;
+    margin-bottom: 12px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.9);
+    max-height: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    overflow: hidden;
+  }
+}
+
+@keyframes slide-out-left {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    max-height: 500px;
+    margin-bottom: 12px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-50px) scale(0.9);
+    max-height: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    overflow: hidden;
+  }
+}
+
+@keyframes slide-in-scale {
+  from {
+    opacity: 0;
+    transform: translateX(30px) scale(0.9);
+  }
+  50% {
+    transform: translateX(0) scale(1.02);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
 @keyframes scale-in {
   from {
     opacity: 0;
@@ -296,6 +369,52 @@ body {
 
 .animate-scale-in {
   animation: scale-in 0.3s ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.animate-fade-out {
+  animation: fade-out 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.animate-slide-out-left {
+  animation: slide-out-left 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.animate-slide-in-scale {
+  animation: slide-in-scale 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Classe para item sendo removido */
+.file-item-removing {
+  overflow: hidden;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Classe para item sendo adicionado */
+.file-item-adding {
+  animation: slide-in-scale 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Garantir que itens com animação não sejam clicáveis durante a animação */
+.file-item-animating {
+  pointer-events: none;
+}
+
+/* Efeito de brilho para novos itens */
+@keyframes glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.6);
+  }
+}
+
+.file-item-new {
+  animation: slide-in-scale 0.6s cubic-bezier(0.16, 1, 0.3, 1), glow-pulse 2s ease-in-out 0.6s;
 }
 
 /* Animações específicas melhoradas */
@@ -370,6 +489,7 @@ body {
 
 *::-webkit-scrollbar-track {
   background: transparent !important;
+  border: none !important;
 }
 
 *::-webkit-scrollbar-thumb {
@@ -387,6 +507,47 @@ body {
 *::-webkit-scrollbar-corner {
   background: transparent !important;
   border-radius: 0 !important;
+  border: none !important;
+}
+
+/* Garantir que não haja backgrounds brancos indesejados */
+* {
+  scrollbar-gutter: stable;
+}
+
+html, body, #__next {
+  background-color: #000 !important;
+  background-image: linear-gradient(
+    135deg,
+    rgba(0, 0, 0, 0.95) 0%,
+    rgba(15, 23, 42, 0.98) 50%,
+    rgba(0, 0, 0, 0.95) 100%
+  ) !important;
+}
+
+/* Garantir que todos os elementos tenham background escuro por padrão */
+*:not([class*="bg-white"]):not([class*="bg-gray-100"]):not([class*="bg-zinc-100"]) {
+  background-color: transparent;
+}
+
+/* Corrigir scrollbar-track que pode estar aparecendo branco */
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+}
+
+/* Garantir que não haja overflow horizontal */
+html, body {
+  overflow-x: hidden !important;
+  max-width: 100vw !important;
+}
+
+/* Garantir que containers principais não tenham background branco */
+main, [role="main"], .main-container {
+  background-color: transparent !important;
+  background: transparent !important;
 }
 
 /* Scrollbar aparece ao fazer hover no container */
@@ -407,21 +568,27 @@ body {
   background: transparent;
 }
 .custom-scroll::-webkit-scrollbar-track {
-  background: transparent;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
   border-radius: 0;
 }
 .custom-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.25);
-  border: none;
+  background: rgba(255, 255, 255, 0.25) !important;
+  background-color: rgba(255, 255, 255, 0.25) !important;
+  border: none !important;
   transition: background 0.2s ease, opacity 0.3s ease;
   opacity: 0.6;
 }
 .custom-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.5) !important;
+  background-color: rgba(255, 255, 255, 0.5) !important;
   opacity: 1;
 }
 .custom-scroll::-webkit-scrollbar-corner {
-  background: transparent;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
 }
 
 /* Scrollbar aparece ao fazer hover no container */
@@ -443,11 +610,14 @@ body {
 
 .custom-scroll-square::-webkit-scrollbar-track {
   background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
   border-radius: 0 !important;
 }
 
 .custom-scroll-square::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2) !important;
+  background-color: rgba(255, 255, 255, 0.2) !important;
   border: none !important;
   transition: background 0.2s ease, opacity 0.3s ease !important;
   opacity: 0.5 !important;
@@ -455,11 +625,14 @@ body {
 
 .custom-scroll-square::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.4) !important;
+  background-color: rgba(255, 255, 255, 0.4) !important;
   opacity: 1 !important;
 }
 
 .custom-scroll-square::-webkit-scrollbar-corner {
   background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
 }
 
 /* Scrollbar aparece ao fazer hover no container */

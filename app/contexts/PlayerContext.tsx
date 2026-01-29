@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode, useRef } from 'react';
+import { safeSetItem, safeGetItem, safeRemoveItem } from '../utils/localStorage';
 
 interface FileInfo {
   name: string;
@@ -64,28 +65,27 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const lastSavedState = useRef<PlayerState | null>(null);
   const lastSaveTime = useRef<number>(0);
   
-  const [playerState, setPlayerState] = useState<PlayerState>(() => {
-    // Inicialização otimizada apenas uma vez
-    if (typeof window === 'undefined') {
-      return {
-        isPlaying: false,
-        currentTime: 0,
-        duration: 0,
-        isReady: false,
-        isLoading: false,
-        error: null,
-        currentFile: null,
-        volume: 1,
-        isMuted: false
-      };
-    }
+  // Inicializar com valores padrão para evitar hydration mismatch
+  const [playerState, setPlayerState] = useState<PlayerState>({
+    isPlaying: false,
+    currentTime: 0,
+    duration: 0,
+    isReady: false,
+    isLoading: false,
+    error: null,
+    currentFile: null,
+    volume: 1,
+    isMuted: false
+  });
 
+  // Carregar estado do localStorage apenas no cliente após montagem
+  useEffect(() => {
     let initialVolume = 1;
     let initialCurrentFile = null;
     let initialCurrentTime = 0;
 
     try {
-      const savedVolume = localStorage.getItem('audioPlayerVolume');
+      const savedVolume = safeGetItem<string>('audioPlayerVolume');
       if (savedVolume !== null) {
         const parsedVolume = parseFloat(savedVolume);
         if (!isNaN(parsedVolume) && parsedVolume >= 0 && parsedVolume <= 1) {
@@ -93,13 +93,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      const savedCurrentFile = localStorage.getItem('audioPlayerCurrentFile');
+      const savedCurrentFile = safeGetItem<any>('audioPlayerCurrentFile');
       if (savedCurrentFile) {
-        initialCurrentFile = JSON.parse(savedCurrentFile);
+        initialCurrentFile = savedCurrentFile;
       }
 
       if (initialCurrentFile && initialCurrentFile.name) {
-        const savedCurrentTime = localStorage.getItem('audioPlayerCurrentTime_' + initialCurrentFile.name);
+        const savedCurrentTime = safeGetItem<string>('audioPlayerCurrentTime_' + initialCurrentFile.name);
         if (savedCurrentTime) {
           const parsedTime = parseFloat(savedCurrentTime);
           if (!isNaN(parsedTime) && parsedTime >= 0) {
@@ -107,22 +107,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           }
         }
       }
+
+      // Atualizar estado apenas se houver valores salvos diferentes dos padrões
+      if (initialVolume !== 1 || initialCurrentFile !== null || initialCurrentTime !== 0) {
+        setPlayerState(prev => ({
+          ...prev,
+          volume: initialVolume,
+          currentFile: initialCurrentFile,
+          currentTime: initialCurrentTime
+        }));
+      }
     } catch (error) {
       console.error('Erro ao carregar estado do player do localStorage:', error);
     }
-
-    return {
-      isPlaying: false,
-      currentTime: initialCurrentTime,
-      duration: 0,
-      isReady: false,
-      isLoading: false,
-      error: null,
-      currentFile: initialCurrentFile,
-      volume: initialVolume,
-      isMuted: false
-    };
-  });
+  }, []); // Executar apenas uma vez após montagem
 
   // Função otimizada para salvar no localStorage com throttling melhorado
   const saveToLocalStorage = useCallback((newState: PlayerState) => {
@@ -145,12 +143,28 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     saveTimeoutRef.current = setTimeout(() => {
       try {
         if (newState.currentFile) {
-          // Salvar arquivo atual
-          const currentFileJson = JSON.stringify(newState.currentFile);
-          const lastSavedFile = localStorage.getItem('audioPlayerCurrentFile');
+          // Otimizar arquivo: remover campos grandes desnecessários
+          const optimizedFile = {
+            name: newState.currentFile.name,
+            displayName: newState.currentFile.displayName,
+            path: newState.currentFile.path,
+            title: newState.currentFile.title,
+            artist: newState.currentFile.artist,
+            duration: newState.currentFile.duration
+            // Não salvar thumbnail, metadata completo, etc.
+          };
           
-          if (currentFileJson !== lastSavedFile) {
-            localStorage.setItem('audioPlayerCurrentFile', currentFileJson);
+          const lastSavedFile = safeGetItem('audioPlayerCurrentFile');
+          const currentFileJson = JSON.stringify(optimizedFile);
+          const lastSavedFileJson = lastSavedFile ? JSON.stringify(lastSavedFile) : null;
+          
+          if (currentFileJson !== lastSavedFileJson) {
+            safeSetItem('audioPlayerCurrentFile', optimizedFile, {
+              maxSize: 100 * 1024, // 100KB máximo para arquivo
+              onError: (err) => {
+                console.warn('⚠️ Erro ao salvar arquivo do player:', err.message);
+              }
+            });
           }
           
           // Salvar tempo atual com throttling
@@ -158,17 +172,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           const timeDiff = Math.abs(newState.currentTime - lastSaveTime.current);
           
           if (timeDiff > 2 || now - lastSaveTime.current > 10000) {
-            localStorage.setItem('audioPlayerCurrentTime_' + newState.currentFile.name, newState.currentTime.toString());
+            const timeKey = 'audioPlayerCurrentTime_' + newState.currentFile.name;
+            safeSetItem(timeKey, newState.currentTime.toString(), {
+              maxSize: 1024 // 1KB máximo para tempo
+            });
             lastSaveTime.current = newState.currentTime;
           }
         } else {
-          localStorage.removeItem('audioPlayerCurrentFile');
+          safeRemoveItem('audioPlayerCurrentFile');
         }
         
         // Salvar volume apenas se mudou
-        const currentVolume = localStorage.getItem('audioPlayerVolume');
+        const currentVolume = safeGetItem<string>('audioPlayerVolume');
         if (currentVolume !== newState.volume.toString()) {
-          localStorage.setItem('audioPlayerVolume', newState.volume.toString());
+          safeSetItem('audioPlayerVolume', newState.volume.toString(), {
+            maxSize: 1024 // 1KB máximo para volume
+          });
         }
         
         // Atualizar estado salvo
@@ -210,7 +229,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       // Se mudou de música, verificar progresso salvo
       if (partial.currentFile && partial.currentFile !== prev.currentFile) {
         try {
-          const savedTime = localStorage.getItem('audioPlayerCurrentTime_' + partial.currentFile.name);
+          const savedTime = safeGetItem<string>('audioPlayerCurrentTime_' + partial.currentFile.name);
           if (savedTime) {
             const parsedTime = parseFloat(savedTime);
             if (!isNaN(parsedTime) && parsedTime >= 0) {

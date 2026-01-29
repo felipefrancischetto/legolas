@@ -5,9 +5,12 @@ import { getDownloadsPath, fileExists, sanitizeYear } from '../../utils/common';
 import { join } from 'path';
 import { readFile } from 'fs/promises';
 import NodeID3 from 'node-id3';
-import { spawn } from 'child_process';
+import { spawn, exec } from 'child_process';
+import { promisify } from 'util';
 import { mkdtempSync, existsSync, renameSync } from 'fs';
 import os from 'os';
+
+const execAsync = promisify(exec);
 
 interface MetadataRequest {
   // Para busca de metadados
@@ -562,31 +565,55 @@ async function handleMetadataEnhance(params: MetadataRequest) {
     }, { status: 404 });
   }
 
-  // Tentar extrair título/artista dos metadados atuais
+  // Tentar extrair título/artista/álbum dos metadados atuais
+  const ext = filePath.split('.').pop()?.toLowerCase();
   let tags: any = {};
+  let originalTitle = fileName.replace(/\.(flac|mp3)$/i, '');
+  let originalArtist = '';
+  let originalAlbum = '';
+  
   try {
-    tags = NodeID3.read(filePath);
-  } catch {}
-  const fallbackTitle = tags.title || fileName.replace(/\.flac$/i, '');
-  const fallbackArtist = tags.artist || '';
+    if (ext === 'mp3') {
+      // Para MP3, usar NodeID3
+      tags = NodeID3.read(filePath);
+      originalTitle = tags.title || originalTitle;
+      originalArtist = tags.artist || '';
+      originalAlbum = tags.album || '';
+    } else if (ext === 'flac') {
+      // Para FLAC, usar ffprobe
+      const { stdout } = await execAsync(
+        `ffprobe -v quiet -print_format json -show_format "${filePath}"`,
+        { maxBuffer: 1024 * 1024 * 10 }
+      );
+      const info = JSON.parse(stdout);
+      const flacTags = info.format?.tags || {};
+      originalTitle = flacTags.title || flacTags.TITLE || originalTitle;
+      originalArtist = flacTags.artist || flacTags.ARTIST || flacTags.albumartist || flacTags.ALBUMARTIST || '';
+      originalAlbum = flacTags.album || flacTags.ALBUM || '';
+    }
+  } catch (error) {
+    console.error('Erro ao ler metadados existentes:', error);
+    // Manter valores padrão se falhar
+  }
 
-  // Buscar metadados aprimorados
+  // Buscar metadados aprimorados (apenas para obter BPM, Key, Genre, Label, etc.)
   const metadata = await metadataAggregator.searchMetadata(
-    fallbackTitle,
-    fallbackArtist,
+    originalTitle,
+    originalArtist,
     { useBeatport }
   );
 
-  // Gravar metadados se encontrados
-  if (metadata && (metadata.title || metadata.artist || metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.year)) {
+  // Gravar metadados se encontrados (preservando título e artista originais)
+  if (metadata && (metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.year)) {
     const ext = filePath.split('.').pop()?.toLowerCase();
     const safeYear = sanitizeYear(metadata.year || '');
 
     if (ext === 'mp3') {
       const tags: any = {};
-      if (metadata.title) tags.title = metadata.title;
-      if (metadata.artist) tags.artist = metadata.artist;
-      if (metadata.album) tags.album = metadata.album;
+      // PRESERVAR título, artista e álbum originais - não alterar
+      tags.title = originalTitle;
+      tags.artist = originalArtist;
+      tags.album = originalAlbum || metadata.album || '';
       if (safeYear) tags.year = safeYear;
       if (metadata.genre) tags.genre = metadata.genre;
       if (metadata.label) tags.publisher = metadata.label;
@@ -601,9 +628,10 @@ async function handleMetadataEnhance(params: MetadataRequest) {
     } else if (ext === 'flac') {
       // Montar argumentos do ffmpeg
       const args = ['-y', '-i', filePath];
-      if (metadata.title) args.push('-metadata', `title=${metadata.title}`);
-      if (metadata.artist) args.push('-metadata', `artist=${metadata.artist}`);
-      if (metadata.album) args.push('-metadata', `album=${metadata.album}`);
+      // PRESERVAR título, artista e álbum originais - não alterar
+      args.push('-metadata', `title=${originalTitle}`);
+      args.push('-metadata', `artist=${originalArtist}`);
+      args.push('-metadata', `album=${originalAlbum || metadata.album || ''}`);
       if (safeYear) args.push('-metadata', `date=${safeYear}`);
       if (metadata.genre) args.push('-metadata', `genre=${metadata.genre}`);
       if (metadata.label) args.push('-metadata', `publisher=${metadata.label}`);

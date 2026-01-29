@@ -15,6 +15,8 @@ import SoundWave from './SoundWave';
 import ReactDOM from 'react-dom';
 import LoadingSpinner from './LoadingSpinner';
 import { SkeletonMusicList } from './SkeletonComponents';
+import { safeGetItem, safeSetItem } from '../utils/localStorage';
+import StarButton from './StarButton';
 
 interface FileInfo {
   name: string;
@@ -97,19 +99,121 @@ const columns: { label: string; key: string; width: number; always: boolean }[] 
   { label: 'Ações', key: 'acoes', width: 50, always: true },
 ];
 
+// Função auxiliar para encontrar o container com scroll correto
+function getScrollContainer(): HTMLElement | null {
+  // Encontrar o container com overflow-y-auto e custom-scroll-square
+  const container = document.querySelector('.overflow-y-auto.custom-scroll-square, .custom-scroll-square.overflow-y-auto') as HTMLElement;
+  if (container && container.scrollHeight > container.clientHeight) {
+    return container;
+  }
+  // Fallback para window se não encontrar o container
+  return null;
+}
 
+// Função auxiliar para obter a posição atual do scroll (do container correto)
+function getCurrentScrollPosition(): number {
+  const container = getScrollContainer();
+  return container ? container.scrollTop : window.scrollY;
+}
+
+// Função auxiliar para restaurar a posição do scroll (no container correto)
+function restoreScrollPosition(scrollY: number) {
+  const container = getScrollContainer();
+  if (container) {
+    container.scrollTop = scrollY;
+  } else {
+    window.scrollTo({ top: scrollY, behavior: 'instant' });
+  }
+}
+
+// Função auxiliar para verificar se um elemento está visível no container scrollável
+function isElementVisibleInContainer(element: HTMLElement): boolean {
+  const container = getScrollContainer();
+  if (!container) {
+    // Fallback para window
+    const rect = element.getBoundingClientRect();
+    return rect.top >= 0 && rect.bottom <= window.innerHeight;
+  }
+  
+  const containerRect = container.getBoundingClientRect();
+  const elementRect = element.getBoundingClientRect();
+  
+  // Verificar se o elemento está dentro dos limites visíveis do container
+  return (
+    elementRect.top >= containerRect.top &&
+    elementRect.bottom <= containerRect.bottom &&
+    elementRect.left >= containerRect.left &&
+    elementRect.right <= containerRect.right
+  );
+}
 
 // Função global para remover arquivo
-async function removeFile(fileName: string, fetchFiles: (force?: boolean) => void) {
-  if (!window.confirm('Tem certeza que deseja mover este arquivo para a lixeira?')) return;
+async function removeFile(fileName: string, fetchFiles: (force?: boolean, skipLoading?: boolean) => void, onScrollRestore?: (scrollY: number) => void) {
+  // Salvar posição do scroll antes de remover (do container correto)
+  const savedScrollY = getCurrentScrollPosition();
+  
   try {
+    console.log(`🗑️ [removeFile] Iniciando remoção do arquivo: ${fileName}`);
     const response = await fetch(`/api/delete-file?fileName=${encodeURIComponent(fileName)}`, { method: 'DELETE' });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'Erro ao mover arquivo para lixeira');
-    fetchFiles(true);
+    const result = await response.json().catch((parseError) => {
+      console.error('Erro ao fazer parse da resposta:', parseError);
+      throw new Error('Resposta inválida do servidor');
+    });
+    
+    console.log(`🗑️ [removeFile] Resposta da API:`, { ok: response.ok, status: response.status, result });
+    
+    if (!response.ok) {
+      // Se o arquivo já foi removido (404), tratar como sucesso
+      if (response.status === 404 || result.alreadyRemoved) {
+        console.log('✅ [removeFile] Arquivo já foi removido ou não existe mais - atualizando lista');
+        // Atualizar lista mesmo assim para garantir que não apareça
+        if (onScrollRestore) {
+          onScrollRestore(savedScrollY);
+        }
+        // Aguardar um pouco antes de atualizar para garantir que o sistema de arquivos foi atualizado
+        setTimeout(() => {
+          console.log(`🔄 [removeFile] Atualizando lista após remoção já existente`);
+          fetchFiles(true, true);
+        }, 300);
+        return;
+      }
+      
+      const errorMessage = result.error || 'Erro ao mover arquivo para lixeira';
+      const errorDetails = result.details ? ` - ${result.details}` : '';
+      console.error('❌ [removeFile] Erro ao remover arquivo:', errorMessage + errorDetails);
+      throw new Error(errorMessage + errorDetails);
+    }
+    
+    // Se a resposta indica que o arquivo já foi removido, tratar como sucesso
+    if (result.alreadyRemoved || result.message?.includes('já foi removido')) {
+      console.log('✅ [removeFile] Arquivo já foi removido anteriormente');
+    } else {
+      console.log('✅ [removeFile] Arquivo removido com sucesso do servidor');
+    }
+    
+    // Chamar callback para restaurar scroll após loading
+    if (onScrollRestore) {
+      onScrollRestore(savedScrollY);
+    }
+    
+    // Aguardar um pouco antes de atualizar para garantir que o arquivo foi renomeado no servidor
+    // Aumentar o delay para garantir que o sistema de arquivos foi atualizado
+    setTimeout(() => {
+      console.log(`🔄 [removeFile] Atualizando lista após remoção bem-sucedida (aguardando sistema de arquivos)`);
+      fetchFiles(true, true);
+    }, 300);
   } catch (err: any) {
-    alert(err.message || 'Erro ao mover arquivo para lixeira.');
-    fetchFiles(true); // Atualiza a lista mesmo em caso de erro
+    console.error('❌ [removeFile] Erro ao remover arquivo:', err);
+    // Mostrar erro mais detalhado no console para debug
+    if (err.message) {
+      console.error('Detalhes do erro:', err.message);
+    }
+    // Não mostrar alert, apenas logar o erro
+    // Atualizar lista mesmo em caso de erro, sem loading
+    setTimeout(() => {
+      console.log(`🔄 [removeFile] Atualizando lista após erro na remoção`);
+      fetchFiles(true, true);
+    }, 100);
   }
 }
 
@@ -124,7 +228,13 @@ const DynamicFileItem = memo(({
   onUpdate,
   onEdit,
   fetchFiles,
-  isLoading
+  handleRemoveFile,
+  onDownloadAlbum,
+  onRemoveAlbum,
+  files,
+  isLoading,
+  isAdding,
+  isRemoving
 }: { 
   file: FileInfo; 
   isPlaying: boolean; 
@@ -134,8 +244,14 @@ const DynamicFileItem = memo(({
   dominantColors: { [fileName: string]: { rgb: string; rgba: (opacity: number) => string } };
   onUpdate: (fileName: string, status: string) => void;
   onEdit: (file: any) => void;
-  fetchFiles: (force?: boolean) => void;
+  fetchFiles: (force?: boolean, skipLoading?: boolean) => void;
+  handleRemoveFile: (fileName: string) => Promise<void>;
+  onDownloadAlbum?: (file: FileInfo) => void;
+  onRemoveAlbum?: (file: FileInfo) => Promise<void>;
+  files?: FileInfo[];
   isLoading: boolean;
+  isAdding?: boolean;
+  isRemoving?: boolean;
 }) => {
   const [itemColor, setItemColor] = useState<{ rgb: string; rgba: (opacity: number) => string }>({
     rgb: '16, 185, 129',
@@ -213,8 +329,12 @@ const DynamicFileItem = memo(({
 
       return (
       <div
-        className="backdrop-blur-md rounded-xl overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-xl group flex flex-col sm:flex-row mt-3 mb-3 border border-white/10"
-        onClick={handlePlay}
+        className={`backdrop-blur-md rounded-xl overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-xl group flex flex-col sm:flex-row mt-3 mb-3 border border-white/10 ${
+          isAdding ? 'animate-slide-in-scale' : ''
+        } ${
+          isRemoving ? 'animate-fade-out pointer-events-none' : ''
+        }`}
+        onClick={() => !isRemoving && handlePlay()}
         data-file-name={file.name}
         style={{
           borderColor: itemColor.rgba(isPlaying ? 0.4 : 0.15),
@@ -244,6 +364,7 @@ const DynamicFileItem = memo(({
           width={132.5}
           height={132.5}
           className="object-cover w-full h-full bg-zinc-800"
+          style={{ width: '100%', height: '100%' }}
         />
         {isPlaying && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -262,11 +383,33 @@ const DynamicFileItem = memo(({
           </div>
         )}
         
-        {/* Indicador de metadados completos */}
-        {isComplete && (
-          <div className="absolute top-2 right-2 w-5 h-5 bg-green-500 rounded-full border border-black flex items-center justify-center">
-            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+        {/* Indicador de metadados completos - Beatport */}
+        {file.isBeatportFormat && (
+          <div 
+            className="absolute top-2 right-2 rounded-full border-2 border-black flex items-center justify-center z-10 shadow-lg"
+            style={{ 
+              width: '24px', 
+              height: '24px', 
+              backgroundColor: '#22c55e',
+              minWidth: '24px',
+              minHeight: '24px'
+            }}
+          >
+            <svg 
+              className="w-4 h-4 text-white" 
+              fill="currentColor" 
+              viewBox="0 0 20 20"
+              style={{ 
+                display: 'block',
+                flexShrink: 0,
+                color: '#ffffff'
+              }}
+            >
+              <path 
+                fillRule="evenodd" 
+                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" 
+                clipRule="evenodd"
+              />
             </svg>
           </div>
         )}
@@ -310,12 +453,48 @@ const DynamicFileItem = memo(({
             </div>
           </div>
           
-          <div className="flex-shrink-0">
+          <div className="flex-shrink-0 flex items-center gap-2">
+            <StarButton file={file} size="md" />
+            {/* Botão YouTube Music */}
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
+                const youtubeMusicUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
+                window.open(youtubeMusicUrl, '_blank', 'noopener,noreferrer');
+              }}
+              className="w-8 h-8 rounded-lg hover:bg-red-500/10 transition-colors text-zinc-400 hover:text-red-400 flex items-center justify-center border border-transparent hover:border-red-500/20"
+              title={`Abrir "${file.title || file.displayName}" no YouTube Music`}
+              type="button"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+              </svg>
+            </button>
+            {/* Botão Beatport */}
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
+                const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
+                window.open(beatportUrl, '_blank', 'noopener,noreferrer');
+              }}
+              className="w-8 h-8 rounded-lg hover:bg-emerald-500/10 transition-colors text-zinc-400 hover:text-emerald-400 flex items-center justify-center border border-transparent hover:border-emerald-500/20 font-bold"
+              title={`Abrir "${file.title || file.displayName}" no Beatport`}
+              type="button"
+            >
+              <span className="text-sm font-extrabold">B</span>
+            </button>
             <ActionMenu 
               file={file} 
               onUpdate={onUpdate} 
               onEdit={onEdit} 
-              fetchFiles={fetchFiles} 
+              onRemove={handleRemoveFile}
+              onDownloadAlbum={onDownloadAlbum}
+              onRemoveAlbum={onRemoveAlbum}
+              files={files}
             />
           </div>
         </div>
@@ -325,7 +504,11 @@ const DynamicFileItem = memo(({
             <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium break-words">
               📀 Álbum: {file.album || 'N/A'}
             </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium break-words">
+            <span className={`px-2 py-1 rounded font-medium break-words ${
+              file.isBeatportFormat 
+                ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 backdrop-blur-sm' 
+                : 'bg-zinc-600/30 text-zinc-300'
+            }`}>
               🏷️ Label: {file.label || 'N/A'}
             </span>
             <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium break-words">
@@ -355,7 +538,7 @@ const DynamicFileItem = memo(({
             
             {/* Indicador de compatibilidade com Beatport */}
             {file.isBeatportFormat && (
-              <span className="bg-orange-500/20 text-orange-200 px-2 py-1 rounded text-xs font-medium border border-orange-400/30 backdrop-blur-sm whitespace-nowrap">
+              <span className="bg-emerald-500/20 text-emerald-200 px-2 py-1 rounded text-xs font-medium border border-emerald-400/30 backdrop-blur-sm whitespace-nowrap">
                 🎛️ Beatport ✓
               </span>
             )}
@@ -396,6 +579,9 @@ export default function FileList() {
     customDownloadsPath,
     setCustomDownloadsPath,
     fetchFiles,
+    recentlyAdded,
+    recentlyRemoved,
+    markAsRemoving,
   } = useFile();
 
   const {
@@ -417,14 +603,177 @@ export default function FileList() {
     setColWidths,
   } = useUI();
 
-  const { play, resume, playerState } = usePlayer();
-  const { queue, updateQueueItem } = useDownload();
+  const { play, resume, pause, stop, playerState } = usePlayer();
+  const { queue, updateQueueItem, addToQueue, addToast } = useDownload();
   const { settings } = useSettings();
   const resizingCol = useRef<number | null>(null);
   const startX = useRef<number>(0);
   const startWidth = useRef<number>(0);
   const audioPlayerRef = useRef<any>(null);
   const lastPlayedFile = useRef<string | null>(null);
+
+  // Função para baixar álbum completo do YouTube Music
+  const handleDownloadAlbum = useCallback(async (file: FileInfo) => {
+    const albumName = file.album;
+    const artistName = file.artist;
+    const trackTitle = file.title || file.displayName;
+    
+    // Se não tiver álbum, tentar buscar usando artista e título
+    if (!albumName) {
+      if (!artistName || !trackTitle) {
+        addToast({ title: '❌ Este arquivo não tem informação suficiente (falta álbum, artista ou título)' });
+        return;
+      }
+      
+      // Tentar buscar álbum usando artista e título
+      addToast({ title: `🔍 Buscando álbum relacionado a "${artistName} - ${trackTitle}" no YouTube Music...` });
+      
+      try {
+        // Primeiro, tentar buscar a música para ver se tem informação de álbum
+        const searchResponse = await fetch(`/api/search-video?q=${encodeURIComponent(`${artistName} - ${trackTitle}`)}&platform=youtube-music`);
+        const searchResult = await searchResponse.json();
+        
+        if (searchResult.error || !searchResult.videoId) {
+          addToast({ title: '❌ Não foi possível encontrar informações da música' });
+          return;
+        }
+        
+        // Tentar buscar álbum usando o artista
+        const albumResponse = await fetch(`/api/search-album?album=${encodeURIComponent(trackTitle)}&artist=${encodeURIComponent(artistName)}`);
+        const albumResult = await albumResponse.json();
+        
+        if (albumResult.error || !albumResult.tracks || albumResult.tracks.length === 0) {
+          addToast({ title: '❌ Não foi possível encontrar um álbum relacionado. Tente adicionar a informação de álbum manualmente.' });
+          return;
+        }
+        
+        // Adicionar todas as faixas à fila de download
+        let addedCount = 0;
+        const totalTracks = albumResult.tracks.length;
+        
+        addToast({ title: `📥 Encontradas ${totalTracks} faixa${totalTracks !== 1 ? 's' : ''}. Adicionando à fila...` });
+        
+        for (const track of albumResult.tracks) {
+          addToQueue({
+            url: track.url,
+            title: track.title,
+            format: 'flac',
+            enrichWithBeatport: true,
+            showBeatportPage: false,
+            albumName: trackTitle, // Usar título da música como nome do álbum agrupado
+            albumArtist: artistName,
+            status: 'pending' as const,
+            steps: []
+          });
+          addedCount++;
+          
+          // Atualizar toast a cada 5 faixas adicionadas
+          if (addedCount % 5 === 0 || addedCount === totalTracks) {
+            addToast({ 
+              title: `📥 Adicionando faixas... (${addedCount}/${totalTracks})` 
+            });
+          }
+        }
+
+        addToast({ 
+          title: `✅ ${addedCount} faixa${addedCount !== 1 ? 's' : ''} relacionada${addedCount !== 1 ? 's' : ''} adicionada${addedCount !== 1 ? 's' : ''} à fila de download` 
+        });
+        return;
+      } catch (err: any) {
+        console.error('Erro ao buscar álbum relacionado:', err);
+        addToast({ title: `❌ Erro ao buscar álbum: ${err.message || 'Erro desconhecido'}` });
+        return;
+      }
+    }
+
+    // Toast inicial de busca
+    const searchToastId = `search-${Date.now()}`;
+    addToast({ title: `🔍 Buscando álbum "${albumName}"${artistName ? ` por ${artistName}` : ''} no YouTube Music...` });
+
+    try {
+      // Atualizar toast durante a busca
+      const updateSearchToast = (message: string) => {
+        // Remover toast anterior e adicionar novo
+        addToast({ title: `🔍 ${message}` });
+      };
+
+      updateSearchToast(`Buscando faixas do álbum "${albumName}"...`);
+      
+      const response = await fetch(`/api/search-album?album=${encodeURIComponent(albumName)}${artistName ? `&artist=${encodeURIComponent(artistName)}` : ''}`);
+      const result = await response.json().catch((parseError) => {
+        console.error('Erro ao fazer parse da resposta:', parseError);
+        return { error: 'Resposta inválida do servidor' };
+      });
+
+      if (result.error) {
+        addToast({ title: `❌ Erro ao buscar álbum: ${result.error}` });
+        return;
+      }
+
+      // Se encontrou uma playlist URL, baixar a playlist diretamente (mais eficiente)
+      if (result.playlistUrl) {
+        addToast({ title: `🎵 Playlist encontrada! Adicionando à fila de download...` });
+        
+        addToQueue({
+          url: result.playlistUrl,
+          title: `${albumName}${artistName ? ` - ${artistName}` : ''}`,
+          format: 'flac',
+          enrichWithBeatport: true,
+          showBeatportPage: false,
+          isPlaylist: true,
+          albumName: albumName,
+          albumArtist: artistName,
+          status: 'pending' as const,
+          steps: []
+        });
+
+        addToast({ 
+          title: `✅ Playlist do álbum "${albumName}" adicionada à fila de download` 
+        });
+        return;
+      }
+
+      if (!result.tracks || result.tracks.length === 0) {
+        addToast({ title: `❌ Nenhuma faixa do álbum "${albumName}" encontrada` });
+        return;
+      }
+
+      // Se não encontrou playlist, adicionar todas as faixas individualmente
+      addToast({ title: `📥 Encontradas ${result.tracks.length} faixa${result.tracks.length !== 1 ? 's' : ''}. Adicionando à fila...` });
+      
+      let addedCount = 0;
+      const totalTracks = result.tracks.length;
+      
+      for (const track of result.tracks) {
+        addToQueue({
+          url: track.url,
+          title: track.title,
+          format: 'flac',
+          enrichWithBeatport: true,
+          showBeatportPage: false,
+          albumName: albumName,
+          albumArtist: artistName || result.artist || undefined,
+          status: 'pending' as const,
+          steps: []
+        });
+        addedCount++;
+        
+        // Atualizar toast a cada 5 faixas adicionadas
+        if (addedCount % 5 === 0 || addedCount === totalTracks) {
+          addToast({ 
+            title: `📥 Adicionando faixas... (${addedCount}/${totalTracks})` 
+          });
+        }
+      }
+
+      addToast({ 
+        title: `✅ ${addedCount} faixa${addedCount !== 1 ? 's' : ''} do álbum "${albumName}" adicionada${addedCount !== 1 ? 's' : ''} à fila de download` 
+      });
+    } catch (err: any) {
+      console.error('Erro ao baixar álbum:', err);
+      addToast({ title: `❌ Erro ao baixar álbum: ${err.message || 'Erro desconhecido'}` });
+    }
+  }, [addToQueue, addToast]);
 
   // Debounce para evitar múltiplas chamadas consecutivas
   const fetchFilesDebounced = useRef<NodeJS.Timeout | null>(null);
@@ -438,9 +787,12 @@ export default function FileList() {
   // Ref para controlar o scroll automático
   const shouldScrollToPlaying = useRef<boolean>(false);
   const previousLoadingState = useRef<boolean>(false);
+  const savedScrollPosition = useRef<number | null>(null);
+  const shouldRestoreScroll = useRef<boolean>(false);
+  const previousFilesCount = useRef<number>(0);
 
   useEffect(() => {
-    const savedPath = localStorage.getItem('customDownloadsPath');
+    const savedPath = safeGetItem<string>('customDownloadsPath');
     if (savedPath) {
       setCustomDownloadsPath(savedPath);
     }
@@ -459,14 +811,41 @@ export default function FileList() {
     };
   }, [fetchFiles, setCustomDownloadsPath, setShowQueue]);
 
-  // Detectar quando o loading termina e rolar para a música tocando
+  // Detectar quando o loading termina e restaurar scroll ou rolar para a música tocando
   useEffect(() => {
     // Se estava loading e agora não está mais (loading acabou)
     if (previousLoadingState.current && !loading) {
-      shouldScrollToPlaying.current = true;
+      // Se há uma posição de scroll salva para restaurar (após remoção)
+      if (shouldRestoreScroll.current && savedScrollPosition.current !== null) {
+        // Aguardar para garantir que o DOM foi completamente atualizado
+        // Usar múltiplos requestAnimationFrame para garantir que a renderização terminou
+        const restoreTimeout = setTimeout(() => {
+          // Verificar se ainda há arquivos na lista e se ainda precisamos restaurar
+          if (files.length > 0 && shouldRestoreScroll.current && savedScrollPosition.current !== null) {
+            // Forçar restauração do scroll (no container correto)
+            restoreScrollPosition(savedScrollPosition.current);
+            // Tentar novamente após um pequeno delay para garantir
+            setTimeout(() => {
+              if (shouldRestoreScroll.current && savedScrollPosition.current !== null) {
+                restoreScrollPosition(savedScrollPosition.current);
+              }
+              savedScrollPosition.current = null;
+              shouldRestoreScroll.current = false;
+            }, 50);
+          } else {
+            savedScrollPosition.current = null;
+            shouldRestoreScroll.current = false;
+          }
+        }, 400);
+        
+        return () => clearTimeout(restoreTimeout);
+      } else {
+        // Caso contrário, rolar para a música tocando
+        shouldScrollToPlaying.current = true;
+      }
     }
     previousLoadingState.current = loading;
-  }, [loading]);
+  }, [loading, files.length]);
 
   // Scroll automático para a música tocando após o loading
   useEffect(() => {
@@ -479,19 +858,55 @@ export default function FileList() {
         const playingElement = document.querySelector(`[data-file-name="${CSS.escape(currentFileName)}"]`);
         
         if (playingElement) {
-          // Verificar se o elemento está visível na tela
-          const rect = playingElement.getBoundingClientRect();
-          const isVisible = rect.top >= 0 && rect.bottom <= window.innerHeight;
+          const element = playingElement as HTMLElement;
+          // Verificar se o elemento está visível no container scrollável
+          const isVisible = isElementVisibleInContainer(element);
           
           // Só fazer scroll se não estiver visível
           if (!isVisible) {
-            playingElement.scrollIntoView({
-              behavior: 'smooth',
-              block: 'center',
-              inline: 'nearest'
-            });
-            
-            // Scroll automático para a música tocando
+            const container = getScrollContainer();
+            if (container) {
+              // Calcular posição relativa ao container
+              const containerRect = container.getBoundingClientRect();
+              const elementRect = element.getBoundingClientRect();
+              
+              // Calcular a posição absoluta do elemento dentro do container
+              let elementTopInContainer: number;
+              if (elementRect.top < containerRect.top || elementRect.bottom > containerRect.bottom) {
+                // Elemento está fora da viewport, calcular usando offsetTop
+                let offsetTop = 0;
+                let parent = element.offsetParent as HTMLElement | null;
+                while (parent && parent !== container) {
+                  offsetTop += parent.offsetTop;
+                  parent = parent.offsetParent as HTMLElement | null;
+                }
+                offsetTop += element.offsetTop;
+                elementTopInContainer = offsetTop;
+              } else {
+                // Elemento está visível, usar cálculo relativo
+                elementTopInContainer = elementRect.top - containerRect.top + container.scrollTop;
+              }
+              
+              const elementHeight = element.offsetHeight || elementRect.height || 200;
+              const containerHeight = container.clientHeight;
+              const centerOffset = containerHeight / 2;
+              
+              const targetScroll = elementTopInContainer - centerOffset + (elementHeight / 2);
+              const maxScroll = container.scrollHeight - containerHeight;
+              const finalScroll = Math.max(0, Math.min(targetScroll, maxScroll));
+              
+              container.scrollTo({
+                top: finalScroll,
+                behavior: 'smooth'
+              });
+            } else {
+              // Fallback para scrollIntoView padrão
+              element.scrollIntoView({
+                behavior: 'smooth',
+                block: 'center',
+                inline: 'nearest'
+              });
+            }
           }
         }
         
@@ -511,18 +926,55 @@ export default function FileList() {
         const playingElement = document.querySelector(`[data-file-name="${CSS.escape(currentFileName)}"]`);
         
         if (playingElement) {
-          const rect = playingElement.getBoundingClientRect();
-          const isVisible = rect.top >= 0 && rect.bottom <= window.innerHeight;
+          const element = playingElement as HTMLElement;
+          // Verificar se o elemento está visível no container scrollável
+          const isVisible = isElementVisibleInContainer(element);
           
           // Só fazer scroll se não estiver visível
           if (!isVisible) {
-            playingElement.scrollIntoView({
-              behavior: 'smooth',
-              block: 'center',
-              inline: 'nearest'
-            });
-            
-            // Scroll automático para nova música
+            const container = getScrollContainer();
+            if (container) {
+              // Calcular posição relativa ao container
+              const containerRect = container.getBoundingClientRect();
+              const elementRect = element.getBoundingClientRect();
+              
+              // Calcular a posição absoluta do elemento dentro do container
+              let elementTopInContainer: number;
+              if (elementRect.top < containerRect.top || elementRect.bottom > containerRect.bottom) {
+                // Elemento está fora da viewport, calcular usando offsetTop
+                let offsetTop = 0;
+                let parent = element.offsetParent as HTMLElement | null;
+                while (parent && parent !== container) {
+                  offsetTop += parent.offsetTop;
+                  parent = parent.offsetParent as HTMLElement | null;
+                }
+                offsetTop += element.offsetTop;
+                elementTopInContainer = offsetTop;
+              } else {
+                // Elemento está visível, usar cálculo relativo
+                elementTopInContainer = elementRect.top - containerRect.top + container.scrollTop;
+              }
+              
+              const elementHeight = element.offsetHeight || elementRect.height || 200;
+              const containerHeight = container.clientHeight;
+              const centerOffset = containerHeight / 2;
+              
+              const targetScroll = elementTopInContainer - centerOffset + (elementHeight / 2);
+              const maxScroll = container.scrollHeight - containerHeight;
+              const finalScroll = Math.max(0, Math.min(targetScroll, maxScroll));
+              
+              container.scrollTo({
+                top: finalScroll,
+                behavior: 'smooth'
+              });
+            } else {
+              // Fallback para scrollIntoView padrão
+              element.scrollIntoView({
+                behavior: 'smooth',
+                block: 'center',
+                inline: 'nearest'
+              });
+            }
           }
         }
       }, 100);
@@ -849,25 +1301,49 @@ export default function FileList() {
     try {
       setMetadataStatus({ ...metadataStatus, [fileName]: status });
       
-      // Se é apenas para marcar como loading, não fazer a requisição
+      // Se é apenas para marcar como loading, fazer a requisição de enhance
       if (status === 'loading') {
-        const response = await fetch(`/api/enhanced-metadata`, {
+        // Usar a operação 'enhance' que busca e aplica metadados automaticamente
+        const response = await fetch(`/api/metadata/unified`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            title: file.title || file.displayName,
-            artist: file.artist,
-            useBeatport: true // Assumindo que deve usar Beatport por padrão
+            operation: 'enhance',
+            fileName: fileName,
+            useBeatport: true // Usar Beatport por padrão
           }),
         });
-        const result = await response.json();
+        const result = await response.json().catch((parseError) => {
+          console.error('Erro ao fazer parse da resposta:', parseError);
+          throw new Error('Resposta inválida do servidor');
+        });
         if (!response.ok) throw new Error(result.error || 'Erro desconhecido');
         
-        // Só fazer fetchFiles se realmente houver mudanças significativas
-        // Para updates individuais, é melhor atualizar localmente quando possível
+        // Atualizar status para concluído
         setMetadataStatus({ ...metadataStatus, [fileName]: 'completed' });
         
-        // Agenda uma atualização da lista após um delay, mas só se não houver outras pendentes
+        // Atualizar o arquivo localmente com os novos metadados se disponíveis
+        if (result.metadata) {
+          const updatedFiles = files.map(f => 
+            f.name === fileName 
+              ? { 
+                  ...f, 
+                  title: result.metadata.title || f.title,
+                  artist: result.metadata.artist || f.artist,
+                  album: result.metadata.album || f.album,
+                  genre: result.metadata.genre || f.genre,
+                  label: result.metadata.label || f.label,
+                  bpm: result.metadata.bpm || f.bpm,
+                  key: result.metadata.key || f.key,
+                  ano: result.metadata.year || (f as any).ano,
+                  duration: result.metadata.duration || f.duration,
+                }
+              : f
+          );
+          setFiles(updatedFiles);
+        }
+        
+        // Recarregar a lista após um delay para garantir sincronização
         setTimeout(() => {
           if (!isCurrentlyFetching.current) {
             isCurrentlyFetching.current = true;
@@ -875,7 +1351,7 @@ export default function FileList() {
               isCurrentlyFetching.current = false;
             });
           }
-        }, 2000);
+        }, 1000);
       }
       
     } catch (err: any) {
@@ -887,7 +1363,20 @@ export default function FileList() {
   async function updateAllMetadata() {
     setIsUpdatingAll(true);
     
-    const filesToUpdate = files.filter(f => !f.isBeatportFormat);
+    // Filtrar arquivos que estão fora do padrão Beatport
+    // Padrão Beatport completo precisa ter: Label, BPM e Genre
+    // E também precisa ter confirmação explícita de que veio do Beatport (isBeatportFormat)
+    const filesToUpdate = files.filter(f => {
+      const hasLabel = !!f.label;
+      const hasBpm = !!f.bpm;
+      const hasGenre = !!f.genre;
+      const isBeatportFormat = f.isBeatportFormat === true;
+      
+      // Considerar fora do padrão se:
+      // 1. Faltar qualquer um dos três metadados essenciais (Label, BPM ou Genre)
+      // 2. OU não tiver confirmação explícita de que veio do Beatport
+      return !hasLabel || !hasBpm || !hasGenre || !isBeatportFormat;
+    });
     setUpdateProgress({ current: 0, total: filesToUpdate.length });
 
     // Iniciando atualização de metadados
@@ -900,18 +1389,21 @@ export default function FileList() {
         // Atualizar status para loading
         setMetadataStatus({ ...metadataStatus, [file.name]: 'loading' });
         
-        // Fazer a requisição de metadados
-        const response = await fetch(`/api/enhanced-metadata`, {
+        // Usar a operação 'enhance' que busca e aplica metadados automaticamente
+        const response = await fetch(`/api/metadata/unified`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            title: file.title || file.displayName,
-            artist: file.artist,
+            operation: 'enhance',
+            fileName: file.name,
             useBeatport: true
           }),
         });
         
-        const result = await response.json();
+        const result = await response.json().catch((parseError) => {
+          console.error('Erro ao fazer parse da resposta:', parseError);
+          throw new Error('Resposta inválida do servidor');
+        });
         if (!response.ok) throw new Error(result.error || 'Erro desconhecido');
         
         // Marcar como concluído
@@ -926,6 +1418,53 @@ export default function FileList() {
     // Recarregar tudo apenas no final
     await fetchFiles(true);
     setIsUpdatingAll(false);
+  }
+
+  async function organizeNonNormalizedFiles() {
+    setIsUpdatingAll(true);
+    setUpdateProgress({ current: 0, total: 1 });
+    
+    try {
+      const response = await fetch('/api/organize-non-normalized', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      
+      const result = await response.json().catch((parseError) => {
+        console.error('Erro ao fazer parse da resposta:', parseError);
+        throw new Error('Resposta inválida do servidor');
+      });
+      
+      if (!response.ok) throw new Error(result.error || 'Erro ao organizar arquivos');
+      
+      setUpdateProgress({ current: 1, total: 1 });
+      
+      // Mostrar mensagem de sucesso
+      console.log(`✅ Organização concluída: ${result.moved} arquivos movidos para pasta nao-normalizadas`);
+      
+      // Recarregar lista de arquivos
+      await fetchFiles(true);
+      
+      // Mostrar toast se disponível
+      if (addToast) {
+        addToast({
+          type: 'success',
+          message: `${result.moved} arquivo(s) movido(s) para pasta nao-normalizadas`
+        });
+      }
+      
+    } catch (error: any) {
+      console.error('Erro ao organizar arquivos não normalizados:', error.message);
+      if (addToast) {
+        addToast({
+          type: 'error',
+          message: `Erro ao organizar arquivos: ${error.message}`
+        });
+      }
+    } finally {
+      setIsUpdatingAll(false);
+      setUpdateProgress({ current: 0, total: 0 });
+    }
   }
 
   // Contar apenas downloads em andamento ou na fila
@@ -969,38 +1508,164 @@ export default function FileList() {
   // Ref para rastrear itens já processados
   const processedQueueItems = useRef<Set<string>>(new Set());
 
-  // Sincronizar fila de downloads com arquivos baixados
+  // Ref para debounce de sincronização
+  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Sincronizar fila de downloads com arquivos baixados (com debounce)
   useEffect(() => {
     if (!queue || !files) return;
     
-    queue.forEach(item => {
-      // Evitar processar o mesmo item múltiplas vezes
-      if (processedQueueItems.current.has(item.id)) return;
-      
-      if (files.some(f => f.name === item.title || f.displayName === item.title)) {
-        processedQueueItems.current.add(item.id);
-        updateQueueItem(item.id, { status: 'completed', progress: 100 });
-      }
-    });
+    // Limpar timeout anterior
+    if (syncTimeoutRef.current) {
+      clearTimeout(syncTimeoutRef.current);
+    }
     
-    // Limpar itens processados que não estão mais na fila
-    const currentQueueIds = new Set(queue.map(item => item.id));
-    processedQueueItems.current.forEach(id => {
-      if (!currentQueueIds.has(id)) {
-        processedQueueItems.current.delete(id);
+    // Debounce de 2 segundos para evitar processamento excessivo
+    syncTimeoutRef.current = setTimeout(() => {
+      queue.forEach(item => {
+        // Evitar processar o mesmo item múltiplas vezes
+        if (processedQueueItems.current.has(item.id)) return;
+        
+        // Só processar se ainda estiver pendente ou baixando
+        if (item.status !== 'pending' && item.status !== 'downloading') return;
+        
+        if (files.some(f => f.name === item.title || f.displayName === item.title)) {
+          processedQueueItems.current.add(item.id);
+          updateQueueItem(item.id, { status: 'completed', progress: 100 });
+        }
+      });
+      
+      // Limpar itens processados que não estão mais na fila
+      const currentQueueIds = new Set(queue.map(item => item.id));
+      processedQueueItems.current.forEach(id => {
+        if (!currentQueueIds.has(id)) {
+          processedQueueItems.current.delete(id);
+        }
+      });
+    }, 2000);
+    
+    return () => {
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
       }
-    });
+    };
   }, [files, queue, updateQueueItem]);
+
+  // Handler para remover arquivo com preservação de scroll
+  const handleRemoveFile = useCallback(async (fileName: string) => {
+    console.log(`🗑️ [FileList] Iniciando remoção do arquivo: ${fileName}`);
+    
+    // Marcar como removendo imediatamente para iniciar a animação
+    markAsRemoving(fileName);
+    
+    // Verificar se o arquivo sendo removido é o arquivo atual do player
+    const isCurrentPlaying = playerState.currentFile?.name === fileName;
+    
+    // Se for a música que está tocando, primeiro parar e depois mudar para outra
+    if (isCurrentPlaying) {
+      console.log(`⏸️ [FileList] Parando player antes de remover arquivo que está tocando`);
+      // Primeiro, parar completamente o player para liberar o arquivo
+      pause();
+      stop();
+      
+      // Aguardar para garantir que o player pare completamente
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Depois, tentar mudar para outra música
+      const currentIndex = files.findIndex(f => f.name === fileName);
+      if (currentIndex > 0) {
+        // Retroceder para a música anterior
+        const prevFile = files[currentIndex - 1];
+        play(prevFile);
+        // Aguardar um pouco para a nova música começar a carregar
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } else if (currentIndex >= 0 && currentIndex < files.length - 1) {
+        // Se não houver anterior, avançar para a próxima
+        const nextFile = files[currentIndex + 1];
+        play(nextFile);
+        // Aguardar um pouco para a nova música começar a carregar
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } else {
+        // Se não houver outras músicas, já paramos acima
+        // Aguardar um pouco mais para garantir que tudo foi limpo
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    // Salvar posição do scroll ANTES de fazer qualquer coisa (do container correto)
+    const currentScrollY = getCurrentScrollPosition();
+    savedScrollPosition.current = currentScrollY;
+    shouldRestoreScroll.current = true;
+    
+    const restoreScroll = (scrollY: number) => {
+      // Manter a posição salva (já foi salva acima)
+      savedScrollPosition.current = scrollY;
+      shouldRestoreScroll.current = true;
+    };
+    
+    console.log(`🗑️ [FileList] Chamando removeFile para: ${fileName}`);
+    await removeFile(fileName, fetchFiles, restoreScroll);
+    console.log(`✅ [FileList] removeFile concluído para: ${fileName}`);
+  }, [fetchFiles, playerState.currentFile, files, play, pause, stop, markAsRemoving]);
+
+  // Handler para remover álbum inteiro (se houver mais de uma música do mesmo álbum)
+  const handleRemoveAlbum = useCallback(async (file: FileInfo) => {
+    if (!file.album) {
+      console.warn('⚠️ [FileList] Arquivo não tem informação de álbum');
+      return;
+    }
+
+    // Encontrar todas as músicas do mesmo álbum
+    const albumTracks = files.filter(f => f.album && f.album.toLowerCase().trim() === file.album.toLowerCase().trim());
+    
+    if (albumTracks.length <= 1) {
+      console.log(`ℹ️ [FileList] Apenas uma música do álbum "${file.album}", removendo apenas esta música`);
+      await handleRemoveFile(file.name);
+      return;
+    }
+
+    console.log(`🗑️ [FileList] Removendo álbum inteiro: "${file.album}" (${albumTracks.length} músicas)`);
+    
+    // Parar o player se alguma música do álbum estiver tocando
+    const isAnyPlaying = albumTracks.some(track => playerState.currentFile?.name === track.name);
+    if (isAnyPlaying) {
+      pause();
+      stop();
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    // Salvar posição do scroll (do container correto)
+    const currentScrollY = getCurrentScrollPosition();
+    savedScrollPosition.current = currentScrollY;
+    shouldRestoreScroll.current = true;
+    
+    const restoreScroll = (scrollY: number) => {
+      savedScrollPosition.current = scrollY;
+      shouldRestoreScroll.current = true;
+    };
+
+    // Remover todas as músicas do álbum sequencialmente
+    for (const track of albumTracks) {
+      markAsRemoving(track.name);
+      console.log(`🗑️ [FileList] Removendo música do álbum: ${track.name}`);
+      await removeFile(track.name, fetchFiles, restoreScroll);
+      // Pequeno delay entre remoções para não sobrecarregar
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+
+    console.log(`✅ [FileList] Álbum "${file.album}" removido com sucesso`);
+  }, [files, handleRemoveFile, playerState.currentFile, pause, stop, markAsRemoving, fetchFiles]);
 
   // Handlers memoizados
   const handlePlay = useCallback((file: FileInfo) => {
     // Proteção contra chamadas duplicadas rapidamente (usando timestamp)
     const now = Date.now();
-    const lastPlayTime = parseInt(localStorage.getItem('lastPlayTime') || '0');
+    const lastPlayTimeStr = safeGetItem<string>('lastPlayTime');
+    const lastPlayTime = parseInt(lastPlayTimeStr || '0');
     if (lastPlayedFile.current === file.name && (now - lastPlayTime) < 500) {
       return;
     }
-    localStorage.setItem('lastPlayTime', now.toString());
+    safeSetItem('lastPlayTime', now.toString(), { maxSize: 1024 });
     
     // Se é a mesma música já carregada, apenas resumir sem zerar progresso
     if (playerState.currentFile?.name === file.name) {
@@ -1014,6 +1679,68 @@ export default function FileList() {
     }
     
     setPlayerOpen(true);
+    
+    // Fazer scroll para a música clicada após um pequeno delay
+    // Usar múltiplas tentativas para garantir que o elemento está renderizado
+    const scrollToElement = (attempt = 0) => {
+      const playingElement = document.querySelector(`[data-file-name="${CSS.escape(file.name)}"]`) as HTMLElement;
+      if (playingElement) {
+        const container = getScrollContainer();
+        if (container) {
+          // Calcular posição relativa ao container
+          const containerRect = container.getBoundingClientRect();
+          const elementRect = playingElement.getBoundingClientRect();
+          
+          // Calcular a posição absoluta do elemento dentro do container
+          let elementTopInContainer: number;
+          if (elementRect.top < containerRect.top || elementRect.bottom > containerRect.bottom) {
+            // Elemento está fora da viewport, calcular usando offsetTop
+            let offsetTop = 0;
+            let parent = playingElement.offsetParent as HTMLElement | null;
+            while (parent && parent !== container) {
+              offsetTop += parent.offsetTop;
+              parent = parent.offsetParent as HTMLElement | null;
+            }
+            offsetTop += playingElement.offsetTop;
+            elementTopInContainer = offsetTop;
+          } else {
+            // Elemento está visível, usar cálculo relativo
+            elementTopInContainer = elementRect.top - containerRect.top + container.scrollTop;
+          }
+          
+          const elementHeight = playingElement.offsetHeight || elementRect.height || 200;
+          const containerHeight = container.clientHeight;
+          const centerOffset = containerHeight / 2;
+          
+          const targetScroll = elementTopInContainer - centerOffset + (elementHeight / 2);
+          const maxScroll = container.scrollHeight - containerHeight;
+          const finalScroll = Math.max(0, Math.min(targetScroll, maxScroll));
+          
+          container.scrollTo({
+            top: finalScroll,
+            behavior: 'smooth'
+          });
+        } else {
+          // Fallback para scrollIntoView padrão
+          playingElement.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center',
+            inline: 'nearest'
+          });
+        }
+        return true;
+      }
+      return false;
+    };
+    
+    // Tentar fazer scroll imediatamente e depois com delays
+    if (!scrollToElement(0)) {
+      setTimeout(() => {
+        if (!scrollToElement(1)) {
+          setTimeout(() => scrollToElement(2), 200);
+        }
+      }, 100);
+    }
   }, [play, resume, setPlayerOpen, playerState.currentFile, playerState.isPlaying]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, file: FileInfo) => {
@@ -1074,7 +1801,7 @@ export default function FileList() {
             });
 
             if (!response.ok) {
-              const errorResult = await response.json();
+              const errorResult = await response.json().catch(() => ({ error: 'Falha ao atualizar metadados do álbum.' }));
               throw new Error(errorResult.error || 'Falha ao atualizar metadados do álbum.');
             }
             updatedCount++;
@@ -1143,7 +1870,7 @@ export default function FileList() {
         });
 
         if (!response.ok) {
-          const errorResult = await response.json();
+          const errorResult = await response.json().catch(() => ({ error: 'Falha ao atualizar metadados.' }));
           throw new Error(errorResult.error || 'Falha ao atualizar metadados.');
         }
 
@@ -1186,7 +1913,10 @@ export default function FileList() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ album: albumName }),
       });
-      const result = await response.json();
+      const result = await response.json().catch((parseError) => {
+        console.error('Erro ao fazer parse da resposta:', parseError);
+        return { error: 'Resposta inválida do servidor' };
+      });
       if (!response.ok || result.error) {
         setReleaseModal({ album: albumName, tracks: [], metadata: {}, loading: false, error: result.error || 'Erro desconhecido' });
         return;
@@ -1318,6 +2048,91 @@ export default function FileList() {
                  {Object.values(groupedFiles).flat().length} {Object.values(groupedFiles).flat().length === 1 ? 'música' : 'músicas'}
                </span>
              </div>
+
+            {/* Botão para atualizar arquivos fora do padrão Beatport */}
+            {(() => {
+              // Considerar fora do padrão Beatport se faltar metadados essenciais
+              // Padrão Beatport completo precisa ter: Label, BPM e Genre
+              // E também precisa ter confirmação explícita de que veio do Beatport (isBeatportFormat)
+              const filesNotBeatport = files.filter(f => {
+                const hasLabel = !!f.label;
+                const hasBpm = !!f.bpm;
+                const hasGenre = !!f.genre;
+                const isBeatportFormat = f.isBeatportFormat === true;
+                
+                // Considerar fora do padrão se:
+                // 1. Faltar qualquer um dos três metadados essenciais (Label, BPM ou Genre)
+                // 2. OU não tiver confirmação explícita de que veio do Beatport
+                return !hasLabel || !hasBpm || !hasGenre || !isBeatportFormat;
+              });
+              const count = filesNotBeatport.length;
+              
+              return count > 0 ? (
+                <>
+                  <button
+                    onClick={updateAllMetadata}
+                    disabled={isUpdatingAll}
+                    className={`flex items-center gap-2 rounded-xl text-xs font-medium px-3 py-2 backdrop-blur-sm border transition-all duration-200 ${
+                      isUpdatingAll
+                        ? 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30 cursor-not-allowed'
+                        : 'bg-orange-500/20 text-orange-300 border-orange-500/30 hover:bg-orange-500/30 hover:border-orange-500/50 cursor-pointer'
+                    }`}
+                    style={{
+                      boxShadow: isUpdatingAll 
+                        ? '0 4px 12px rgba(234, 179, 8, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                        : '0 4px 12px rgba(249, 115, 22, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                    }}
+                  >
+                    {isUpdatingAll ? (
+                      <>
+                        <LoadingSpinner size="sm" color="yellow" isLoading={true} />
+                        <span>
+                          Atualizando Beatport ({updateProgress.current}/{updateProgress.total})
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        <span>
+                          {count} {count === 1 ? 'fora do padrão Beatport' : 'fora do padrão Beatport'}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={organizeNonNormalizedFiles}
+                    disabled={isUpdatingAll}
+                    className={`flex items-center gap-2 rounded-xl text-xs font-medium px-3 py-2 backdrop-blur-sm border transition-all duration-200 ${
+                      isUpdatingAll
+                        ? 'bg-blue-500/20 text-blue-300 border-blue-500/30 cursor-not-allowed'
+                        : 'bg-blue-500/20 text-blue-300 border-blue-500/30 hover:bg-blue-500/30 hover:border-blue-500/50 cursor-pointer'
+                    }`}
+                    style={{
+                      boxShadow: isUpdatingAll 
+                        ? '0 4px 12px rgba(59, 130, 246, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                        : '0 4px 12px rgba(59, 130, 246, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+                    }}
+                    title="Mover arquivos não normalizados pelo Beatport para pasta separada"
+                  >
+                    {isUpdatingAll ? (
+                      <>
+                        <LoadingSpinner size="sm" color="blue" isLoading={true} />
+                        <span>Organizando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                        </svg>
+                        <span>Organizar não normalizados</span>
+                      </>
+                    )}
+                  </button>
+                </>
+              ) : null;
+            })()}
           </div>
         </div>
 
@@ -1349,21 +2164,36 @@ export default function FileList() {
               )}
               
                             {/* Arquivos do grupo */}
-              {groupFiles.map((file, index) => (
+              {groupFiles.map((file, index) => {
+                const isAdding = recentlyAdded.includes(file.name);
+                const isRemoving = recentlyRemoved.includes(file.name);
+                
+                // Log para debug (remover depois se necessário)
+                if (isAdding || isRemoving) {
+                  console.log(`🎬 [FileList Mobile] Arquivo ${file.name}: isAdding=${isAdding}, isRemoving=${isRemoving}`);
+                }
+                
+                return (
                 <div
                   key={file.name}
                   data-file-name={file.name}
-                  className={`glass-card backdrop-blur-sm border border-emerald-500/20 hover:border-emerald-500/40 rounded-lg p-2 transition-all duration-300 cursor-pointer hover:shadow-lg hover:shadow-emerald-500/20 h-[50px] flex items-center ${
+                  className={`glass-card backdrop-blur-sm border border-emerald-500/20 hover:border-emerald-500/40 rounded-lg p-2 transition-all duration-300 hover:shadow-lg hover:shadow-emerald-500/20 h-[50px] flex items-center ${
                     playerState.currentFile?.name === file.name ? 'border-emerald-500/60 bg-emerald-500/10' : ''
+                  } ${
+                    isAdding ? 'animate-slide-in-scale' : ''
+                  } ${
+                    isRemoving ? 'animate-fade-out pointer-events-none' : 'cursor-pointer'
                   }`}
-                  onClick={() => handlePlay(file)}
+                  onClick={() => !isRemoving && handlePlay(file)}
                   style={{
                     background: `linear-gradient(135deg, 
                       rgba(16, 185, 129, 0.05) 0%, 
                       rgba(5, 150, 105, 0.08) 40%, 
                       rgba(16, 185, 129, 0.03) 100%
                     )`,
-                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                    boxShadow: isAdding 
+                      ? '0 4px 20px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)' 
+                      : '0 4px 12px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
                   }}
                 >
                   <div className="flex items-center gap-3 w-full">
@@ -1420,17 +2250,54 @@ export default function FileList() {
                       )}
                     </div>
 
-                    <div className="flex-shrink-0 ml-2">
+                    <div className="flex-shrink-0 ml-2 flex items-center gap-2">
+                      <StarButton file={file} size="sm" />
+                      {/* Botão YouTube Music */}
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
+                          const youtubeMusicUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
+                          window.open(youtubeMusicUrl, '_blank', 'noopener,noreferrer');
+                        }}
+                        className="w-7 h-7 rounded-lg hover:bg-red-500/10 transition-colors text-zinc-400 hover:text-red-400 flex items-center justify-center border border-transparent hover:border-red-500/20"
+                        title={`Abrir "${file.title || file.displayName}" no YouTube Music`}
+                        type="button"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                        </svg>
+                      </button>
+                      {/* Botão Beatport */}
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
+                          const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
+                          window.open(beatportUrl, '_blank', 'noopener,noreferrer');
+                        }}
+                        className="w-7 h-7 rounded-lg hover:bg-emerald-500/10 transition-colors text-zinc-400 hover:text-emerald-400 flex items-center justify-center border border-transparent hover:border-emerald-500/20 font-bold"
+                        title={`Abrir "${file.title || file.displayName}" no Beatport`}
+                        type="button"
+                      >
+                        <span className="text-xs font-extrabold">B</span>
+                      </button>
                       <MobileActionMenu 
                         file={file}
                         onUpdate={updateMetadataForFile}
                         onEdit={setEditModalFile}
-                        fetchFiles={fetchFiles}
+                        onRemove={handleRemoveFile}
+                        onDownloadAlbum={handleDownloadAlbum}
+                        onRemoveAlbum={handleRemoveAlbum}
+                        files={files}
                       />
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           ))
         )}
@@ -1464,22 +2331,37 @@ export default function FileList() {
               )}
               
               {/* Arquivos do grupo */}
-              {groupFiles.map((file, index) => (
-                <div key={file.name} data-file-name={file.name}>
-                  <DynamicFileItem 
-                    file={file}
-                    isPlaying={playerState.currentFile?.name === file.name}
-                    isPlayerPlaying={playerState.isPlaying}
-                    onPlay={() => handlePlay(file)}
-                    extractDominantColor={extractDominantColor}
-                    dominantColors={dominantColors}
-                    onUpdate={updateMetadataForFile}
-                    onEdit={setEditModalFile}
-                    fetchFiles={fetchFiles}
-                    isLoading={playerState.isLoading}
-                  />
-                </div>
-              ))}
+              {groupFiles.map((file, index) => {
+                const isAdding = recentlyAdded.includes(file.name);
+                const isRemoving = recentlyRemoved.includes(file.name);
+                
+                // Log para debug (remover depois se necessário)
+                if (isAdding || isRemoving) {
+                  console.log(`🎬 [FileList Desktop] Arquivo ${file.name}: isAdding=${isAdding}, isRemoving=${isRemoving}`);
+                }
+                
+                return (
+                <DynamicFileItem 
+                  key={file.name}
+                  file={file}
+                  isPlaying={playerState.currentFile?.name === file.name}
+                  isPlayerPlaying={playerState.isPlaying}
+                  onPlay={() => handlePlay(file)}
+                  extractDominantColor={extractDominantColor}
+                  dominantColors={dominantColors}
+                  onUpdate={updateMetadataForFile}
+                  onEdit={setEditModalFile}
+                  fetchFiles={fetchFiles}
+                  handleRemoveFile={handleRemoveFile}
+                  onDownloadAlbum={handleDownloadAlbum}
+                  onRemoveAlbum={handleRemoveAlbum}
+                  files={files}
+                  isLoading={playerState.isLoading}
+                  isAdding={isAdding}
+                  isRemoving={isRemoving}
+                />
+                );
+              })}
             </div>
           ))
         )}
@@ -2024,7 +2906,7 @@ function EditFileModal({ file, onClose, onSave, isListLoading, isUpdatingAll }: 
                     onClick={() => {
                       const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
                       const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
-                      window.open(beatportUrl, '_blank', 'width=1200,height=800');
+                      window.open(beatportUrl, '_blank', 'noopener,noreferrer');
                     }}
                     className="px-3 py-1 bg-emerald-600 text-white text-xs rounded-md hover:bg-emerald-700 transition-colors"
                   >
@@ -2096,11 +2978,14 @@ function EditFileModal({ file, onClose, onSave, isListLoading, isUpdatingAll }: 
 }
 
 // Menu de ações mobile
-function MobileActionMenu({ file, onUpdate, onEdit, fetchFiles }: { 
+function MobileActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, onRemoveAlbum, files }: { 
   file: any, 
   onUpdate: (fileName: string, status: string) => void, 
   onEdit: (file: any) => void,
-  fetchFiles: (force?: boolean) => void 
+  onRemove: (fileName: string) => Promise<void>,
+  onDownloadAlbum?: (file: any) => void,
+  onRemoveAlbum?: (file: any) => Promise<void>,
+  files?: any[]
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -2165,6 +3050,43 @@ function MobileActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
           >
             ↻ Atualizar Metadados
           </button>
+          {onDownloadAlbum && (
+            <button
+              className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors rounded-md mx-1 ${
+                file.album 
+                  ? 'hover:bg-purple-500/10 text-purple-300' 
+                  : 'hover:bg-purple-500/10 text-purple-300/60 cursor-not-allowed'
+              }`}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (file.album) {
+                  onDownloadAlbum(file);
+                } else {
+                  // Tentar buscar usando artista e título
+                  onDownloadAlbum(file);
+                }
+                setOpen(false);
+              }}
+              title={file.album ? `Baixar álbum "${file.album}"` : 'Este arquivo não tem informação de álbum'}
+            >
+              📀 Baixar Álbum{file.album ? '' : ' (sem álbum)'}
+            </button>
+          )}
+          <button
+            className="w-full text-left px-3 py-2 text-xs hover:bg-cyan-500/10 text-cyan-300 font-medium transition-colors rounded-md mx-1"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
+              const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
+              window.open(beatportUrl, '_blank', 'noopener,noreferrer');
+              setOpen(false);
+            }}
+            title={`Abrir "${file.title || file.displayName}" no Beatport`}
+          >
+            🔗 Abrir no Beatport
+          </button>
           <button
             className="w-full text-left px-3 py-2 text-xs hover:bg-blue-500/10 text-blue-300 font-medium transition-colors rounded-md mx-1"
             onClick={(e) => {
@@ -2176,15 +3098,38 @@ function MobileActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
           >
             ✎ Editar
           </button>
+          {onRemoveAlbum && file.album && files && (() => {
+            const albumTracks = files.filter(f => f.album && f.album.toLowerCase().trim() === file.album.toLowerCase().trim());
+            return albumTracks.length > 1 ? (
+              <button
+                className="w-full text-left px-3 py-2 text-xs hover:bg-orange-500/10 text-orange-300 font-medium transition-colors rounded-md mx-1"
+                onClick={async (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  try {
+                    await onRemoveAlbum(file);
+                  } catch (error) {
+                    console.error('Erro ao remover álbum:', error);
+                  }
+                  setOpen(false);
+                }}
+                title={`Remover álbum "${file.album}" (${albumTracks.length} músicas)`}
+              >
+                🗑️ Remover Álbum ({albumTracks.length})
+              </button>
+            ) : null;
+          })()}
           <button
             className="w-full text-left px-3 py-2 text-xs hover:bg-red-500/10 text-red-300 font-medium transition-colors rounded-md mx-1"
             onClick={async (e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (window.confirm('Remover este arquivo?')) {
-                await removeFile(file.name, fetchFiles);
-                setOpen(false);
+              try {
+                await onRemove(file.name);
+              } catch (error) {
+                console.error('Erro ao remover arquivo:', error);
               }
+              setOpen(false);
             }}
           >
             🗑 Remover
@@ -2196,11 +3141,14 @@ function MobileActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
 }
 
 // Menu de ações para cada linha
-function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: { 
+function ActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, onRemoveAlbum, files }: { 
   file: any, 
   onUpdate: (fileName: string, status: string) => void, 
   onEdit: (file: any) => void,
-  fetchFiles: (force?: boolean) => void 
+  onRemove: (fileName: string) => Promise<void>,
+  onDownloadAlbum?: (file: any) => void,
+  onRemoveAlbum?: (file: any) => Promise<void>,
+  files?: any[]
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -2222,25 +3170,83 @@ function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [open]);
 
-  // Calcular posição do menu
-  useEffect(() => {
-    if (open && buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      setMenuPosition({
-        top: rect.bottom + window.scrollY + 4,
-        left: rect.right + window.scrollX - 160 // 160 = largura aproximada do menu
-      });
+  // Função para calcular e atualizar posição do menu
+  const updateMenuPosition = useCallback(() => {
+    if (!buttonRef.current) return;
+    
+    const rect = buttonRef.current.getBoundingClientRect();
+    const menuWidth = 160; // largura aproximada do menu
+    const menuHeight = 200; // altura aproximada do menu
+    
+    // Calcular posição inicial
+    let left = rect.right - menuWidth;
+    let top = rect.bottom + 4;
+    
+    // Verificar se o menu sai da tela à direita
+    if (left < 0) {
+      left = rect.left;
     }
-  }, [open]);
+    
+    // Verificar se o menu sai da tela à esquerda
+    if (left + menuWidth > window.innerWidth) {
+      left = window.innerWidth - menuWidth - 8;
+    }
+    
+    // Verificar se o menu sai da tela embaixo
+    if (top + menuHeight > window.innerHeight) {
+      // Abrir acima do botão ao invés de abaixo
+      top = rect.top - menuHeight - 4;
+      // Se ainda não couber acima, ajustar para o topo da tela
+      if (top < 0) {
+        top = 8;
+      }
+    }
+    
+    setMenuPosition({
+      top,
+      left
+    });
+  }, []);
+
+  // Calcular posição do menu quando abrir
+  useEffect(() => {
+    if (open) {
+      updateMenuPosition();
+    }
+  }, [open, updateMenuPosition]);
+
+  // Recalcular posição em scroll e resize, e fechar em scroll
+  useEffect(() => {
+    if (!open) return;
+
+    const handleScroll = () => {
+      setOpen(false);
+    };
+
+    const handleResize = () => {
+      updateMenuPosition();
+    };
+
+    window.addEventListener('scroll', handleScroll, true);
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+      window.removeEventListener('scroll', handleScroll, true);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [open, updateMenuPosition]);
 
   const menu = (
     <div
       ref={menuRef}
       className="z-[9999] backdrop-blur-md border border-emerald-500/20 rounded-lg shadow-xl min-w-[140px] py-1.5 animate-fade-in"
+      onClick={(e) => {
+        e.stopPropagation();
+      }}
       style={{ 
-        position: 'absolute', 
-        top: menuPosition.top, 
-        left: menuPosition.left,
+        position: 'fixed', 
+        top: `${menuPosition.top}px`, 
+        left: `${menuPosition.left}px`,
         background: `linear-gradient(135deg, 
           rgba(16, 185, 129, 0.1) 0%, 
           rgba(5, 150, 105, 0.15) 30%, 
@@ -2252,19 +3258,96 @@ function ActionMenu({ file, onUpdate, onEdit, fetchFiles }: {
     >
       <button
         className="w-full text-left px-3 py-2 text-xs hover:bg-emerald-500/10 text-emerald-300 font-medium transition-colors rounded-md mx-1"
-        onClick={() => { onUpdate(file.name, 'loading'); setOpen(false); }}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onUpdate(file.name, 'loading');
+          setOpen(false);
+        }}
       >
         ↻ Atualizar Metadados
       </button>
+      {onDownloadAlbum && (
+        <button
+          className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors rounded-md mx-1 ${
+            file.album 
+              ? 'hover:bg-purple-500/10 text-purple-300' 
+              : 'hover:bg-purple-500/10 text-purple-300/60 cursor-not-allowed'
+          }`}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (file.album) {
+              onDownloadAlbum(file);
+            } else {
+              // Tentar buscar usando artista e título
+              onDownloadAlbum(file);
+            }
+            setOpen(false);
+          }}
+          title={file.album ? `Baixar álbum "${file.album}"` : 'Este arquivo não tem informação de álbum'}
+        >
+          📀 Baixar Álbum{file.album ? '' : ' (sem álbum)'}
+        </button>
+      )}
+      <button
+        className="w-full text-left px-3 py-2 text-xs hover:bg-cyan-500/10 text-cyan-300 font-medium transition-colors rounded-md mx-1"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
+          const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
+          window.open(beatportUrl, '_blank', 'noopener,noreferrer');
+          setOpen(false);
+        }}
+        title={`Abrir "${file.title || file.displayName}" no Beatport`}
+      >
+        🔗 Abrir no Beatport
+      </button>
       <button
         className="w-full text-left px-3 py-2 text-xs hover:bg-blue-500/10 text-blue-300 font-medium transition-colors rounded-md mx-1"
-        onClick={() => { onEdit(file); setOpen(false); }}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onEdit(file);
+          setOpen(false);
+        }}
       >
         ✎ Editar
       </button>
+      {onRemoveAlbum && file.album && files && (() => {
+        const albumTracks = files.filter(f => f.album && f.album.toLowerCase().trim() === file.album.toLowerCase().trim());
+        return albumTracks.length > 1 ? (
+          <button
+            className="w-full text-left px-3 py-2 text-xs hover:bg-orange-500/10 text-orange-300 font-medium transition-colors rounded-md mx-1"
+            onClick={async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              try {
+                await onRemoveAlbum(file);
+              } catch (error) {
+                console.error('Erro ao remover álbum:', error);
+              }
+              setOpen(false);
+            }}
+            title={`Remover álbum "${file.album}" (${albumTracks.length} músicas)`}
+          >
+            🗑️ Remover Álbum ({albumTracks.length})
+          </button>
+        ) : null;
+      })()}
       <button
         className="w-full text-left px-3 py-2 text-xs hover:bg-red-500/10 text-red-300 font-medium transition-colors rounded-md mx-1"
-        onClick={async () => { if (window.confirm('Remover este arquivo?')) { await removeFile(file.name, fetchFiles); setOpen(false); } }}
+        onClick={async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          try {
+            await onRemove(file.name);
+          } catch (error) {
+            console.error('Erro ao remover arquivo:', error);
+          }
+          setOpen(false);
+        }}
       >
         🗑 Remover
       </button>

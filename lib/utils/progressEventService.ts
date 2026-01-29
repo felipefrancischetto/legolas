@@ -17,6 +17,11 @@ export function unregisterProgressStream(downloadId: string) {
   console.log(`🔌 Stream removido para downloadId: ${downloadId}`);
 }
 
+// Função para verificar se um stream ainda está ativo
+export function isStreamActive(downloadId: string): boolean {
+  return activeStreams.has(downloadId);
+}
+
 // Função para enviar eventos de progresso
 export function sendProgressEvent(downloadId: string, data: {
   type: string;
@@ -40,10 +45,38 @@ export function sendProgressEvent(downloadId: string, data: {
     // Remover do cache de não encontrados se estava lá
     notFoundCache.delete(cleanDownloadId);
     
+    // Limitar tamanho de metadata para evitar mensagens muito grandes
+    let sanitizedData = { ...data };
+    if (sanitizedData.metadata) {
+      // Se metadata for muito grande, limitar ou remover campos grandes
+      const metadataStr = JSON.stringify(sanitizedData.metadata);
+      if (metadataStr.length > 100000) { // ~100KB
+        console.warn(`⚠️  Metadata muito grande (${metadataStr.length} bytes), limitando tamanho`);
+        // Manter apenas campos essenciais
+        sanitizedData.metadata = {
+          title: sanitizedData.metadata.title,
+          artist: sanitizedData.metadata.artist,
+          // Remover campos grandes como imagens, dados binários, etc
+        };
+      }
+    }
+    
+    // Limitar tamanho de detail também
+    if (sanitizedData.detail && sanitizedData.detail.length > 10000) {
+      sanitizedData.detail = sanitizedData.detail.substring(0, 10000) + '... (truncado)';
+    }
+    
     const eventData = `data: ${JSON.stringify({
-      ...data,
+      ...sanitizedData,
       timestamp: new Date().toISOString()
     })}\n\n`;
+    
+    // Verificar tamanho total da mensagem antes de enviar
+    const messageSize = new TextEncoder().encode(eventData).length;
+    if (messageSize > 50000000) { // 50MB - limite seguro abaixo de 64MB
+      console.error(`❌ Mensagem muito grande (${messageSize} bytes), não enviando`);
+      return;
+    }
     
     try {
       controller.enqueue(new TextEncoder().encode(eventData));
@@ -68,10 +101,33 @@ export function sendProgressEvent(downloadId: string, data: {
         console.warn(`🔄 Encontrado downloadId similar: "${similarKey}" para "${cleanDownloadId}"`);
         const similarController = activeStreams.get(similarKey);
         if (similarController) {
+          // Aplicar mesma sanitização de dados
+          let sanitizedData = { ...data };
+          if (sanitizedData.metadata) {
+            const metadataStr = JSON.stringify(sanitizedData.metadata);
+            if (metadataStr.length > 100000) {
+              sanitizedData.metadata = {
+                title: sanitizedData.metadata.title,
+                artist: sanitizedData.metadata.artist,
+              };
+            }
+          }
+          
+          if (sanitizedData.detail && sanitizedData.detail.length > 10000) {
+            sanitizedData.detail = sanitizedData.detail.substring(0, 10000) + '... (truncado)';
+          }
+          
           const eventData = `data: ${JSON.stringify({
-            ...data,
+            ...sanitizedData,
             timestamp: new Date().toISOString()
           })}\n\n`;
+          
+          // Verificar tamanho antes de enviar
+          const messageSize = new TextEncoder().encode(eventData).length;
+          if (messageSize > 50000000) {
+            console.error(`❌ Mensagem muito grande (${messageSize} bytes) para ID similar, não enviando`);
+            return;
+          }
           
           try {
             similarController.enqueue(new TextEncoder().encode(eventData));

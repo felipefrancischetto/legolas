@@ -3,6 +3,7 @@
 import DownloadForm from './components/DownloadForm';
 import FileList from './components/FileList';
 import dynamic from 'next/dynamic';
+import { safeSetItem, safeGetItem } from './utils/localStorage';
 
 const AudioPlayer = dynamic(() => import('./components/AudioPlayer'), {
   ssr: false,
@@ -12,23 +13,81 @@ import BeatportModal from './components/BeatportModal';
 import BeatportDownloaderModal from './components/BeatportDownloaderModal';
 import SettingsModal from './components/SettingsModal';
 import FloatingPlaylistButton from './components/FloatingPlaylistButton';
+import ScrollToPlayingButton from './components/ScrollToPlayingButton';
 import DownloadQueue from './components/DownloadQueue';
-import { useState } from 'react';
+import QuickPlaylistPanel from './components/QuickPlaylistPanel';
+import { useState, useEffect } from 'react';
 import { useUI } from './contexts/UIContext';
-import Image from 'next/image';
+
+const STORAGE_KEY_PAGE_STATE = 'legolas-page-state';
+
+interface SavedPageState {
+  downloadFormMinimized: boolean;
+  showQueue: boolean;
+  beatportModalOpen: boolean;
+  beatportDownloaderModalOpen: boolean;
+  settingsModalOpen: boolean;
+}
 
 export default function Home() {
-  const [beatportModalOpen, setBeatportModalOpen] = useState(false);
-  const [beatportDownloaderModalOpen, setBeatportDownloaderModalOpen] = useState(false);
-  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const { playerOpen, playerMinimized } = useUI();
-  const [downloadFormMinimized, setDownloadFormMinimized] = useState(true);
-  const [showQueue, setShowQueue] = useState(false);
+  // Carregar estados salvos do localStorage
+  const loadSavedState = (): SavedPageState => {
+    const saved = safeGetItem<SavedPageState>(STORAGE_KEY_PAGE_STATE);
+    if (saved) {
+      return saved;
+    }
+    return {
+      downloadFormMinimized: true,
+      showQueue: false,
+      beatportModalOpen: false,
+      beatportDownloaderModalOpen: false,
+      settingsModalOpen: false
+    };
+  };
+
+  const savedState = loadSavedState();
   
-      // Player open state updated
+  const [beatportModalOpen, setBeatportModalOpen] = useState(savedState.beatportModalOpen);
+  const [beatportDownloaderModalOpen, setBeatportDownloaderModalOpen] = useState(savedState.beatportDownloaderModalOpen);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(savedState.settingsModalOpen);
+  const { playerOpen, playerMinimized } = useUI();
+  const [downloadFormMinimized, setDownloadFormMinimized] = useState(savedState.downloadFormMinimized);
+  const [showQueue, setShowQueue] = useState(savedState.showQueue);
+  const [isInitialized, setIsInitialized] = useState(false);
+
+  // Marcar como inicializado após montagem
+  useEffect(() => {
+    setIsInitialized(true);
+  }, []);
+
+  // Salvar estados no localStorage quando mudarem (após inicialização)
+  useEffect(() => {
+    if (!isInitialized) return;
+    
+    try {
+      const state: SavedPageState = {
+        downloadFormMinimized,
+        showQueue,
+        beatportModalOpen,
+        beatportDownloaderModalOpen,
+        settingsModalOpen
+      };
+      safeSetItem(STORAGE_KEY_PAGE_STATE, state, {
+        maxSize: 10 * 1024, // 10KB máximo
+        onError: (err) => {
+          console.warn('⚠️ Erro ao salvar estado da página:', err.message);
+        }
+      });
+    } catch (err) {
+      console.warn('Erro ao salvar estado da página:', err);
+    }
+  }, [downloadFormMinimized, showQueue, beatportModalOpen, beatportDownloaderModalOpen, settingsModalOpen, isInitialized]);
   
   return (
-    <div className="min-h-screen bg-black text-white overflow-hidden">
+    <>
+      {/* Botão flutuante para rolar até a música atual */}
+      <ScrollToPlayingButton />
+      <div className="min-h-screen bg-black text-white overflow-hidden">
       <div className="flex flex-col h-screen">
 
         {/* Motor de busca/download - fixo no topo */}
@@ -49,8 +108,8 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Player de áudio */}
-        {playerOpen && <AudioPlayer />}
+        {/* Player de áudio - sempre visível */}
+        <AudioPlayer />
       </div>
       
       {/* Botão flutuante com melhor posicionamento */}
@@ -61,9 +120,11 @@ export default function Home() {
       {/* Fila de downloads */}
       {showQueue && <DownloadQueue onClose={() => setShowQueue(false)} />}
 
+
       <BeatportModal isOpen={beatportModalOpen} onClose={() => setBeatportModalOpen(false)} />
       <BeatportDownloaderModal isOpen={beatportDownloaderModalOpen} onClose={() => setBeatportDownloaderModalOpen(false)} />
       <SettingsModal isOpen={settingsModalOpen} onClose={() => setSettingsModalOpen(false)} />
     </div>
+    </>
   );
 }

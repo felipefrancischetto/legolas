@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, ReactNode, useCallback, useMemo, useEffect } from 'react';
+import { safeSetItem, safeGetItem } from '../utils/localStorage';
 
 interface UIContextType {
   search: string;
@@ -42,41 +43,88 @@ export function UIProvider({ children }: { children: ReactNode }) {
   const defaultWidths = [50, 50, 250, 80, 150, 70, 70, 120, 150, 120, 180];
   
   const [colWidths, setColWidths] = useState<number[]>(defaultWidths);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   // Carregar valores do localStorage após montagem para evitar problemas de hidratação
   useEffect(() => {
     // Carregar playerOpen
-    const savedPlayerOpen = localStorage.getItem('playerOpen');
+    const savedPlayerOpen = safeGetItem<string>('playerOpen');
     if (savedPlayerOpen === 'true') {
       setPlayerOpen(true);
     }
     
     // Carregar larguras das colunas
-    const savedColWidths = localStorage.getItem('columnWidths');
-    if (savedColWidths) {
-      try {
-        const parsed = JSON.parse(savedColWidths);
-        if (Array.isArray(parsed) && parsed.length === defaultWidths.length) {
-          setColWidths(parsed);
-        }
-      } catch (e) {
-        console.warn('Erro ao carregar larguras das colunas salvas:', e);
-      }
+    const savedColWidths = safeGetItem<number[]>('columnWidths');
+    if (savedColWidths && Array.isArray(savedColWidths) && savedColWidths.length === defaultWidths.length) {
+      setColWidths(savedColWidths);
     }
+
+    // Carregar outros estados da UI
+    try {
+      const savedSearch = safeGetItem<string>('uiSearch');
+      if (savedSearch !== null) {
+        setSearch(savedSearch);
+      }
+
+      const savedSortBy = safeGetItem<string>('uiSortBy');
+      if (savedSortBy) {
+        setSortBy(savedSortBy);
+      }
+
+      const savedSortOrder = safeGetItem<string>('uiSortOrder');
+      if (savedSortOrder === 'asc' || savedSortOrder === 'desc') {
+        setSortOrder(savedSortOrder as 'asc' | 'desc');
+      }
+
+      const savedGroupByAlbum = safeGetItem<string>('uiGroupByAlbum');
+      if (savedGroupByAlbum === 'true') {
+        setGroupByAlbum(true);
+      }
+
+      const savedShowQueue = safeGetItem<string>('uiShowQueue');
+      if (savedShowQueue === 'true') {
+        setShowQueue(true);
+      }
+
+      const savedPlayerMinimized = safeGetItem<string>('playerMinimized');
+      if (savedPlayerMinimized === 'true') {
+        setPlayerMinimized(true);
+      }
+    } catch (e) {
+      console.warn('Erro ao carregar estados da UI:', e);
+    }
+    
+    setIsInitialized(true);
   }, []);
+
+  // Salvar estados no localStorage quando mudarem (após inicialização)
+  useEffect(() => {
+    if (!isInitialized || typeof window === 'undefined') return;
+    
+    try {
+      safeSetItem('uiSearch', search, { maxSize: 10 * 1024 }); // 10KB máximo
+      safeSetItem('uiSortBy', sortBy, { maxSize: 1024 });
+      safeSetItem('uiSortOrder', sortOrder, { maxSize: 1024 });
+      safeSetItem('uiGroupByAlbum', groupByAlbum.toString(), { maxSize: 1024 });
+      safeSetItem('uiShowQueue', showQueue.toString(), { maxSize: 1024 });
+      safeSetItem('playerMinimized', playerMinimized.toString(), { maxSize: 1024 });
+    } catch (e) {
+      console.warn('Erro ao salvar estados da UI:', e);
+    }
+  }, [search, sortBy, sortOrder, groupByAlbum, showQueue, playerMinimized, isInitialized]);
 
   // Memoizar funções para evitar re-renders
   const handleSetColWidths = useCallback((widths: number[]) => {
     setColWidths(widths);
     if (typeof window !== 'undefined') {
-      localStorage.setItem('columnWidths', JSON.stringify(widths));
+      safeSetItem('columnWidths', widths, { maxSize: 1024 });
     }
   }, []);
 
   const handleSetPlayerOpen = useCallback((open: boolean) => {
     setPlayerOpen(open);
     if (typeof window !== 'undefined') {
-      localStorage.setItem('playerOpen', open.toString());
+      safeSetItem('playerOpen', open.toString(), { maxSize: 1024 });
     }
   }, []);
 

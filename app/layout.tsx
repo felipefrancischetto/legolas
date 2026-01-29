@@ -5,6 +5,9 @@ import { DownloadProvider } from './contexts/DownloadContext';
 import { FileProvider } from './contexts/FileContext';
 import { UIProvider } from './contexts/UIContext';
 import { PlayerProvider } from './contexts/PlayerContext';
+import { QuickPlaylistProvider } from './contexts/QuickPlaylistContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import GlobalErrorHandler from './components/GlobalErrorHandler';
 
 const inter = Inter({ subsets: ["latin"] });
 const barrio = Barrio({ 
@@ -24,17 +27,22 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="pt-BR">
-      <body className={`${inter.className} ${barrio.variable}`}>
-        <DownloadProvider>
-          <FileProvider>
-            <UIProvider>
-              <PlayerProvider>
-                {children}
-              </PlayerProvider>
-            </UIProvider>
-          </FileProvider>
-        </DownloadProvider>
+    <html lang="pt-BR" className="bg-black" suppressHydrationWarning>
+      <body className={`${inter.className} ${barrio.variable} bg-black overflow-x-hidden`} suppressHydrationWarning>
+        <GlobalErrorHandler />
+        <ErrorBoundary>
+          <DownloadProvider>
+            <FileProvider>
+              <UIProvider>
+                <PlayerProvider>
+                  <QuickPlaylistProvider>
+                    {children}
+                  </QuickPlaylistProvider>
+                </PlayerProvider>
+              </UIProvider>
+            </FileProvider>
+          </DownloadProvider>
+        </ErrorBoundary>
       </body>
     </html>
   );

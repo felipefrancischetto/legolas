@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { join } from 'path';
-import { createReadStream, statSync } from 'fs';
+import { createReadStream, statSync, existsSync } from 'fs';
+import { readdir } from 'fs/promises';
 import { getDownloadsPath } from '../../utils/common';
 
 export const runtime = 'nodejs';
@@ -16,7 +17,53 @@ export async function GET(
     }
 
     const downloadsPath = await getDownloadsPath();
-    const filePath = join(downloadsPath, decodeURIComponent(filename));
+    
+    // Decodificar o nome do arquivo de forma segura
+    let decodedFilename: string;
+    try {
+      decodedFilename = decodeURIComponent(filename);
+    } catch (error) {
+      console.error('❌ Erro ao decodificar nome do arquivo:', filename, error);
+      return new NextResponse('Nome do arquivo inválido', { status: 400 });
+    }
+    
+    let filePath = join(downloadsPath, decodedFilename);
+    
+    // Verificar se o arquivo existe antes de tentar acessá-lo
+    if (!existsSync(filePath)) {
+      // Tentar encontrar o arquivo com busca case-insensitive ou variações de encoding
+      try {
+        const files = await readdir(downloadsPath);
+        const matchingFile = files.find(file => {
+          // Comparação case-insensitive
+          if (file.toLowerCase() === decodedFilename.toLowerCase()) {
+            return true;
+          }
+          // Comparação sem extensão
+          const fileBase = file.replace(/\.[^/.]+$/, '');
+          const decodedBase = decodedFilename.replace(/\.[^/.]+$/, '');
+          if (fileBase.toLowerCase() === decodedBase.toLowerCase()) {
+            return true;
+          }
+          return false;
+        });
+        
+        if (matchingFile) {
+          console.warn(`⚠️ Arquivo encontrado com nome diferente: "${matchingFile}" (procurado: "${decodedFilename}")`);
+          filePath = join(downloadsPath, matchingFile);
+        } else {
+          console.error('❌ Arquivo não encontrado:', filePath);
+          console.error('   Downloads path:', downloadsPath);
+          console.error('   Filename recebido:', filename);
+          console.error('   Filename decodificado:', decodedFilename);
+          console.error('   Arquivos disponíveis:', files.slice(0, 10).join(', '), files.length > 10 ? `... (${files.length} total)` : '');
+          return new NextResponse('Arquivo não encontrado', { status: 404 });
+        }
+      } catch (dirError) {
+        console.error('❌ Erro ao listar arquivos:', dirError);
+        return new NextResponse('Arquivo não encontrado', { status: 404 });
+      }
+    }
     
     try {
       // Obter informações do arquivo
@@ -162,11 +209,28 @@ export async function GET(
         });
       }
     } catch (error) {
-      console.error('❌ Erro ao acessar arquivo:', error);
-      return new NextResponse('Arquivo não encontrado', { status: 404 });
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('❌ Erro ao acessar arquivo:', {
+        error: errorMessage,
+        filePath,
+        downloadsPath,
+        filename,
+        decodedFilename
+      });
+      
+      // Verificar se é erro de arquivo não encontrado
+      if (error instanceof Error && (error.message.includes('ENOENT') || error.message.includes('no such file'))) {
+        return new NextResponse('Arquivo não encontrado', { status: 404 });
+      }
+      
+      return new NextResponse(`Erro ao acessar arquivo: ${errorMessage}`, { status: 500 });
     }
   } catch (error) {
-    console.error('❌ Erro no endpoint de downloads:', error);
-    return new NextResponse('Erro interno do servidor', { status: 500 });
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('❌ Erro no endpoint de downloads:', {
+      error: errorMessage,
+      stack: error instanceof Error ? error.stack : undefined
+    });
+    return new NextResponse(`Erro interno do servidor: ${errorMessage}`, { status: 500 });
   }
 } 
