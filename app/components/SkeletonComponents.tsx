@@ -14,6 +14,7 @@ const SkeletonBase = memo(({ className = '', style, delay = 0, pulseColor = 'rgb
   <div 
     className={`animate-pulse relative overflow-hidden bg-zinc-700/20 rounded ${className}`}
     style={style}
+    suppressHydrationWarning
   >
     <div 
       className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full animate-shimmer"
@@ -21,6 +22,7 @@ const SkeletonBase = memo(({ className = '', style, delay = 0, pulseColor = 'rgb
         animationDelay: `${delay}s`,
         background: `linear-gradient(90deg, transparent, ${pulseColor}, transparent)`
       }}
+      suppressHydrationWarning
     />
   </div>
 ));
@@ -29,7 +31,7 @@ SkeletonBase.displayName = 'SkeletonBase';
 
 // Skeleton para thumbnail/imagem
 export const SkeletonThumbnail = memo(({ size = 120, className = '', delay = 0 }: { size?: number; className?: string; delay?: number }) => (
-  <div className={`relative flex-shrink-0 ${className}`} style={{ width: size, height: size }}>
+  <div className={`relative flex-shrink-0 ${className}`} style={{ width: size, height: size }} suppressHydrationWarning>
     <SkeletonBase 
       className="w-full h-full rounded"
       delay={delay}
@@ -104,6 +106,7 @@ export const SkeletonMusicCard = memo(({
         )`,
         boxShadow: `0 4px 16px ${cardColor.replace('0.08', '0.04')}, inset 0 1px 0 rgba(255, 255, 255, 0.03)`
       }}
+      suppressHydrationWarning
     >
       {/* Shimmer effect sutil */}
       <div 
@@ -112,6 +115,7 @@ export const SkeletonMusicCard = memo(({
           animationDelay: `${index * 0.1}s`,
           animationDuration: '2.5s'
         }}
+        suppressHydrationWarning
       />
       
       {/* Thumbnail */}
@@ -165,7 +169,7 @@ SkeletonMusicCard.displayName = 'SkeletonMusicCard';
 
 // Skeleton para header de pesquisa
 export const SkeletonSearchHeader = memo(() => (
-  <div className="flex flex-col lg:flex-row lg:items-center gap-4 flex-shrink-0 mb-4 mt-2">
+  <div className="flex flex-col lg:flex-row lg:items-center gap-4 flex-shrink-0 mb-4 mt-2" suppressHydrationWarning>
     <div className="flex-1 relative">
       <SkeletonBase 
         className="w-full h-11 md:h-10 sm:h-9 rounded-xl border"
@@ -220,9 +224,10 @@ export const SkeletonAudioPlayer = memo(({ variant = 'desktop' }: { variant?: 'd
           rgba(15, 23, 42, 0.7) 100%
         )`,
       }}
+      suppressHydrationWarning
     >
       {variant === 'desktop' ? (
-        <div className="hidden sm:flex flex-col px-6 py-3 relative" style={{ height: 90 }}>
+        <div className="hidden sm:flex flex-col px-6 py-3 relative" style={{ height: 90 }} suppressHydrationWarning>
           {/* Waveform skeleton */}
           <div 
             className="absolute inset-0 rounded-lg overflow-hidden backdrop-blur-md flex items-center justify-center animate-pulse" 
@@ -230,6 +235,7 @@ export const SkeletonAudioPlayer = memo(({ variant = 'desktop' }: { variant?: 'd
               background: `rgba(0, 0, 0, 0.2)`,
               boxShadow: `0 4px 16px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.03)`
             }}
+            suppressHydrationWarning
           >
             {/* Barras de waveform animadas */}
             <div className="flex items-center justify-center gap-1 h-full">
@@ -242,13 +248,14 @@ export const SkeletonAudioPlayer = memo(({ variant = 'desktop' }: { variant?: 'd
                     animationDelay: `${i * 0.02}s`,
                     animationDuration: '1.5s'
                   }}
+                  suppressHydrationWarning
                 />
               ))}
             </div>
           </div>
 
           {/* Progress bar skeleton */}
-          <div className="absolute left-0 right-0 z-30" style={{ top: '-8px' }}>
+          <div className="absolute left-0 right-0 z-30" style={{ top: '-8px' }} suppressHydrationWarning>
             <SkeletonBase 
               className="w-full h-4 rounded-full"
               style={{
@@ -260,7 +267,7 @@ export const SkeletonAudioPlayer = memo(({ variant = 'desktop' }: { variant?: 'd
           </div>
 
           {/* Controls skeleton */}
-          <div className="absolute bottom-0 left-0 right-0 z-20 flex justify-center px-4 py-2" style={{ height: 90 }}>
+          <div className="absolute bottom-0 left-0 right-0 z-20 flex justify-center px-4 py-2" style={{ height: 90 }} suppressHydrationWarning>
             <div className="w-full max-w-7xl flex items-center">
               {/* Thumbnail */}
               <SkeletonThumbnail size={70} />
@@ -287,9 +294,9 @@ export const SkeletonAudioPlayer = memo(({ variant = 'desktop' }: { variant?: 'd
           </div>
         </div>
       ) : (
-        <div className="sm:hidden flex flex-col px-4 py-3 relative" style={{ height: 180 }}>
+        <div className="sm:hidden flex flex-col px-4 py-3 relative" style={{ height: 180 }} suppressHydrationWarning>
           {/* Mobile waveform */}
-          <div className="w-full rounded-xl overflow-hidden relative backdrop-blur-sm shadow-lg animate-pulse" style={{ height: 80 }}>
+          <div className="w-full rounded-xl overflow-hidden relative backdrop-blur-sm shadow-lg animate-pulse" style={{ height: 80 }} suppressHydrationWarning>
             <div className="flex items-center justify-center gap-1 h-full px-4">
               {Array.from({ length: 30 }).map((_, i) => (
                 <div
@@ -300,6 +307,7 @@ export const SkeletonAudioPlayer = memo(({ variant = 'desktop' }: { variant?: 'd
                     animationDelay: `${i * 0.03}s`,
                     animationDuration: '1.5s'
                   }}
+                  suppressHydrationWarning
                 />
               ))}
             </div>

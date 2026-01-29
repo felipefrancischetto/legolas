@@ -62,12 +62,6 @@ const nextConfig = {
     return config;
   },
   
-  // Otimizações de cache e performance
-  onDemandEntries: {
-    maxInactiveAge: 60 * 1000,
-    pagesBufferLength: 5,
-  },
-  
   // Configurações de headers para streaming
   async headers() {
     return [
@@ -131,7 +125,15 @@ const nextConfig = {
       buildActivity: true,
       buildActivityPosition: 'bottom-right',
     },
+    // Desabilitar overlay de erros que pode causar problemas com source maps
+    reactStrictMode: true,
   }),
+  
+  // Configurações para melhorar o tratamento de erros
+  onDemandEntries: {
+    maxInactiveAge: 60 * 1000,
+    pagesBufferLength: 5,
+  },
 };
 
 module.exports = nextConfig; 

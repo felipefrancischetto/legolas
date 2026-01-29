@@ -1,6 +1,6 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { mkdir, access, readFile, readdir, stat } from 'fs/promises';
+import { mkdir, access, readFile, readdir, stat, rename } from 'fs/promises';
 import { join } from 'path';
 import { constants } from 'fs';
 import { existsSync } from 'fs';
@@ -46,10 +46,19 @@ async function getDownloadsPath() {
 
 function sanitizeTitle(title: string): string {
   // Preservar caracteres especiais importantes para música, mas remover caracteres problemáticos para arquivos
+  // O caractere '+' é válido em nomes de arquivo no Windows, então vamos mantê-lo
+  // Mas vamos garantir que não há problemas com múltiplos '+' consecutivos
   return title
     .replace(/[<>:"/\\|?*]/g, '') // Remover apenas caracteres inválidos para nomes de arquivo
+    .replace(/\+\+/g, '+') // Normalizar múltiplos '+' consecutivos
     .replace(/\s+/g, ' ') // Normalizar espaços múltiplos
     .trim();
+}
+
+function escapePathForWindows(path: string): string {
+  // Escapar caminho para uso no Windows/PowerShell
+  // PowerShell usa "" para escapar aspas duplas dentro de strings entre aspas
+  return path.replace(/"/g, '""');
 }
 
 function deduplicateLabel(label: string): string {
@@ -519,9 +528,19 @@ export class PlaylistDownloadService {
         // Nome temporário para o download inicial - INCLUIR ID para evitar conflitos entre versões
         const baseTitle = sanitizeTitle(entry.title || 'Unknown');
         const tempFilename = `${baseTitle} [${entry.id}]`; // Incluir ID para garantir unicidade
-        const outputPath = `${downloadsFolder}/${tempFilename}.%(ext)s`;
         
+        // Escapar o caminho corretamente para Windows/PowerShell
+        // O yt-dlp espera o caminho entre aspas, mas precisamos escapar aspas internas
+        const escapedFolder = escapePathForWindows(downloadsFolder);
+        const escapedFilename = escapePathForWindows(tempFilename);
+        // Usar caminho completo escapado entre aspas para garantir que funciona no Windows
+        const outputPath = `"${escapedFolder}\\${escapedFilename}.%(ext)s"`;
+        
+        logger.info(`   📝 Título original: "${entry.title}"`);
+        logger.info(`   📝 Título sanitizado: "${baseTitle}"`);
         logger.info(`   📝 Nome do arquivo temporário: ${tempFilename}.${format}`);
+        logger.info(`   📝 Caminho de saída (escapado): ${outputPath}`);
+        logger.info(`   📝 Caminho de saída (raw): ${downloadsFolder}\\${tempFilename}.%(ext)s`);
 
         logger.info(`   ⬇️ Downloading track ${trackNumber}...`);
         
@@ -608,9 +627,23 @@ export class PlaylistDownloadService {
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             
+            // Log detalhado do erro para debug
+            logger.error(`   ❌ Erro na estratégia ${strategy.name}:`);
+            logger.error(`      Mensagem: ${errorMessage}`);
+            if (error instanceof Error && error.stack) {
+              logger.error(`      Stack: ${error.stack.substring(0, 500)}`);
+            }
+            
+            // Verificar se o erro está relacionado ao nome do arquivo ou caminho
+            if (errorMessage.includes('filename') || errorMessage.includes('path') || 
+                errorMessage.includes('invalid') || errorMessage.includes('character')) {
+              logger.error(`   ⚠️ Possível problema com nome do arquivo ou caminho: "${tempFilename}"`);
+              logger.error(`   ⚠️ Caminho completo: ${outputPath}`);
+            }
+            
             // Log do erro mas continuar para próxima estratégia
             if (strategyIndex < downloadStrategies.length - 1) {
-              logger.warn(`   ⚠️ Estratégia ${strategy.name} falhou: ${errorMessage.substring(0, 150)}`);
+              logger.warn(`   ⚠️ Estratégia ${strategy.name} falhou: ${errorMessage.substring(0, 200)}`);
               logger.info(`   🔄 Tentando próxima estratégia...`);
               continue; // Tentar próxima estratégia
             } else {
@@ -849,6 +882,17 @@ export class PlaylistDownloadService {
             } else {
               logger.warn(`   ⚠️ Failed to enhance metadata`);
             }
+            
+            // Mover arquivo para pasta nao-normalizadas se não foi normalizado pelo Beatport
+            if (useBeatport && (!enhanced.success || !enhanced.fromBeatport)) {
+              try {
+                await this.moveToNonNormalizedFolder(finalFilePath, downloadsFolder);
+                logger.info(`   📁 Arquivo movido para pasta nao-normalizadas (não normalizado pelo Beatport)`);
+              } catch (moveError) {
+                logger.warn(`   ⚠️ Erro ao mover arquivo para pasta nao-normalizadas: ${moveError instanceof Error ? moveError.message : 'Unknown error'}`);
+                // Não falhar o download por causa disso
+              }
+            }
           } catch (metadataError) {
             const errorMsg = `Failed to enhance metadata for track ${trackNumber}: ${metadataError instanceof Error ? metadataError.message : 'Unknown error'}`;
             logger.error(`   ❌ ${errorMsg}`);
@@ -1049,6 +1093,18 @@ export class PlaylistDownloadService {
             logger.warn(`⚠️  Could not restore timestamp for ${fileInfo.filename}: ${timestampError}`);
           }
         }
+        
+        // Mover arquivo para pasta nao-normalizadas se não foi normalizado pelo Beatport
+        if (useBeatport && (!enhanced.success || !enhanced.fromBeatport)) {
+          try {
+            await this.moveToNonNormalizedFolder(fileInfo.filePath, downloadsFolder);
+            logger.info(`   📁 Arquivo movido para pasta nao-normalizadas (não normalizado pelo Beatport)`);
+          } catch (moveError) {
+            logger.warn(`   ⚠️ Erro ao mover arquivo para pasta nao-normalizadas: ${moveError instanceof Error ? moveError.message : 'Unknown error'}`);
+            // Não falhar o processamento por causa disso
+          }
+        }
+        
         result.processedTracks++;
 
       } catch (error) {
@@ -1515,6 +1571,69 @@ export class PlaylistDownloadService {
       batches.push(array.slice(i, i + batchSize));
     }
     return batches;
+  }
+
+  /**
+   * Move um arquivo para a pasta nao-normalizadas se ele não foi normalizado pelo Beatport
+   */
+  private async moveToNonNormalizedFolder(filePath: string, downloadsFolder: string): Promise<void> {
+    try {
+      // Verificar se o arquivo já está na pasta nao-normalizadas
+      if (filePath.includes('nao-normalizadas')) {
+        logger.info(`   📁 Arquivo já está na pasta nao-normalizadas: ${filePath}`);
+        return;
+      }
+
+      // Criar pasta nao-normalizadas se não existir
+      const naoNormalizadasDir = join(downloadsFolder, 'nao-normalizadas');
+      if (!existsSync(naoNormalizadasDir)) {
+        await mkdir(naoNormalizadasDir, { recursive: true });
+        logger.info(`   ✅ Pasta nao-normalizadas criada: ${naoNormalizadasDir}`);
+      }
+
+      // Obter nome do arquivo
+      const fileName = filePath.split(/[/\\]/).pop() || '';
+      if (!fileName) {
+        logger.warn(`   ⚠️ Não foi possível extrair nome do arquivo de: ${filePath}`);
+        return;
+      }
+
+      // Caminho de destino
+      let newFilePath = join(naoNormalizadasDir, fileName);
+
+      // Se já existe um arquivo com o mesmo nome, adicionar timestamp
+      if (existsSync(newFilePath)) {
+        const timestamp = Date.now();
+        const fileExt = fileName.substring(fileName.lastIndexOf('.'));
+        const fileBase = fileName.substring(0, fileName.lastIndexOf('.'));
+        const newFileNameWithTimestamp = `${fileBase}_${timestamp}${fileExt}`;
+        newFilePath = join(naoNormalizadasDir, newFileNameWithTimestamp);
+        logger.warn(`   ⚠️ Arquivo já existe, usando nome com timestamp: ${newFileNameWithTimestamp}`);
+      }
+
+      // Mover arquivo
+      let attempts = 0;
+      const maxAttempts = 5;
+      const delayBetweenAttempts = 800;
+
+      while (attempts < maxAttempts) {
+        try {
+          await rename(filePath, newFilePath);
+          logger.info(`   ✅ Arquivo movido para nao-normalizadas: ${fileName} -> ${newFilePath.split(/[/\\]/).pop()}`);
+          return;
+        } catch (renameErr: any) {
+          attempts++;
+          if (attempts >= maxAttempts) {
+            logger.error(`   ❌ Falha ao mover arquivo após ${maxAttempts} tentativas: ${renameErr.message}`);
+            throw renameErr;
+          }
+          await new Promise(resolve => setTimeout(resolve, delayBetweenAttempts));
+        }
+      }
+    } catch (error) {
+      logger.error(`   ❌ Erro ao mover arquivo para pasta nao-normalizadas: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw error;
+    }
   }
 }
 

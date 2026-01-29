@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useCallback, useMemo, ReactNode, useEffect, useRef } from 'react';
+import { safeSetItem, safeGetItem, safeRemoveItem, limitArraySize } from '../utils/localStorage';
 
 interface DownloadStep {
   type: 'info' | 'warning' | 'error' | 'progress';
@@ -30,6 +31,8 @@ interface DownloadItem {
   format?: string;
   enrichWithBeatport?: boolean;
   showBeatportPage?: boolean;
+  albumName?: string; // Nome do álbum para agrupamento
+  albumArtist?: string; // Artista do álbum para agrupamento
   playlistItems?: Array<{
     title: string;
     status: 'pending' | 'downloading' | 'completed' | 'error';
@@ -69,6 +72,7 @@ interface DownloadContextType {
     errors: number;
     downloading: number;
   } | null;
+  clearStuckDownloads: () => void;
 }
 
 const DownloadContext = createContext<DownloadContextType | undefined>(undefined);
@@ -81,8 +85,9 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   // Refs para batching de updates e controle de estado
   const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingUpdatesRef = useRef<Map<string, Partial<DownloadItem>>>(new Map());
-  const isProcessingRef = useRef<boolean>(false);
+  const processingIdsRef = useRef<Set<string>>(new Set()); // Rastrear IDs sendo processados
   const queueProcessTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const eventSourcesRef = useRef<Map<string, EventSource>>(new Map()); // Rastrear conexões SSE
   
   // Computed values memoizados
   const activeDownloads = useMemo(() => 
@@ -99,30 +104,70 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
 
   const [toasts, setToasts] = useState<Array<{ title: string; id: string }>>([]);
 
+  // Refs para controlar timeouts de toasts
+  const toastTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
+
+  const removeToast = useCallback((id: string) => {
+    // Limpar timeout se existir
+    const timeout = toastTimeoutsRef.current.get(id);
+    if (timeout) {
+      clearTimeout(timeout);
+      toastTimeoutsRef.current.delete(id);
+    }
+    
+    setToasts(prev => prev.filter(toast => toast.id !== id));
+  }, []);
+
   // Funções para gerenciar toasts
   const addToast = useCallback((toast: { title: string }) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     setToasts(prev => [...prev, { ...toast, id }]);
     
+    // Limpar timeout anterior se existir (não deveria acontecer, mas por segurança)
+    const existingTimeout = toastTimeoutsRef.current.get(id);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+    
     // Auto-remove após 4 segundos
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
       removeToast(id);
     }, 4000);
-  }, []);
-
-  const removeToast = useCallback((id: string) => {
-    setToasts(prev => prev.filter(toast => toast.id !== id));
-  }, []);
+    
+    toastTimeoutsRef.current.set(id, timeout);
+  }, [removeToast]);
 
   // Carregar histórico do localStorage
   useEffect(() => {
-    const savedHistory = localStorage.getItem('downloadHistory');
-    if (savedHistory) {
-      try {
-        const parsed = JSON.parse(savedHistory);
-        setHistory(Array.isArray(parsed) ? parsed : []);
-      } catch (err) {
-        console.error('Erro ao carregar histórico:', err);
+    const savedHistory = safeGetItem<DownloadItem[]>('downloadHistory');
+    if (savedHistory && Array.isArray(savedHistory)) {
+      setHistory(savedHistory);
+    }
+  }, []);
+
+  // Carregar fila de downloads do localStorage
+  useEffect(() => {
+    const savedQueue = safeGetItem<DownloadItem[]>('downloadQueue');
+    if (savedQueue && Array.isArray(savedQueue)) {
+      // Filtrar apenas downloads que ainda estão pendentes ou em andamento
+      const activeQueue = savedQueue.filter(item => 
+        item.status === 'pending' || 
+        item.status === 'queued' || 
+        item.status === 'downloading'
+      );
+      
+      if (activeQueue.length > 0) {
+        // Resetar status de downloads que estavam "downloading" para "pending" ao restaurar
+        const resetQueue = activeQueue.map(item => {
+          if (item.status === 'downloading') {
+            console.log(`🔄 Resetando status de download restaurado: ${item.id}`);
+            return { ...item, status: 'pending' as const };
+          }
+          return item;
+        });
+        
+        setQueue(resetQueue);
+        console.log('📦 Fila de downloads restaurada:', resetQueue.length, 'itens');
       }
     }
   }, []);
@@ -130,15 +175,60 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   // Salvar histórico no localStorage com debounce
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      try {
-        localStorage.setItem('downloadHistory', JSON.stringify(history));
-      } catch (err) {
-        console.error('Erro ao salvar histórico:', err);
-      }
+      // Limitar histórico aos últimos 100 itens para evitar dados muito grandes
+      const limitedHistory = limitArraySize(history, 100);
+      safeSetItem('downloadHistory', limitedHistory, {
+        maxSize: 2 * 1024 * 1024, // 2MB máximo
+        onError: (err) => {
+          console.warn('⚠️ Erro ao salvar histórico:', err.message);
+        }
+      });
     }, 2000);
     
     return () => clearTimeout(timeoutId);
   }, [history]);
+
+  // Salvar fila de downloads no localStorage com debounce
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      // Salvar apenas downloads ativos (pendentes, em fila ou baixando)
+      const activeQueue = queue.filter(item => 
+        item.status === 'pending' || 
+        item.status === 'queued' || 
+        item.status === 'downloading'
+      );
+      if (activeQueue.length > 0) {
+        // Otimizar dados: remover campos grandes desnecessários
+        const optimizedQueue = activeQueue.map(item => ({
+          id: item.id,
+          url: item.url,
+          title: item.title,
+          status: item.status,
+          progress: item.progress,
+          currentStep: item.currentStep,
+          currentSubstep: item.currentSubstep,
+          format: item.format,
+          isPlaylist: item.isPlaylist,
+          enrichWithBeatport: item.enrichWithBeatport,
+          showBeatportPage: item.showBeatportPage,
+          albumName: item.albumName,
+          albumArtist: item.albumArtist
+          // Não salvar steps completos e metadata para reduzir tamanho
+        }));
+        
+        safeSetItem('downloadQueue', optimizedQueue, {
+          maxSize: 1 * 1024 * 1024, // 1MB máximo
+          onError: (err) => {
+            console.warn('⚠️ Erro ao salvar fila de downloads:', err.message);
+          }
+        });
+      } else {
+        safeRemoveItem('downloadQueue');
+      }
+    }, 1000);
+    
+    return () => clearTimeout(timeoutId);
+  }, [queue]);
 
   const addToQueue = useCallback((item: string | Omit<DownloadItem, 'id'>): DownloadItem => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
@@ -150,7 +240,9 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         url: item, 
         status: 'pending',
         startTime: Date.now(),
-        steps: []
+        steps: [],
+        enrichWithBeatport: true, // Sempre usar Beatport por padrão
+        showBeatportPage: false
       };
     } else {
       // Se for playlist, garantir que playlistItems está inicializado corretamente
@@ -184,11 +276,26 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     }
     
     setQueue(prev => [...prev, queueItem]);
-    console.log('📝 Item adicionado à fila:', queueItem);
+    console.log('📝 Item adicionado à fila:', queueItem.id, queueItem.title || queueItem.url);
     return queueItem;
   }, []);
 
   const removeFromQueue = useCallback((id: string) => {
+    // Fechar conexão SSE se existir
+    const eventSource = eventSourcesRef.current.get(id);
+    if (eventSource) {
+      try {
+        eventSource.close();
+        console.log(`🔌 SSE fechado para download removido: ${id}`);
+      } catch (e) {
+        console.warn(`Erro ao fechar SSE: ${e}`);
+      }
+      eventSourcesRef.current.delete(id);
+    }
+    
+    // Remover do conjunto de processamento
+    processingIdsRef.current.delete(id);
+    
     setQueue(prev => prev.filter(item => item.id !== id));
     console.log('🗑️ Item removido da fila:', id);
   }, []);
@@ -197,23 +304,80 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   const flushUpdates = useCallback(() => {
     if (pendingUpdatesRef.current.size === 0) return;
     
-    setQueue(prev => prev.map(item => {
-      const updates = pendingUpdatesRef.current.get(item.id);
-      if (updates) {
-        return { ...item, ...updates };
-      }
-      return item;
-    }));
+    setQueue(prev => {
+      const updated = prev.map(item => {
+        const updates = pendingUpdatesRef.current.get(item.id);
+        if (updates) {
+          // Garantir que progress seja sempre um número válido
+          // Para progresso, sempre usar o valor mais recente (não fazer merge)
+          const merged = { ...item };
+          
+          // Aplicar updates, mas para progresso usar sempre o mais recente
+          if ('progress' in updates) {
+            merged.progress = Math.max(0, Math.min(100, updates.progress || 0));
+          } else if (merged.progress !== undefined) {
+            merged.progress = Math.max(0, Math.min(100, merged.progress));
+          }
+          
+          // Aplicar outros campos normalmente
+          Object.keys(updates).forEach(key => {
+            if (key !== 'progress') {
+              (merged as any)[key] = (updates as any)[key];
+            }
+          });
+          
+          return merged;
+        }
+        return item;
+      });
+      return updated;
+    });
     
     pendingUpdatesRef.current.clear();
   }, []);
 
   const updateQueueItem = useCallback((id: string, updates: Partial<DownloadItem>) => {
-    // Accumular updates para fazer em lote
+    // Para updates de progresso, aplicar imediatamente sem debounce
+    const isProgressUpdate = 'progress' in updates;
+    
+    if (isProgressUpdate) {
+      // Aplicar progresso imediatamente para evitar travamento
+      setQueue(prev => prev.map(item => {
+        if (item.id === id) {
+          const updated = { ...item, ...updates };
+          if (updated.progress !== undefined) {
+            updated.progress = Math.max(0, Math.min(100, updated.progress));
+          }
+          return updated;
+        }
+        return item;
+      }));
+      
+      // Ainda acumular outros campos para aplicar depois (se houver)
+      const otherUpdates = { ...updates };
+      delete otherUpdates.progress;
+      if (Object.keys(otherUpdates).length > 0) {
+        const existingUpdates = pendingUpdatesRef.current.get(id) || {};
+        pendingUpdatesRef.current.set(id, { ...existingUpdates, ...otherUpdates });
+        
+        // Aplicar outros updates com debounce menor
+        if (updateTimeoutRef.current) {
+          clearTimeout(updateTimeoutRef.current);
+        }
+        updateTimeoutRef.current = setTimeout(() => {
+          flushUpdates();
+        }, 100);
+      }
+      return;
+    }
+    
+    // Para outros updates, usar debounce normal
     const existingUpdates = pendingUpdatesRef.current.get(id) || {};
     pendingUpdatesRef.current.set(id, { ...existingUpdates, ...updates });
     
-    // Debounce para fazer updates em lote
+    // Debounce para fazer updates em lote (200ms para outros updates)
+    const debounceTime = 200; // Debounce dinâmico: 50ms para progresso, 200ms para outros
+    
     if (updateTimeoutRef.current) {
       clearTimeout(updateTimeoutRef.current);
     }
@@ -227,12 +391,26 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
           const item = prev.find(item => item.id === id);
           if (item && item.status !== updates.status) {
             const finalItem = { ...item, ...updates, endTime: Date.now() };
-            setHistory(prevHistory => [finalItem, ...prevHistory.slice(0, 49)]); // Limitar histórico a 50 itens
-            addToast({ 
-              title: updates.status === 'completed' 
-                ? `✅ ${item.title || 'Download'} concluído!`
-                : `❌ Erro em ${item.title || 'Download'}`
+            
+            // Remover do conjunto de processamento quando finalizar
+            processingIdsRef.current.delete(id);
+            
+            // Evitar duplicatas no histórico verificando se já existe
+            setHistory(prevHistory => {
+              // Remover se já existir (evitar duplicatas)
+              const filtered = prevHistory.filter(h => h.id !== id);
+              // Adicionar no início e limitar a 50 itens
+              return [finalItem, ...filtered].slice(0, 50);
             });
+            
+            // Só mostrar toast se não for um download travado (para evitar spam)
+            if (!updates.error?.includes('travado') && !updates.error?.includes('tempo limite')) {
+              addToast({ 
+                title: updates.status === 'completed' 
+                  ? `✅ ${item.title || 'Download'} concluído!`
+                  : `❌ Erro em ${item.title || 'Download'}`
+              });
+            }
             
             // Remover da fila após 3 segundos
             setTimeout(() => {
@@ -242,7 +420,7 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
           return prev;
         });
       }
-    }, 200); // Debounce de 200ms
+    }, debounceTime);
   }, [flushUpdates, addToast, removeFromQueue]);
 
   const clearHistory = useCallback(() => {
@@ -251,32 +429,49 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateProgress = useCallback((downloadId: string, progress: number, step?: string, substep?: string, detail?: string, playlistIndex?: number) => {
-    const updates: Partial<DownloadItem> = {
-      progress,
-      currentStep: step,
-      currentSubstep: substep,
-      detail
-    };
+    // Validar progresso
+    const validProgress = Math.max(0, Math.min(100, progress));
     
     if (typeof playlistIndex === 'number') {
-      // Atualizar item específico da playlist
+      // Atualizar item específico da playlist - aplicar imediatamente
       setQueue(prev => prev.map(item => {
         if (item.id === downloadId && item.playlistItems) {
           const updatedPlaylistItems = item.playlistItems.map((plItem, idx) =>
             idx === playlistIndex ? { 
               ...plItem, 
-              progress, 
+              progress: validProgress, 
               status: 'downloading' as const 
             } : plItem
           );
-          return { ...item, playlistItems: updatedPlaylistItems };
+          // Também atualizar progresso geral do item se necessário
+          const updatedItem = { 
+            ...item, 
+            playlistItems: updatedPlaylistItems,
+            progress: validProgress,
+            currentStep: step,
+            currentSubstep: substep,
+            detail
+          };
+          return updatedItem;
         }
         return item;
       }));
     } else {
-      updateQueueItem(downloadId, updates);
+      // Atualizar progresso principal - aplicar imediatamente
+      setQueue(prev => prev.map(item => {
+        if (item.id === downloadId) {
+          return {
+            ...item,
+            progress: validProgress,
+            currentStep: step,
+            currentSubstep: substep,
+            detail
+          };
+        }
+        return item;
+      }));
     }
-  }, [updateQueueItem]);
+  }, []);
 
   const addStep = useCallback((downloadId: string, step: DownloadStep & { playlistIndex?: number }) => {
     const { playlistIndex, ...stepData } = step;
@@ -293,11 +488,20 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         return item;
       }));
     } else {
-      updateQueueItem(downloadId, {
-        steps: [...(queue.find(item => item.id === downloadId)?.steps || []), stepData]
+      // Usar função de callback para acessar queue atual sem dependência
+      setQueue(prev => {
+        const item = prev.find(q => q.id === downloadId);
+        if (item) {
+          return prev.map(q => 
+            q.id === downloadId 
+              ? { ...q, steps: [...(q.steps || []), stepData] }
+              : q
+          );
+        }
+        return prev;
       });
     }
-  }, [updateQueueItem, queue]);
+  }, []);
 
   const getCurrentDownload = useCallback((downloadId: string) => {
     return queue.find(item => item.id === downloadId);
@@ -338,6 +542,21 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const cancelDownload = useCallback((id: string, playlistIndex?: number) => {
+    // Remover do conjunto de processamento
+    processingIdsRef.current.delete(id);
+    
+    // Fechar conexão SSE se existir
+    const eventSource = eventSourcesRef.current.get(id);
+    if (eventSource) {
+      try {
+        eventSource.close();
+        console.log(`🔌 SSE fechado para download cancelado: ${id}`);
+      } catch (e) {
+        console.warn(`Erro ao fechar SSE: ${e}`);
+      }
+      eventSourcesRef.current.delete(id);
+    }
+    
     setQueue(prev => prev.map(item => {
       if (item.id !== id) return item;
       
@@ -355,30 +574,130 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
           ...item, 
           status: 'error' as const, 
           error: 'Cancelado pelo usuário',
-          currentStep: 'Cancelado'
+          currentStep: 'Cancelado',
+          endTime: Date.now()
         };
       }
     }));
     
     console.log('❌ Download cancelado:', id, playlistIndex);
+    
+    // Mover para histórico após cancelar
+    setQueue(prev => {
+      const item = prev.find(item => item.id === id);
+      if (item && item.status === 'error') {
+        const cancelledItem = { ...item, endTime: Date.now() };
+        setHistory(prevHistory => {
+          const filtered = prevHistory.filter(h => h.id !== id);
+          return [cancelledItem, ...filtered].slice(0, 50);
+        });
+      }
+      return prev;
+    });
   }, []);
 
   const setDownloadStatus = useCallback((status: Partial<DownloadContextType['downloadStatus']>) => {
     setDownloadStatusState(prev => ({ ...prev, ...status }));
   }, []);
 
+  // Função para limpar downloads travados (que estão em downloading há muito tempo sem progresso)
+  const clearStuckDownloads = useCallback(() => {
+    const now = Date.now();
+    const STUCK_TIMEOUT = 5 * 60 * 1000; // 5 minutos sem progresso = travado
+    const PENDING_TIMEOUT = 10 * 60 * 1000; // 10 minutos em pending = travado
+    
+    let clearedCount = 0;
+    
+    setQueue(prev => prev.map(item => {
+      // Verificar se está em downloading há muito tempo
+      if (item.status === 'downloading' && item.startTime) {
+        const timeSinceStart = now - item.startTime;
+        
+        // Se está há mais de 5 minutos sem progresso significativo
+        if (timeSinceStart > STUCK_TIMEOUT && (item.progress || 0) < 10) {
+          console.log(`🧹 Limpando download travado: ${item.id} (${item.title})`);
+          clearedCount++;
+          // Remover do conjunto de processamento
+          processingIdsRef.current.delete(item.id);
+          return {
+            ...item,
+            status: 'error' as const,
+            error: 'Download travado - tempo limite excedido',
+            currentStep: 'Download travado',
+            endTime: now
+          };
+        }
+      }
+      
+      // Verificar se está em pending há muito tempo sem ser processado
+      if (item.status === 'pending' && item.startTime) {
+        const timeSinceStart = now - item.startTime;
+        
+        // Se está há mais de 10 minutos em pending sem ser processado
+        if (timeSinceStart > PENDING_TIMEOUT && !processingIdsRef.current.has(item.id)) {
+          console.log(`🧹 Limpando download pendente travado: ${item.id} (${item.title})`);
+          clearedCount++;
+          return {
+            ...item,
+            status: 'error' as const,
+            error: 'Download não iniciado - tempo limite excedido',
+            currentStep: 'Download não iniciado',
+            endTime: now
+          };
+        }
+      }
+      
+      return item;
+    }));
+    
+    if (clearedCount > 0) {
+      console.log(`🧹 Total de downloads travados limpos: ${clearedCount}`);
+    }
+  }, []);
+
+  // Ref para acessar a queue atual sem causar re-renders
+  const queueRef = useRef<DownloadItem[]>([]);
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
+
   // Função para processar download real
   const processRealDownload = useCallback(async (item: DownloadItem) => {
-    if (isProcessingRef.current) return;
+    // Verificar se já está sendo processado (evitar duplicatas) - verificação primeiro
+    if (processingIdsRef.current.has(item.id)) {
+      console.log('⏭️ Item já está sendo processado:', item.id);
+      return;
+    }
     
-    updateProgress(item.id, 0, 'Iniciando download...');
-    updateQueueItem(item.id, { status: 'downloading' });
-
+    // Verificar rapidamente se o item ainda está na fila e tem status pendente
+    // Usar ref para evitar dependência de queue
+    const currentItem = queueRef.current.find(q => q.id === item.id);
+    if (!currentItem) {
+      console.log('⏭️ Item não encontrado na fila:', item.id);
+      return;
+    }
+    
+    // Se o status mudou para algo diferente de pending, não processar
+    if (currentItem.status !== 'pending' && currentItem.status !== 'queued') {
+      console.log(`⏭️ Item não está mais pendente (status: ${currentItem.status}):`, item.id);
+      return;
+    }
+    
+    // Marcar como sendo processado ANTES de iniciar (importante para evitar duplicatas)
+    processingIdsRef.current.add(item.id);
+    console.log(`🚀 Iniciando processamento do download: ${item.id} - ${item.title || item.url}`);
+    
     try {
+      updateProgress(item.id, 0, 'Iniciando download...');
+      updateQueueItem(item.id, { status: 'downloading' });
+
       // Conectar ao SSE de progresso ANTES de iniciar o POST, para não perder eventos iniciais
       let eventSource: EventSource | null = null;
       try {
         eventSource = new EventSource(`/api/download-progress?downloadId=${encodeURIComponent(item.id)}&_t=${Date.now()}`);
+        
+        // Armazenar referência do EventSource para poder fechar depois
+        eventSourcesRef.current.set(item.id, eventSource);
 
         eventSource.onmessage = (event) => {
           try {
@@ -415,6 +734,8 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         eventSource.onerror = () => {
           // Em caso de erro de conexão, não interrompe o fluxo do download
           console.warn('SSE erro/desconexão para', item.id);
+          // Remover do mapa quando houver erro
+          eventSourcesRef.current.delete(item.id);
         };
       } catch (e) {
         console.warn('Falha ao abrir SSE de progresso, seguindo sem streaming:', e);
@@ -452,11 +773,19 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
 
       console.log(`✅ Download concluído com sucesso: ${item.title}`);
       
-      // Atualizar lista de arquivos
-      window.dispatchEvent(new CustomEvent('refresh-files'));
+      // Aguardar um pouco para garantir que o arquivo foi salvo no sistema de arquivos
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Atualizar lista de arquivos sem mostrar loading (atualização incremental)
+      window.dispatchEvent(new CustomEvent('refresh-files', { detail: { skipLoading: true } }));
       
       // Fechar SSE se aberto
-      try { eventSource?.close(); } catch {}
+      try { 
+        if (eventSource) {
+          eventSource.close();
+          eventSourcesRef.current.delete(item.id);
+        }
+      } catch {}
       
     } catch (error) {
       console.error('❌ Erro no download real:', error);
@@ -471,35 +800,94 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       
       // Garantir fechamento do SSE em erro
       try {
-        // @ts-ignore - eventSource está no escopo do try acima
-        if (typeof eventSource !== 'undefined' && eventSource) eventSource.close();
+        const eventSource = eventSourcesRef.current.get(item.id);
+        if (eventSource) {
+          eventSource.close();
+          eventSourcesRef.current.delete(item.id);
+        }
       } catch {}
+    } finally {
+      // Sempre remover do conjunto de processamento quando terminar (sucesso ou erro)
+      processingIdsRef.current.delete(item.id);
     }
-  }, [updateQueueItem, updateProgress]);
+  }, [updateQueueItem, updateProgress, addStep]);
 
-  // Auto-processar fila quando há downloads pendentes (com throttling melhorado)
+  // Auto-processar fila quando há downloads pendentes
   useEffect(() => {
+    // Atualizar ref imediatamente
+    queueRef.current = queue;
+    
+    // Limpar timeout anterior
     if (queueProcessTimeoutRef.current) {
       clearTimeout(queueProcessTimeoutRef.current);
+      queueProcessTimeoutRef.current = null;
     }
     
-    queueProcessTimeoutRef.current = setTimeout(() => {
-      const pendingDownloads = queue.filter(item => item.status === 'pending');
-      const activeCount = queue.filter(item => item.status === 'downloading').length;
+    // Usar a queue atual diretamente
+    const currentQueue = queue;
+    const pendingDownloads = currentQueue.filter(item => 
+      item.status === 'pending' && !processingIdsRef.current.has(item.id)
+    );
+    const activeCount = currentQueue.filter(item => item.status === 'downloading').length;
+    
+    // Log para debug
+    if (pendingDownloads.length > 0) {
+      console.log(`📊 Estado da fila: ${pendingDownloads.length} pendente(s), ${activeCount} ativo(s), ${maxConcurrentDownloads} máximo`);
+    }
+    
+    // Se não há downloads pendentes, não fazer nada
+    if (pendingDownloads.length === 0) {
+      return;
+    }
+    
+    // Processar imediatamente se houver slots disponíveis
+    const slotsAvailable = maxConcurrentDownloads - activeCount;
+    const toProcess = pendingDownloads.slice(0, slotsAvailable);
+    
+    if (toProcess.length > 0) {
+      console.log(`🎯 Processando ${toProcess.length} download(s) da fila. Ativos: ${activeCount}/${maxConcurrentDownloads}`);
+      console.log(`📋 IDs a processar:`, toProcess.map(d => `${d.id} - ${d.title || d.url}`));
       
-      if (pendingDownloads.length > 0 && activeCount < maxConcurrentDownloads && !isProcessingRef.current) {
-        const nextDownload = pendingDownloads[0];
-        console.log('🎯 Processando próximo download da fila:', nextDownload.id);
-        processRealDownload(nextDownload);
-      }
-    }, 1000); // Throttle de 1 segundo
+      // Processar cada download
+      toProcess.forEach(download => {
+        // Verificar novamente antes de processar (pode ter mudado)
+        const currentItem = queue.find(q => q.id === download.id);
+        if (currentItem && currentItem.status === 'pending' && !processingIdsRef.current.has(download.id)) {
+          processRealDownload(download);
+        }
+      });
+    } else {
+      console.log(`⏳ Sem slots disponíveis. Aguardando conclusão de downloads ativos...`);
+    }
+    
+    // Se ainda há downloads pendentes mas não há slots, agendar verificação
+    if (pendingDownloads.length > toProcess.length) {
+      queueProcessTimeoutRef.current = setTimeout(() => {
+        // Verificar novamente após 1 segundo usando a queue atual
+        const checkQueue = queueRef.current;
+        const checkPending = checkQueue.filter(item => 
+          item.status === 'pending' && !processingIdsRef.current.has(item.id)
+        );
+        const checkActive = checkQueue.filter(item => item.status === 'downloading').length;
+        const checkSlots = maxConcurrentDownloads - checkActive;
+        const checkToProcess = checkPending.slice(0, checkSlots);
+        
+        if (checkToProcess.length > 0) {
+          console.log(`🔄 Verificação agendada: Processando ${checkToProcess.length} download(s) da fila. Ativos: ${checkActive}/${maxConcurrentDownloads}`);
+          checkToProcess.forEach(download => {
+            processRealDownload(download);
+          });
+        }
+      }, 1000);
+    }
     
     return () => {
       if (queueProcessTimeoutRef.current) {
         clearTimeout(queueProcessTimeoutRef.current);
+        queueProcessTimeoutRef.current = null;
       }
     };
-  }, [queue.length, activeDownloads, processRealDownload]);
+  }, [queue, activeDownloads, processRealDownload]);
 
   // Cleanup
   useEffect(() => {
@@ -510,8 +898,30 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       if (queueProcessTimeoutRef.current) {
         clearTimeout(queueProcessTimeoutRef.current);
       }
+      // Limpar todos os timeouts de toasts
+      toastTimeoutsRef.current.forEach(timeout => clearTimeout(timeout));
+      toastTimeoutsRef.current.clear();
+      // Fechar todas as conexões SSE
+      eventSourcesRef.current.forEach((eventSource, id) => {
+        try {
+          eventSource.close();
+          console.log(`🔌 SSE fechado no cleanup: ${id}`);
+        } catch (e) {
+          console.warn(`Erro ao fechar SSE no cleanup: ${e}`);
+        }
+      });
+      eventSourcesRef.current.clear();
     };
   }, []);
+
+  // Auto-limpar downloads travados a cada 2 minutos
+  useEffect(() => {
+    const interval = setInterval(() => {
+      clearStuckDownloads();
+    }, 2 * 60 * 1000); // Verificar a cada 2 minutos
+    
+    return () => clearInterval(interval);
+  }, [clearStuckDownloads]);
 
   // Memoizar o context value
   const contextValue = useMemo(() => ({
@@ -533,7 +943,8 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     updateProgress,
     addStep,
     getCurrentDownload,
-    getPlaylistProgressData
+    getPlaylistProgressData,
+    clearStuckDownloads
   }), [
     queue,
     history,
@@ -553,7 +964,8 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     updateProgress,
     addStep,
     getCurrentDownload,
-    getPlaylistProgressData
+    getPlaylistProgressData,
+    clearStuckDownloads
   ]);
 
   return (

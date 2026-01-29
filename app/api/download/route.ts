@@ -407,7 +407,7 @@ export async function GET(request: NextRequest) {
     // Escrever metadados no arquivo
     console.log('\n📝 [Download] Iniciando escrita de metadados no arquivo...');
     try {
-      const audioFile = `${downloadsFolder}/${videoInfo.title}.${format}`;
+      let audioFile = `${downloadsFolder}/${videoInfo.title}.${format}`;
       const exists = await fileExists(audioFile);
       console.log(`   📁 Arquivo: ${audioFile}`);
       console.log(`   ✅ Arquivo existe: ${exists}`);
@@ -589,7 +589,49 @@ export async function GET(request: NextRequest) {
             
             // Verificar se metadados do Beatport foram salvos
             const hasBeatportData = fileTags.bpm || fileTags.BPM || fileTags.initialkey || fileTags.INITIALKEY || fileTags.label || fileTags.LABEL;
+            // Verificar se realmente veio do Beatport (verificando sources no comment)
+            const comment = fileTags.comment || fileTags.COMMENT || '';
+            const fromBeatport = useBeatport && metadata?.sources?.includes('Beatport') && comment.includes('Sources:') && comment.includes('Beatport');
             console.log(`      🎯 Dados Beatport salvos: ${hasBeatportData ? '✅ SIM' : '❌ NÃO'}`);
+            console.log(`      🎯 Normalizado pelo Beatport: ${fromBeatport ? '✅ SIM' : '❌ NÃO'}`);
+            
+            // Mover arquivo para pasta nao-normalizadas se não foi normalizado pelo Beatport
+            if (useBeatport && !fromBeatport && audioFile) {
+              try {
+                const { rename, mkdir } = require('fs/promises');
+                const { join } = require('path');
+                const { existsSync } = require('fs');
+                
+                // Verificar se o arquivo já está na pasta nao-normalizadas
+                if (!audioFile.includes('nao-normalizadas')) {
+                  const naoNormalizadasDir = join(downloadsFolder, 'nao-normalizadas');
+                  if (!existsSync(naoNormalizadasDir)) {
+                    await mkdir(naoNormalizadasDir, { recursive: true });
+                    console.log(`   ✅ Pasta nao-normalizadas criada: ${naoNormalizadasDir}`);
+                  }
+                  
+                  const fileName = audioFile.split(/[/\\]/).pop() || '';
+                  if (fileName) {
+                    let newFilePath = join(naoNormalizadasDir, fileName);
+                    
+                    // Se já existe, adicionar timestamp
+                    if (existsSync(newFilePath)) {
+                      const timestamp = Date.now();
+                      const fileExt = fileName.substring(fileName.lastIndexOf('.'));
+                      const fileBase = fileName.substring(0, fileName.lastIndexOf('.'));
+                      newFilePath = join(naoNormalizadasDir, `${fileBase}_${timestamp}${fileExt}`);
+                    }
+                    
+                    await rename(audioFile, newFilePath);
+                    audioFile = newFilePath; // Atualizar caminho do arquivo
+                    console.log(`   📁 Arquivo movido para pasta nao-normalizadas: ${fileName}`);
+                  }
+                }
+              } catch (moveError) {
+                console.warn(`   ⚠️ Erro ao mover arquivo para pasta nao-normalizadas: ${moveError instanceof Error ? moveError.message : 'Unknown error'}`);
+                // Não falhar o download por causa disso
+              }
+            }
             
             // Evento: Verificação concluída
             if (downloadId) {
@@ -605,7 +647,8 @@ export async function GET(request: NextRequest) {
                   bpm: fileTags.bpm || fileTags.BPM,
                   key: fileTags.initialkey || fileTags.INITIALKEY,
                   genre: fileTags.genre || fileTags.GENRE,
-                  hasBeatportData
+                  hasBeatportData,
+                  fromBeatport
                 }
               });
             }
@@ -785,6 +828,7 @@ export async function POST(request: NextRequest) {
       searchParams.set('url', url);
       searchParams.set('format', format);
       searchParams.set('useBeatport', useBeatport.toString());
+      searchParams.set('showBeatportPage', showBeatportPage.toString());
       if (downloadId) {
         searchParams.set('downloadId', downloadId);
       }

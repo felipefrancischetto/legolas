@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from 'react';
+import { safeSetItem, safeGetItem } from '../utils/localStorage';
 
 export interface Settings {
   disableDynamicColors: boolean;
@@ -16,14 +17,9 @@ export function useSettings() {
 
   // Carregar configurações do localStorage
   useEffect(() => {
-    const savedSettings = localStorage.getItem('legolas-settings');
+    const savedSettings = safeGetItem<Settings>('legolas-settings');
     if (savedSettings) {
-      try {
-        const parsed = JSON.parse(savedSettings);
-        setSettings({ ...defaultSettings, ...parsed });
-      } catch (error) {
-        console.error('Erro ao carregar configurações:', error);
-      }
+      setSettings({ ...defaultSettings, ...savedSettings });
     }
     setIsLoaded(true);
   }, []);
@@ -45,7 +41,12 @@ export function useSettings() {
   const updateSettings = (newSettings: Partial<Settings>) => {
     const updatedSettings = { ...settings, ...newSettings };
     setSettings(updatedSettings);
-    localStorage.setItem('legolas-settings', JSON.stringify(updatedSettings));
+    safeSetItem('legolas-settings', updatedSettings, {
+      maxSize: 10 * 1024, // 10KB máximo para settings
+      onError: (err) => {
+        console.error('⚠️ Erro ao salvar configurações:', err.message);
+      }
+    });
     
     // Disparar evento para notificar outros componentes
     window.dispatchEvent(new CustomEvent('settings-changed', { 

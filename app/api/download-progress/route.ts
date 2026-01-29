@@ -1,9 +1,12 @@
 import { NextRequest } from 'next/server';
-import { registerProgressStream, unregisterProgressStream } from '@/lib/utils/progressEventService';
+import { registerProgressStream, unregisterProgressStream, isStreamActive } from '@/lib/utils/progressEventService';
 
 // 🔧 Configurações necessárias para SSE no Next.js
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+// Armazenar intervalos de heartbeat para poder limpá-los quando o stream for cancelado
+const heartbeatIntervals = new Map<string, NodeJS.Timeout>();
 
 // 🔧 Tratar OPTIONS para CORS preflight
 export async function OPTIONS(request: NextRequest) {
@@ -56,6 +59,14 @@ export async function GET(request: NextRequest) {
 
       // Enviar heartbeat a cada 30 segundos para manter a conexão viva
       const heartbeatInterval = setInterval(() => {
+        // Verificar se o controller ainda está registrado antes de tentar enviar
+        if (!isStreamActive(downloadId)) {
+          console.log(`⚠️  Heartbeat cancelado - stream já foi fechado para ${downloadId}`);
+          clearInterval(heartbeatInterval);
+          heartbeatIntervals.delete(downloadId);
+          return;
+        }
+
         try {
           const heartbeat = `data: ${JSON.stringify({
             type: 'heartbeat',
@@ -63,13 +74,26 @@ export async function GET(request: NextRequest) {
           })}\n\n`;
           controller.enqueue(new TextEncoder().encode(heartbeat));
         } catch (error) {
+          // Controller foi fechado, limpar intervalo e remover registro
           console.error(`❌ Erro no heartbeat para ${downloadId}:`, error);
           clearInterval(heartbeatInterval);
+          heartbeatIntervals.delete(downloadId);
           unregisterProgressStream(downloadId);
         }
       }, 30000);
+
+      // Armazenar referência do intervalo
+      heartbeatIntervals.set(downloadId, heartbeatInterval);
     },
     cancel() {
+      // Limpar o intervalo de heartbeat quando a conexão for fechada
+      const heartbeatInterval = heartbeatIntervals.get(downloadId);
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatIntervals.delete(downloadId);
+        console.log(`🧹 Heartbeat limpo para downloadId: ${downloadId}`);
+      }
+      
       // Limpar o controller quando a conexão for fechada
       unregisterProgressStream(downloadId);
       console.log(`🔌 Stream fechado para downloadId: ${downloadId}`);
