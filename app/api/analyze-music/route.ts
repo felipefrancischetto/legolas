@@ -238,8 +238,11 @@ async function analyzeFrequencies(filePath: string, duration: number, bitrate: n
             high: Math.round(baseValue * 0.75)
           };
         }
-    } catch (statsError) {
-      console.warn('Erro ao usar astats:', statsError);
+      } catch (statsError) {
+        console.warn('Erro ao usar astats:', statsError);
+      }
+    } catch (error) {
+      console.warn('Erro no método alternativo com astats:', error);
     }
     
     // Fallback: usar análise simplificada com filtros de banda

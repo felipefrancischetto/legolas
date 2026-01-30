@@ -220,6 +220,7 @@ async function removeFile(fileName: string, fetchFiles: (force?: boolean, skipLo
 // Componente para item da lista com cor dinâmica - otimizado
 const DynamicFileItem = memo(({ 
   file, 
+  fileIndex,
   isPlaying, 
   isPlayerPlaying, 
   onPlay, 
@@ -236,7 +237,8 @@ const DynamicFileItem = memo(({
   isAdding,
   isRemoving,
   addToast
-}: { 
+}: {
+  fileIndex: number; 
   file: FileInfo; 
   isPlaying: boolean; 
   isPlayerPlaying: boolean; 
@@ -331,238 +333,251 @@ const DynamicFileItem = memo(({
 
       return (
       <div
-        className={`backdrop-blur-md rounded-xl overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-xl group flex flex-col sm:flex-row mt-3 mb-3 border border-white/10 ${
+        id={`file-item-${fileIndex}`}
+        data-index={fileIndex}
+        className={`group relative transition-all duration-300 ${
           isAdding ? 'animate-slide-in-scale' : ''
         } ${
           isRemoving ? 'animate-fade-out pointer-events-none' : ''
         }`}
         onClick={() => !isRemoving && handlePlay()}
         data-file-name={file.name}
-        style={{
-          borderColor: itemColor.rgba(isPlaying ? 0.4 : 0.15),
-          background: isPlaying
-            ? `linear-gradient(135deg, 
-                ${itemColor.rgba(0.25)} 0%, 
-                ${itemColor.rgba(0.35)} 30%, 
-                rgba(0, 0, 0, 0.7) 70%, 
-                rgba(15, 23, 42, 0.8) 100%
-              )`
-            : `linear-gradient(135deg, 
-                ${itemColor.rgba(0.08)} 0%, 
-                ${itemColor.rgba(0.12)} 30%, 
-                rgba(0, 0, 0, 0.6) 70%, 
-                rgba(15, 23, 42, 0.7) 100%
-              )`,
-          boxShadow: isPlaying
-            ? `0 12px 40px ${itemColor.rgba(0.25)}, inset 0 1px 0 rgba(255, 255, 255, 0.15)`
-            : `0 6px 20px ${itemColor.rgba(0.12)}, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
-        }}
-    >
-      {/* Capa ocupando toda altura à esquerda */}
-      <div className="relative w-full sm:w-[132.5px] sm:min-w-[132.5px] h-[200px] sm:h-[132.5px] flex-shrink-0">
-        <Image
-          src={getThumbnailUrl(file.name)}
-          alt={file.title || file.displayName}
-          width={132.5}
-          height={132.5}
-          className="object-cover w-full h-full bg-zinc-800"
-          style={{ width: '100%', height: '100%' }}
-        />
-        {isPlaying && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-            {isPlayerPlaying ? (
-              <SoundWave 
-                color={`rgb(${itemColor.rgb})`}
-                size="large"
-                isPlaying={true}
-                isLoading={isLoading}  
-              />
-            ) : (
-              <svg className="w-6 h-6 sm:w-8 sm:h-8" fill="currentColor" viewBox="0 0 24 24" style={{ color: `rgb(${itemColor.rgb})` }}>
-                <polygon points="8,5 19,12 8,19" />
-              </svg>
-            )}
-          </div>
-        )}
-        
-        {/* Indicador de metadados completos - Beatport */}
-        {file.isBeatportFormat && (
-          <div 
-            className="absolute top-2 right-2 rounded-full border-2 border-black flex items-center justify-center z-10 shadow-lg"
-            style={{ 
-              width: '24px', 
-              height: '24px', 
-              backgroundColor: '#22c55e',
-              minWidth: '24px',
-              minHeight: '24px'
-            }}
-          >
-            <svg 
-              className="w-4 h-4 text-white" 
-              fill="currentColor" 
-              viewBox="0 0 20 20"
-              style={{ 
-                display: 'block',
-                flexShrink: 0,
-                color: '#ffffff'
-              }}
-            >
-              <path 
-                fillRule="evenodd" 
-                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" 
-                clipRule="evenodd"
-              />
-            </svg>
-          </div>
-        )}
-      </div>
-      
-      {/* Conteúdo principal à direita */}
-      <div className="flex-1 p-3 sm:p-2 flex flex-col min-w-0">
-        {/* JSON Debug - Apenas em modo debug */}
-        {isDebugMode && (
-          <div className="mt-2 p-3 bg-black/30 rounded-lg border border-zinc-700/50 max-h-40 overflow-auto custom-scroll">
-            <div className="text-xs text-zinc-300 font-medium mb-1 flex items-center gap-2">
-              <span>🔍 Debug Info</span>
-              <span className="text-emerald-400 text-[10px] bg-emerald-500/20 px-1 py-0.5 rounded">
-                Copiar JSON
-              </span>
-              <button 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigator.clipboard.writeText(JSON.stringify(file, null, 2));
+      >
+        {/* Card principal - Design limpo inspirado na referência */}
+        <div
+          className="relative backdrop-blur-xl rounded-xl overflow-hidden transition-all duration-300 cursor-pointer border"
+          style={{
+            borderColor: isPlaying ? itemColor.rgba(0.3) : 'rgba(255, 255, 255, 0.1)',
+            background: isPlaying 
+              ? `linear-gradient(135deg, ${itemColor.rgba(0.15)} 0%, ${itemColor.rgba(0.1)} 30%, rgba(0, 0, 0, 0.6) 70%, rgba(15, 23, 42, 0.7) 100%)`
+              : `linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(5, 150, 105, 0.08) 30%, rgba(0, 0, 0, 0.5) 70%, rgba(15, 23, 42, 0.6) 100%)`,
+            boxShadow: isPlaying
+              ? `0 8px 32px ${itemColor.rgba(0.2)}, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
+              : '0 4px 16px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+          }}
+          onMouseEnter={(e) => {
+            if (!isPlaying) {
+              e.currentTarget.style.background = `linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(5, 150, 105, 0.12) 30%, rgba(0, 0, 0, 0.55) 70%, rgba(15, 23, 42, 0.65) 100%)`;
+              e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.08)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!isPlaying) {
+              e.currentTarget.style.background = `linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(5, 150, 105, 0.08) 30%, rgba(0, 0, 0, 0.5) 70%, rgba(15, 23, 42, 0.6) 100%)`;
+              e.currentTarget.style.boxShadow = '0 4px 16px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)';
+            }
+          }}
+        >
+          <div className="flex flex-col sm:flex-row gap-0">
+            {/* Capa do álbum - Ocupa toda a altura do card */}
+            <div className="relative w-full sm:w-[244.5px] sm:min-w-[244.5px] h-[244.5px] sm:h-auto sm:min-h-[244.5px] flex-shrink-0 bg-zinc-800 overflow-hidden rounded-tl-xl rounded-bl-xl sm:rounded-tr-none sm:rounded-br-none sm:self-stretch">
+              <Image
+                src={getThumbnailUrl(file.name)}
+                alt={file.title || file.displayName}
+                width={244.5}
+                height={244.5}
+                className="object-cover w-full h-full"
+                style={{ 
+                  width: '100%', 
+                  height: '100%',
+                  minHeight: '100%',
+                  objectFit: 'cover'
                 }}
-                className="text-zinc-500 hover:text-emerald-400 transition-colors"
-                title="Copiar JSON"
-              >
-                📋
-              </button>
+              />
+              
+              {/* Overlay de reprodução */}
+              {isPlaying && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-tl-xl rounded-bl-xl w-full sm:w-[244.5px]">
+                  {isPlayerPlaying ? (
+                    <SoundWave 
+                      color={`rgb(${itemColor.rgb})`}
+                      size="large"
+                      isPlaying={true}
+                      isLoading={isLoading}  
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-full bg-black/70 flex items-center justify-center">
+                      <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24">
+                        <polygon points="8,5 19,12 8,19" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Tag Beatport no canto superior direito */}
+              {file.isBeatportFormat && (
+                <div className="absolute top-2 right-2 bg-emerald-500 px-2 py-1 rounded-md text-[10px] font-bold text-white uppercase tracking-wide shadow-lg z-10">
+                  Beatport
+                </div>
+              )}
             </div>
-            <pre className="text-xs text-zinc-400 font-mono leading-relaxed whitespace-pre-wrap break-words">
-              {JSON.stringify(file, null, 2)}
-            </pre>
-          </div>
-        )}
-        
-        {/* Linha superior: Título, Artista e Menu */}
-        <div className="flex items-start justify-between mb-2 sm:mb-1 gap-2">
-          <div className="flex-1 min-w-0">
-            <div className="text-white font-bold text-base sm:text-sm leading-tight truncate group-hover:text-white/90 transition-colors">
-              {file.title || file.displayName} 
-            </div>
-            <div className="text-sm sm:text-xs font-medium leading-tight truncate mt-0.5" style={{ color: `rgb(${itemColor.rgb})` }}>
-              {file.artist || 'Artista desconhecido'}
-            </div>
-          </div>
-          
-          <div className="flex-shrink-0 flex items-center gap-2">
-            <StarButton file={file} size="md" />
-            {/* Botão YouTube Music */}
-            <button
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
-                const youtubeMusicUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
-                window.open(youtubeMusicUrl, '_blank', 'noopener,noreferrer');
-              }}
-              className="w-8 h-8 rounded-lg hover:bg-red-500/10 transition-colors text-zinc-400 hover:text-red-400 flex items-center justify-center border border-transparent hover:border-red-500/20"
-              title={`Abrir "${file.title || file.displayName}" no YouTube Music`}
-              type="button"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
-              </svg>
-            </button>
-            {/* Botão Beatport */}
-            <button
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
-                const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
-                window.open(beatportUrl, '_blank', 'noopener,noreferrer');
-              }}
-              className="w-8 h-8 rounded-lg hover:bg-emerald-500/10 transition-colors text-zinc-400 hover:text-emerald-400 flex items-center justify-center border border-transparent hover:border-emerald-500/20 font-bold"
-              title={`Abrir "${file.title || file.displayName}" no Beatport`}
-              type="button"
-            >
-              <span className="text-sm font-extrabold">B</span>
-            </button>
-            <ActionMenu 
-              file={file} 
-              onUpdate={onUpdate} 
-              onEdit={onEdit} 
-              onRemove={handleRemoveFile}
-              onDownloadAlbum={onDownloadAlbum}
-              onRemoveAlbum={onRemoveAlbum}
-              files={files}
-              addToast={addToast}
-            />
-          </div>
-        </div>
-        {/* Todas as informações organizadas */}
-        <div className="space-y-1.5 sm:space-y-0.5">
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-1 text-xs">
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium break-words">
-              📀 Álbum: {file.album || 'N/A'}
-            </span>
-            <span className={`px-2 py-1 rounded font-medium break-words ${
-              file.isBeatportFormat 
-                ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 backdrop-blur-sm' 
-                : 'bg-zinc-600/30 text-zinc-300'
-            }`}>
-              🏷️ Label: {file.label || 'N/A'}
-            </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-medium break-words">
-              📋 Catálogo: {(file as any).catalogNumber || (file as any).catalog || 'N/A'}
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-1 text-xs">
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 rounded font-mono whitespace-nowrap">
-              ⏱️ {file.duration || 'N/A'}
-            </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 whitespace-nowrap">
-              🎵 BPM: {file.bpm || 'N/A'}
-            </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 whitespace-nowrap">
-              🎹 Key: {file.key || 'N/A'}
-            </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 break-words max-w-full">
-              🎧 Gênero: {file.genre || 'N/A'}
-            </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 whitespace-nowrap">
-              📅 Ano: {(file as any).ano ? String((file as any).ano).slice(0, 4) : 'N/A'}
-            </span>
-            <span className="bg-zinc-600/30 text-zinc-300 px-2 py-1 break-words max-w-full">
-              📰 Publicado: {(file as any).publishedDate || (file as any).ano || 'N/A'}
-            </span>
             
-            {/* Indicador de compatibilidade com Beatport */}
-            {file.isBeatportFormat && (
-              <span className="bg-emerald-500/20 text-emerald-200 px-2 py-1 rounded text-xs font-medium border border-emerald-400/30 backdrop-blur-sm whitespace-nowrap">
-                🎛️ Beatport ✓
-              </span>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-1 text-xs">
-            <span className="text-zinc-400 px-2 py-1 font-mono break-all" title={file.name}>
-              📁 {file.name || 'N/A'}
-            </span>
-            <span className="text-zinc-400 px-2 py-1 font-mono whitespace-nowrap">
-              📥 Baixado: {formatDate(file.downloadedAt || file.fileCreatedAt) || 'N/A'}
-            </span>
-            <span className="text-zinc-400 px-2 py-1 font-mono whitespace-nowrap">
-              💾 {(file as any).size ? ((file as any).size / (1024 * 1024)).toFixed(1) + 'MB' : 'N/A'}
-            </span>
-            <span className="text-zinc-400 px-2 py-1 font-mono whitespace-nowrap">
-              📄 {file.name ? `Formato: ${file.name.split('.').pop()}` : 'N/A'}
-            </span>
+            {/* Conteúdo principal */}
+            <div className="flex-1 p-5 flex flex-col min-w-0">
+
+              {/* Debug mode */}
+              {isDebugMode && (
+                <div className="mb-4 p-3 bg-black/50 rounded border border-zinc-700/50 max-h-40 overflow-auto custom-scroll">
+                  <div className="text-xs text-zinc-300 font-medium mb-1 flex items-center gap-2">
+                    <span>🔍 Debug Info</span>
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigator.clipboard.writeText(JSON.stringify(file, null, 2));
+                      }}
+                      className="text-zinc-500 hover:text-emerald-400 transition-colors"
+                      title="Copiar JSON"
+                    >
+                      📋
+                    </button>
+                  </div>
+                  <pre className="text-xs text-zinc-400 font-mono leading-relaxed whitespace-pre-wrap break-words">
+                    {JSON.stringify(file, null, 2)}
+                  </pre>
+                </div>
+              )}
+              
+              {/* Título e Artista */}
+              <div className="mb-4">
+                <h3 className="text-white font-bold text-xl sm:text-lg leading-tight mb-1.5 line-clamp-2">
+                  {file.title || file.displayName}
+                </h3>
+                <p className="text-zinc-400 text-sm leading-tight truncate mb-3" style={{ color: `rgb(${itemColor.rgb})` }}>
+                  {file.artist || 'Artista desconhecido'}
+                </p>
+                
+                {/* Metadados principais - Texto simples */}
+                <div className="space-y-1 text-xs text-zinc-500">
+                  {((file as any).ano || (file as any).publishedDate) && (
+                    <div>
+                      <span className="text-zinc-600">Data de lançamento </span>
+                      <span className="text-zinc-400">{(file as any).ano ? String((file as any).ano).slice(0, 10) : (file as any).publishedDate || 'N/A'}</span>
+                    </div>
+                  )}
+                  {file.label && file.label !== 'N/A' && (
+                    <div>
+                      <span className="text-zinc-600">Gravadora </span>
+                      <span className="text-zinc-400">{file.label}</span>
+                    </div>
+                  )}
+                  {((file as any).catalogNumber || (file as any).catalog) && (file as any).catalogNumber !== 'N/A' && (
+                    <div>
+                      <span className="text-zinc-600">Catálogo </span>
+                      <span className="text-zinc-400 font-mono">{(file as any).catalogNumber || (file as any).catalog}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Botões de ação - Abaixo das informações */}
+              <div className="flex items-center gap-2 mt-auto pt-3 border-t border-zinc-800">
+                <StarButton file={file} size="md" />
+                
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
+                    const youtubeMusicUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
+                    window.open(youtubeMusicUrl, '_blank', 'noopener,noreferrer');
+                  }}
+                  className="w-9 h-9 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 text-zinc-400 hover:text-red-400 flex items-center justify-center border"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(63, 63, 70, 0.8) 0%, rgba(63, 63, 70, 0.9) 100%)',
+                    borderColor: 'rgba(82, 82, 91, 0.5)',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                    e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+                    e.currentTarget.style.color = 'rgb(239, 68, 68)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+                    e.currentTarget.style.color = '';
+                  }}
+                  title="Abrir no YouTube Music"
+                  type="button"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                  </svg>
+                </button>
+                
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
+                    const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
+                    window.open(beatportUrl, '_blank', 'noopener,noreferrer');
+                  }}
+                  className="w-9 h-9 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 text-zinc-400 hover:text-emerald-400 flex items-center justify-center border font-bold"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(63, 63, 70, 0.8) 0%, rgba(63, 63, 70, 0.9) 100%)',
+                    borderColor: 'rgba(82, 82, 91, 0.5)',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                    e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+                    e.currentTarget.style.color = 'rgb(16, 185, 129)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+                    e.currentTarget.style.color = '';
+                  }}
+                  title="Abrir no Beatport"
+                  type="button"
+                >
+                  <span className="text-xs font-extrabold">B</span>
+                </button>
+                
+                <ActionMenu 
+                  file={file} 
+                  onUpdate={onUpdate} 
+                  onEdit={onEdit} 
+                  onRemove={handleRemoveFile}
+                  onDownloadAlbum={onDownloadAlbum}
+                  onRemoveAlbum={onRemoveAlbum}
+                  files={files}
+                  addToast={addToast}
+                />
+              </div>
+
+              {/* Informações adicionais - Texto pequeno e discreto */}
+              <div className="mt-3 pt-3 border-t border-zinc-800">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500">
+                  {file.duration && file.duration !== 'N/A' && (
+                    <span className="font-mono">{file.duration}</span>
+                  )}
+                  {file.bpm && typeof file.bpm === 'number' && (
+                    <span>BPM: {file.bpm}</span>
+                  )}
+                  {file.key && file.key !== 'N/A' && (
+                    <span>Key: {file.key}</span>
+                  )}
+                  {file.genre && file.genre !== 'N/A' && (
+                    <span className="truncate max-w-[200px]" title={file.genre}>Gênero: {file.genre}</span>
+                  )}
+                  {(file.downloadedAt || file.fileCreatedAt) && (
+                    <span className="font-mono">Baixado: {formatDate(file.downloadedAt || file.fileCreatedAt) || 'N/A'}</span>
+                  )}
+                  {(file as any).size && (
+                    <span className="font-mono">{(file as any).size ? ((file as any).size / (1024 * 1024)).toFixed(1) + 'MB' : 'N/A'}</span>
+                  )}
+                  {file.name && (
+                    <span className="font-mono truncate max-w-[200px]" title={file.name}>Formato: {file.name.split('.').pop()?.toUpperCase()}</span>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
-    </div>
   );
 });
 
@@ -1652,8 +1667,9 @@ export default function FileList() {
       return;
     }
 
+    const albumName = file.album.toLowerCase().trim();
     // Encontrar todas as músicas do mesmo álbum
-    const albumTracks = files.filter(f => f.album && f.album.toLowerCase().trim() === file.album.toLowerCase().trim());
+    const albumTracks = files.filter(f => f.album && f.album.toLowerCase().trim() === albumName);
     
     if (albumTracks.length <= 1) {
       console.log(`ℹ️ [FileList] Apenas uma música do álbum "${file.album}", removendo apenas esta música`);
@@ -2174,7 +2190,7 @@ export default function FileList() {
         </div>
 
       {/* Lista de arquivos - Layout mobile (cards) */}
-      <div className="block sm:hidden flex-1 overflow-y-auto space-y-1 custom-scroll-square">
+      <div id="file-list-scroll-container" className="block sm:hidden flex-1 overflow-y-auto space-y-1 custom-scroll-square">
         {Object.keys(groupedFiles).length === 0 || Object.values(groupedFiles).every(group => group.length === 0) ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
@@ -2204,6 +2220,7 @@ export default function FileList() {
               {groupFiles.map((file, index) => {
                 const isAdding = recentlyAdded.includes(file.name);
                 const isRemoving = recentlyRemoved.includes(file.name);
+                const fileIndex = files.findIndex(f => f.name === file.name);
                 
                 // Log para debug (remover depois se necessário)
                 if (isAdding || isRemoving) {
@@ -2213,6 +2230,7 @@ export default function FileList() {
                 return (
                 <div
                   key={file.name}
+                  id={`file-item-${fileIndex}`}
                   data-file-name={file.name}
                   className={`glass-card backdrop-blur-sm border border-emerald-500/20 hover:border-emerald-500/40 rounded-lg p-2 transition-all duration-300 hover:shadow-lg hover:shadow-emerald-500/20 h-[50px] flex items-center ${
                     playerState.currentFile?.name === file.name ? 'border-emerald-500/60 bg-emerald-500/10' : ''
@@ -2342,7 +2360,7 @@ export default function FileList() {
       </div>
 
       {/* Lista de arquivos - Layout desktop (cards como mobile) */}
-      <div className="hidden sm:block flex-1 overflow-y-auto space-y-1 custom-scroll-square">
+      <div id="file-list-scroll-container" className="hidden sm:block flex-1 overflow-y-auto space-y-1 custom-scroll-square">
         {Object.keys(groupedFiles).length === 0 || Object.values(groupedFiles).every(group => group.length === 0) ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
@@ -2372,6 +2390,7 @@ export default function FileList() {
               {groupFiles.map((file, index) => {
                 const isAdding = recentlyAdded.includes(file.name);
                 const isRemoving = recentlyRemoved.includes(file.name);
+                const fileIndex = files.findIndex(f => f.name === file.name);
                 
                 // Log para debug (remover depois se necessário)
                 if (isAdding || isRemoving) {
@@ -2382,6 +2401,7 @@ export default function FileList() {
                 <DynamicFileItem 
                   key={file.name}
                   file={file}
+                  fileIndex={fileIndex}
                   isPlaying={playerState.currentFile?.name === file.name}
                   isPlayerPlaying={playerState.isPlaying}
                   onPlay={() => handlePlay(file)}
@@ -3541,7 +3561,20 @@ function ActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, onRemov
     <div className="relative inline-block">
       <button
         ref={buttonRef}
-        className="w-8 h-8 rounded-lg hover:bg-emerald-500/10 transition-colors text-zinc-400 hover:text-emerald-400 flex items-center justify-center border border-transparent hover:border-emerald-500/20"
+        className="w-9 h-9 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 text-zinc-400 hover:text-white flex items-center justify-center border"
+        style={{
+          background: 'linear-gradient(135deg, rgba(63, 63, 70, 0.8) 0%, rgba(63, 63, 70, 0.9) 100%)',
+          borderColor: 'rgba(82, 82, 91, 0.5)',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+          e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.transform = 'translateY(0) scale(1)';
+          e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+        }}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();

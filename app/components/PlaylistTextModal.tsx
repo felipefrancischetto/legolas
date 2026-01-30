@@ -23,6 +23,8 @@ interface PlaylistTextModalProps {
 interface TrackMetadata {
   title: string;
   artist: string;
+  thumbnail?: string;
+  duration?: string;
   url?: string;
   videoId?: string;
   source?: 'youtube-music' | 'youtube';
@@ -635,7 +637,7 @@ export default function PlaylistTextModal({ isOpen, onClose, themeColors }: Play
 
           if (queueItem && queueItem.id) {
             addedItems.push(queueItem);
-            console.log(`✅ Adicionado à fila: ${queueItem.title || queueItem.url}`);
+            console.log(`✅ Adicionado à fila: ${('title' in queueItem && queueItem.title) || queueItem.url}`);
           } else {
             errors.push(`Falha ao adicionar "${track.artist} - ${track.title}"`);
           }

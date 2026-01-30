@@ -983,7 +983,12 @@ export function useDownload() {
     return {
       queue: [],
       history: [],
-      addToQueue: () => {},
+      addToQueue: () => ({ 
+        id: 'fallback-id', 
+        url: '', 
+        status: 'error' as const,
+        steps: []
+      }),
       removeFromQueue: () => {},
       updateQueueItem: () => {},
       clearHistory: () => {},
@@ -999,7 +1004,7 @@ export function useDownload() {
       updateProgress: () => {},
       addStep: () => {},
       getCurrentDownload: () => undefined,
-      getPlaylistProgressData: () => ({ current: 0, total: 0, percentage: 0 }),
+      getPlaylistProgressData: () => ({ current: 0, total: 0, completed: 0, errors: 0, downloading: 0 }),
       clearStuckDownloads: () => {}
     };
   }

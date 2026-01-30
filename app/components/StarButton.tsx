@@ -42,32 +42,43 @@ export default function StarButton({ file, size = 'md', className = '' }: StarBu
       title: file.title || file.displayName,
       artist: file.artist,
       path: file.path,
-      thumbnail: file.thumbnail,
-      ...file
+      thumbnail: file.thumbnail
     });
   };
 
+  const buttonSize = size === 'md' ? 'w-9 h-9' : size === 'lg' ? 'w-10 h-10' : 'w-8 h-8';
+  
   return (
     <button
       onClick={handleClick}
-      className={`${sizeClasses[size]} rounded-lg transition-all duration-200 flex items-center justify-center group ${className}`}
+      className={`${buttonSize} rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center group ${className}`}
       style={{
-        backgroundColor: isStarred ? 'rgba(251, 191, 36, 0.15)' : 'transparent',
-        border: `1px solid ${isStarred ? 'rgba(251, 191, 36, 0.4)' : 'rgba(255, 255, 255, 0.1)'}`,
+        background: isStarred 
+          ? 'linear-gradient(135deg, rgba(251, 191, 36, 0.2) 0%, rgba(251, 191, 36, 0.15) 100%)'
+          : 'linear-gradient(135deg, rgba(63, 63, 70, 0.8) 0%, rgba(63, 63, 70, 0.9) 100%)',
+        borderColor: isStarred ? 'rgba(251, 191, 36, 0.4)' : 'rgba(82, 82, 91, 0.5)',
         boxShadow: isStarred 
-          ? '0 2px 8px rgba(251, 191, 36, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)' 
-          : 'none'
+          ? '0 4px 12px rgba(251, 191, 36, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)' 
+          : '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
       }}
       onMouseEnter={(e) => {
-        if (!isStarred) {
+        e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+        if (isStarred) {
+          e.currentTarget.style.boxShadow = '0 8px 24px rgba(251, 191, 36, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+        } else {
           e.currentTarget.style.backgroundColor = 'rgba(251, 191, 36, 0.1)';
           e.currentTarget.style.borderColor = 'rgba(251, 191, 36, 0.3)';
+          e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
         }
       }}
       onMouseLeave={(e) => {
-        if (!isStarred) {
-          e.currentTarget.style.backgroundColor = 'transparent';
-          e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+        e.currentTarget.style.transform = 'translateY(0) scale(1)';
+        if (isStarred) {
+          e.currentTarget.style.boxShadow = '0 4px 12px rgba(251, 191, 36, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+        } else {
+          e.currentTarget.style.backgroundColor = '';
+          e.currentTarget.style.borderColor = '';
+          e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
         }
       }}
       title={isStarred ? 'Remover da quick playlist' : 'Adicionar à quick playlist'}

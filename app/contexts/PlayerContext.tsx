@@ -48,7 +48,7 @@ interface PlayerState {
 interface PlayerContextType {
   playerState: PlayerState;
   setPlayerState: (state: Partial<PlayerState> | ((prev: PlayerState) => Partial<PlayerState>)) => void;
-  play: (file: FileInfo) => void;
+  play: (file: FileInfo, resetTime?: boolean) => void;
   pause: () => void;
   resume: () => void;
   stop: () => void;
@@ -81,7 +81,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // Carregar estado do localStorage apenas no cliente após montagem
   useEffect(() => {
     let initialVolume = 1;
-    let initialCurrentFile = null;
+    let initialCurrentFile: FileInfo | null = null;
     let initialCurrentTime = 0;
 
     try {
@@ -226,25 +226,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
       if (!hasChanged) return prev;
 
-      // Se mudou de música, verificar progresso salvo
-      if (partial.currentFile && partial.currentFile !== prev.currentFile) {
-        try {
-          const savedTime = safeGetItem<string>('audioPlayerCurrentTime_' + partial.currentFile.name);
-          if (savedTime) {
-            const parsedTime = parseFloat(savedTime);
-            if (!isNaN(parsedTime) && parsedTime >= 0) {
-              newState.currentTime = parsedTime;
-            } else {
-              newState.currentTime = 0;
-            }
-          } else {
-            newState.currentTime = 0;
-          }
-        } catch (error) {
-          console.warn('Erro ao restaurar progresso:', error);
-          newState.currentTime = 0;
-        }
-      }
+      // Não restaurar progresso aqui - isso é feito na função play() quando necessário
+      // Isso evita conflitos quando navegamos (next/prev) onde queremos tempo = 0
 
       return newState;
     });
@@ -269,7 +252,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [Math.floor(playerState.currentTime), playerState.currentFile?.name, saveToLocalStorage]);
 
   // Callbacks memoizados para evitar re-renders
-  const play = useCallback((file: FileInfo) => {
+  const play = useCallback((file: FileInfo, resetTime: boolean = false) => {
     updatePlayerState(prev => {
       if (prev.currentFile?.name === file.name && prev.isPlaying) {
         return {};
@@ -278,13 +261,29 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const isNewFile = prev.currentFile?.name !== file.name;
       
       if (isNewFile) {
+        // Se resetTime for true, não restaurar progresso salvo
+        let initialTime = 0;
+        if (!resetTime) {
+          try {
+            const savedTime = safeGetItem<string>('audioPlayerCurrentTime_' + file.name);
+            if (savedTime) {
+              const parsedTime = parseFloat(savedTime);
+              if (!isNaN(parsedTime) && parsedTime >= 0) {
+                initialTime = parsedTime;
+              }
+            }
+          } catch (error) {
+            console.warn('Erro ao restaurar progresso:', error);
+          }
+        }
+        
         return {
           currentFile: file,
           isPlaying: true,
           isLoading: true,
           isReady: false,
           error: null,
-          currentTime: 0
+          currentTime: initialTime
         };
       } else {
         return {

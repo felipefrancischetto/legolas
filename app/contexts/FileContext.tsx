@@ -185,18 +185,18 @@ export function FileProvider({ children }: { children: ReactNode }) {
         });
         
         // Sempre detectar mudanças incrementais, mesmo se a lista não mudou (para garantir animações)
-        const prevFileNames = new Set(prevFiles.map(f => f.name));
-        const newFileNames = new Set(optimizedFiles.map(f => f.name));
+        const prevFileNames = new Set(prevFiles.map((f: FileInfo) => f.name));
+        const newFileNames = new Set(optimizedFiles.map((f: FileInfo) => f.name));
         
         // Arquivos adicionados
-        const added = optimizedFiles.filter(f => !prevFileNames.has(f.name));
+        const added = optimizedFiles.filter((f: FileInfo) => !prevFileNames.has(f.name));
         // Arquivos removidos - detectar todos os que não estão mais na nova lista
         // Não filtrar por recentlyRemoved aqui, pois precisamos detectar remoções reais do servidor
-        const removed = prevFiles.filter(f => !newFileNames.has(f.name));
+        const removed = prevFiles.filter((f: FileInfo) => !newFileNames.has(f.name));
         
         console.log(`🔍 [FileContext] Comparação: ${prevFiles.length} arquivos anteriores, ${optimizedFiles.length} arquivos novos`);
         if (removed.length > 0) {
-          console.log(`🗑️ [FileContext] Arquivos que não estão mais na lista do servidor:`, removed.map(f => f.name));
+          console.log(`🗑️ [FileContext] Arquivos que não estão mais na lista do servidor:`, removed.map((f: FileInfo) => f.name));
         }
         
         // Se não há mudanças e não é forçado, manter estado atual
@@ -210,7 +210,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
           
           // Atualizar estados de animação ANTES de atualizar a lista
           if (added.length > 0) {
-            const addedNames = added.map(f => f.name);
+            const addedNames = added.map((f: FileInfo) => f.name);
             console.log(`✨ [FileContext] Arquivos adicionados:`, addedNames);
             setRecentlyAdded(prev => {
               const updated = [...new Set([...prev, ...addedNames])];
@@ -227,7 +227,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
           }
           
           if (removed.length > 0) {
-            const removedNames = removed.map(f => f.name);
+            const removedNames = removed.map((f: FileInfo) => f.name);
             console.log(`🗑️ [FileContext] Arquivos removidos detectados:`, removedNames);
             
             // Adicionar aos arquivos removidos para animação
@@ -241,7 +241,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
             // Combinar arquivos novos com arquivos removidos (que ainda estão sendo animados)
             const filesWithRemoved = [
               ...optimizedFiles,
-              ...removed.filter(f => !optimizedFiles.some(nf => nf.name === f.name))
+              ...removed.filter((f: FileInfo) => !optimizedFiles.some((nf: FileInfo) => nf.name === f.name))
             ];
             
             // Lista atualizada com itens removidos temporariamente mantidos
@@ -381,7 +381,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
         // Remover da lista de arquivos
         setFiles(prevFiles => {
           const beforeCount = prevFiles.length;
-          const filtered = prevFiles.filter(f => f.name !== fileName);
+          const filtered = prevFiles.filter((f: FileInfo) => f.name !== fileName);
           const afterCount = filtered.length;
           
           if (beforeCount !== afterCount) {

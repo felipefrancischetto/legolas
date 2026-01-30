@@ -65,6 +65,9 @@ async function extractAudioMetadata(filePath: string) {
     const catalogNumber = tags.catalog || tags.CATALOG || tags.catalogNumber || tags.CATALOGNUMBER || 
                          tags.catalognumber || tags.catalog_number || null;
 
+    // Extrair remixer de múltiplas fontes
+    const remixer = tags.remixer || tags.REMIXER || tags.remix || tags.REMIX || null;
+
     // Extrair comentário que contém informações sobre as fontes dos metadados
     const comment = tags.comment || tags.COMMENT || null;
     
@@ -101,7 +104,8 @@ async function extractAudioMetadata(filePath: string) {
       thumbnail: thumbnailUrl,
       ano: tags.year || tags.date || tags.YEAR || tags.DATE || null,
       publishedDate: tags.publisher_date || tags.PUBLISHER_DATE || tags.publishedDate || tags.PUBLISHED_DATE || null,
-      isBeatportFormat: isBeatportFormat
+      isBeatportFormat: isBeatportFormat,
+      remixer: remixer
     };
   } catch (error) {
     console.error('Erro ao extrair metadados:', error);

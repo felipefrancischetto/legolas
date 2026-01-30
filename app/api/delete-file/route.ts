@@ -36,12 +36,12 @@ export async function DELETE(request: NextRequest) {
         const files = await readdir(downloadsDir);
         const matchingFile = files.find(file => {
           // Comparação case-insensitive
-          if (file.toLowerCase() === fileName.toLowerCase()) {
+          if (file.toLowerCase() === fileName!.toLowerCase()) {
             return true;
           }
           // Comparação sem extensão
           const fileBase = file.replace(/\.[^/.]+$/, '');
-          const fileNameBase = fileName.replace(/\.[^/.]+$/, '');
+          const fileNameBase = fileName!.replace(/\.[^/.]+$/, '');
           if (fileBase.toLowerCase() === fileNameBase.toLowerCase()) {
             return true;
           }

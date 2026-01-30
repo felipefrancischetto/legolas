@@ -16,6 +16,7 @@ import LoadingSpinner from './LoadingSpinner';
 import { SkeletonAudioPlayer } from './SkeletonComponents';
 import { logger } from '../utils/logger';
 
+
 export default function AudioPlayer() {
   const waveformDesktopRef = useRef<HTMLDivElement>(null);
   const waveformMobileRef = useRef<HTMLDivElement>(null);
@@ -31,14 +32,33 @@ export default function AudioPlayer() {
   const [showMusicStudyModal, setShowMusicStudyModal] = useState(false);
   const [playerDominantColor, setPlayerDominantColor] = useState('rgba(16, 185, 129, 0.2)');
   const [isWaveReady, setIsWaveReady] = useState(false);
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
 
   const lastInitializedFile = useRef<string | null>(null);
   const isInitializing = useRef(false); // Para evitar múltiplas inicializações simultâneas
   const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Para debounce
+  const isNavigatingRef = useRef(false); // Flag para indicar navegação (next/prev)
+  const navigationTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Timeout para resetar flag de navegação
+  const isHandlingEndedRef = useRef(false); // Flag para evitar múltiplas chamadas de handleEnded
+  const isPlayingRef = useRef(false); // Ref para isPlaying para evitar dependências
+  const currentTimeRef = useRef(0); // Ref para currentTime para evitar dependências
+  const lastPlayerMinimizedRef = useRef<boolean | null>(null); // Ref para rastrear mudanças de playerMinimized
 
   const { playerState, setPlayerState, pause, resume, setVolume, setIsMuted, play } = usePlayer();
   const { setPlayerOpen, playerMinimized, setPlayerMinimized } = useUI();
   const { files } = useFile();
+  
+  const filesRef = useRef(files); // Ref para files
+  const playRef = useRef(play); // Ref para função play
+  
+  // Atualizar refs quando valores mudam
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+  
+  useEffect(() => {
+    playRef.current = play;
+  }, [play]);
   const { settings } = useSettings();
   const { isInPlaylist, toggleTrack } = useQuickPlaylist();
 
@@ -47,32 +67,142 @@ export default function AudioPlayer() {
   const isPlaying = playerState.isPlaying;
   const currentTime = playerState.currentTime;
   const duration = playerState.duration;
-  const volume = playerState.volume;
-  const isMuted = playerState.isMuted;
   const isLoading = playerState.isLoading;
   const isReady = playerState.isReady;
   const error = playerState.error;
+  
+  // Estado local para volume durante interação (evita re-renders)
+  const [localVolume, setLocalVolume] = useState(playerState.volume);
+  const [localIsMuted, setLocalIsMuted] = useState(playerState.isMuted);
+  
+  // Refs para volume para evitar dependências em useEffects críticos
+  const localVolumeRef = useRef(playerState.volume);
+  const localIsMutedRef = useRef(playerState.isMuted);
+  
+  // Usar valores locais para renderização
+  const volume = localVolume;
+  const isMuted = localIsMuted;
+  
+  // Atualizar refs quando estado local muda
+  useEffect(() => {
+    localVolumeRef.current = localVolume;
+  }, [localVolume]);
+  
+  useEffect(() => {
+    localIsMutedRef.current = localIsMuted;
+  }, [localIsMuted]);
+
+  // Atualizar refs quando valores mudam
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
 
   // Funções de navegação otimizadas
   const handleNext = useCallback(() => {
-    if (!currentFile) return;
+    if (!currentFile || isNavigatingRef.current) {
+      logger.debug('⚠️ handleNext ignorado:', { 
+        hasCurrentFile: !!currentFile, 
+        isNavigating: isNavigatingRef.current 
+      });
+      return; // Prevenir múltiplos cliques
+    }
+    
     const currentIndex = files.findIndex(f => f.name === currentFile.name);
-    if (currentIndex < files.length - 1) {
+    if (currentIndex >= 0 && currentIndex < files.length - 1) {
       const nextFile = files[currentIndex + 1];
       logger.debug('▶️ Próxima música:', nextFile.displayName);
-      play(nextFile);
+      
+      // Marcar como navegação para resetar tempo
+      isNavigatingRef.current = true;
+      
+      // Pausar e limpar áudio atual antes de trocar
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+      }
+      
+      // Resetar flag de handleEnded também
+      isHandlingEndedRef.current = false;
+      
+      // Limpar timeout anterior se existir
+      if (navigationTimeoutRef.current) {
+        clearTimeout(navigationTimeoutRef.current);
+      }
+      
+      // Resetar flag após um tempo
+      navigationTimeoutRef.current = setTimeout(() => {
+        isNavigatingRef.current = false;
+      }, 1500);
+      
+      // Chamar play com resetTime=true para não restaurar progresso
+      // E garantir que isPlaying seja true para auto-play funcionar
+      play(nextFile, true);
+    } else {
+      logger.debug('ℹ️ Não há próxima música disponível');
     }
   }, [currentFile, files, play]);
 
   const handlePrev = useCallback(() => {
-    if (!currentFile) return;
+    if (!currentFile || isNavigatingRef.current) {
+      logger.debug('⚠️ handlePrev ignorado:', { 
+        hasCurrentFile: !!currentFile, 
+        isNavigating: isNavigatingRef.current 
+      });
+      return; // Prevenir múltiplos cliques
+    }
+    
     const currentIndex = files.findIndex(f => f.name === currentFile.name);
     if (currentIndex > 0) {
       const prevFile = files[currentIndex - 1];
       logger.debug('◀️ Música anterior:', prevFile.displayName);
-      play(prevFile);
+      
+      // Marcar como navegação para resetar tempo
+      isNavigatingRef.current = true;
+      
+      // Pausar e limpar áudio atual antes de trocar
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+      }
+      
+      // Resetar flag de handleEnded também
+      isHandlingEndedRef.current = false;
+      
+      // Limpar timeout anterior se existir
+      if (navigationTimeoutRef.current) {
+        clearTimeout(navigationTimeoutRef.current);
+      }
+      
+      // Resetar flag após um tempo
+      navigationTimeoutRef.current = setTimeout(() => {
+        isNavigatingRef.current = false;
+      }, 1500);
+      
+      // Chamar play com resetTime=true para não restaurar progresso
+      // E garantir que isPlaying seja true para auto-play funcionar
+      play(prevFile, true);
+    } else {
+      logger.debug('ℹ️ Não há música anterior disponível');
     }
   }, [currentFile, files, play]);
+
+  // Cleanup de timeouts ao desmontar
+  useEffect(() => {
+    return () => {
+      if (navigationTimeoutRef.current) {
+        clearTimeout(navigationTimeoutRef.current);
+      }
+      if (volumeUpdateTimeoutRef.current) {
+        clearTimeout(volumeUpdateTimeoutRef.current);
+      }
+      isHandlingEndedRef.current = false;
+      isNavigatingRef.current = false;
+    };
+  }, []);
 
   // Detectar mobile e inicializar cliente
   useEffect(() => {
@@ -117,7 +247,8 @@ export default function AudioPlayer() {
     
     const audio = new Audio();
     audio.preload = 'metadata';
-    audio.volume = isMuted ? 0 : volume;
+    // Usar refs para obter valores atuais sem causar re-inicialização
+    audio.volume = localIsMutedRef.current ? 0 : localVolumeRef.current;
     audio.crossOrigin = 'anonymous';
     
     // Event listeners otimizados
@@ -133,26 +264,58 @@ export default function AudioPlayer() {
     };
 
     const handleCanPlay = () => {
-      logger.debug('✅ Áudio pronto para reprodução');
+      const shouldPlay = isPlayingRef.current;
+      const savedTime = currentTimeRef.current;
       
-      // Aplicar progresso inicial salvo (apenas uma vez quando carrega)
-      if (currentTime > 0 && Math.abs(audio.currentTime - currentTime) > 1) {
-        // Aplicando progresso inicial
-        audio.currentTime = currentTime;
+      logger.debug('✅ Áudio pronto para reprodução', {
+        shouldPlay,
+        paused: audio.paused,
+        isNavigating: isNavigatingRef.current,
+        savedTime
+      });
+      
+      // Aplicar progresso inicial salvo APENAS se não estivermos navegando
+      // Quando navegamos (next/prev), o tempo deve ser 0
+      if (!isNavigatingRef.current && savedTime > 0 && Math.abs(audio.currentTime - savedTime) > 1) {
+        // Aplicando progresso inicial apenas se não for navegação
+        audio.currentTime = savedTime;
+        logger.debug('⏩ Restaurando progresso salvo:', savedTime);
+      } else if (isNavigatingRef.current) {
+        // Garantir que o tempo seja 0 ao navegar
+        audio.currentTime = 0;
+        logger.debug('🔄 Resetando tempo para navegação');
       }
       
-      setPlayerState(prev => ({
-        ...prev,
-        isReady: true,
-        isLoading: false
-      }));
+      // Atualizar estado apenas se necessário para evitar re-renders
+      setPlayerState(prev => {
+        const newCurrentTime = isNavigatingRef.current ? 0 : savedTime;
+        // Só atualizar se realmente mudou algo
+        if (prev.isReady && !prev.isLoading && Math.abs(prev.currentTime - newCurrentTime) < 0.1) {
+          return prev; // Não atualizar se já está correto
+        }
+        return {
+          ...prev,
+          isReady: true,
+          isLoading: false,
+          currentTime: newCurrentTime
+        };
+      });
       
-      // Auto-play se solicitado
-      if (isPlaying && audio.paused) {
-        audio.play().catch(err => {
-          logger.warn('Auto-play falhou:', err);
-          pause();
-        });
+      // Auto-play se solicitado - garantir que realmente toque
+      if (shouldPlay && audio.paused) {
+        logger.debug('▶️ Tentando auto-play...');
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              logger.debug('✅ Auto-play bem-sucedido');
+            })
+            .catch(err => {
+              logger.warn('❌ Auto-play falhou:', err);
+              // Não pausar automaticamente - deixar o usuário decidir
+              setPlayerState(prev => ({ ...prev, isPlaying: false }));
+            });
+        }
       }
     };
 
@@ -185,9 +348,44 @@ export default function AudioPlayer() {
      };
 
     const handleEnded = () => {
+      // Proteção contra múltiplas chamadas
+      if (isHandlingEndedRef.current) {
+        logger.debug('⚠️ handleEnded já está sendo processado, ignorando');
+        return;
+      }
+      
+      isHandlingEndedRef.current = true;
       logger.debug('🎵 Música terminou');
+      
+      // Pausar e resetar estado
       setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0 }));
-      handleNext();
+      
+      // Usar setTimeout para evitar problemas de closure e usar refs para valores atualizados
+      setTimeout(() => {
+        // Verificar se há próxima música antes de avançar usando refs
+        const currentFileName = currentFile?.name;
+        if (!currentFileName) {
+          isHandlingEndedRef.current = false;
+          return;
+        }
+        
+        const currentFiles = filesRef.current;
+        const playFunction = playRef.current;
+        
+        const currentIndex = currentFiles.findIndex(f => f.name === currentFileName);
+        const hasNext = currentIndex >= 0 && currentIndex < currentFiles.length - 1;
+        
+        if (hasNext) {
+          const nextFile = currentFiles[currentIndex + 1];
+          // Chamar play usando ref para evitar dependências
+          playFunction(nextFile, true);
+        } else {
+          // Não há próxima música, apenas resetar flag
+          logger.debug('ℹ️ Não há próxima música, parando reprodução');
+        }
+        
+        isHandlingEndedRef.current = false;
+      }, 300);
     };
 
     const handleError = (e: Event) => {
@@ -241,12 +439,18 @@ export default function AudioPlayer() {
     audio.src = audioUrl;
     audioRef.current = audio;
     
-    setPlayerState(prev => ({ 
-      ...prev, 
-      isLoading: true, 
-      error: null, 
-      isReady: false
-    }));
+    // Só atualizar estado se realmente mudou para evitar re-renders
+    setPlayerState(prev => {
+      if (prev.isLoading && !prev.isReady && !prev.error) {
+        return prev; // Já está no estado de loading correto
+      }
+      return { 
+        ...prev, 
+        isLoading: true, 
+        error: null, 
+        isReady: false
+      };
+    });
     
     return () => {
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
@@ -261,33 +465,49 @@ export default function AudioPlayer() {
         audioRef.current = null;
       }
     };
-  }, [currentFile?.name, handleNext]);
+  }, [currentFile?.name]); // Apenas arquivo atual - volume é controlado separadamente
 
   // Controlar reprodução/pausa
   useEffect(() => {
-    if (!audioRef.current) return;
+    if (!audioRef.current || !isReady) return;
     
-    if (isPlaying && audioRef.current.paused) {
-      logger.debug('▶️ Iniciando reprodução');
-      audioRef.current.play().catch(err => {
-        logger.warn('Erro ao reproduzir:', err);
-        pause();
+    // Usar ref para evitar dependências desnecessárias
+    const shouldPlay = isPlayingRef.current;
+    
+    if (shouldPlay && audioRef.current.paused) {
+      logger.debug('▶️ Iniciando reprodução', {
+        readyState: audioRef.current.readyState,
+        paused: audioRef.current.paused,
+        src: audioRef.current.src
       });
-    } else if (!isPlaying && !audioRef.current.paused) {
+      const playPromise = audioRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            logger.debug('✅ Reprodução iniciada com sucesso');
+          })
+          .catch(err => {
+            logger.warn('❌ Erro ao reproduzir:', err);
+            setPlayerState(prev => ({ ...prev, isPlaying: false }));
+          });
+      }
+    } else if (!shouldPlay && !audioRef.current.paused) {
       logger.debug('⏸️ Pausando reprodução');
       audioRef.current.pause();
     }
-  }, [isPlaying, pause]);
+  }, [isPlaying, isReady, setPlayerState]); // Manter dependências para sincronizar com refs
 
-  // Controlar volume sem re-render completo
+  // Controlar volume do áudio usando estado local (não depende do contexto)
+  // Este é o único lugar onde o volume do áudio é atualizado
   useEffect(() => {
     if (audioRef.current) {
-      const newVolume = isMuted ? 0 : volume;
+      const newVolume = localIsMuted ? 0 : localVolume;
+      // Só atualizar se realmente mudou para evitar operações desnecessárias
       if (Math.abs(audioRef.current.volume - newVolume) > 0.01) {
         audioRef.current.volume = newVolume;
       }
     }
-  }, [volume, isMuted]);
+  }, [localVolume, localIsMuted]);
 
   // Sincronizar WaveSurfer com progresso do áudio nativo (melhorado)
   useEffect(() => {
@@ -320,15 +540,54 @@ export default function AudioPlayer() {
   useEffect(() => {
     if (!currentFile || !isClient) return;
 
+    // Não inicializar WaveSurfer se o player estiver minimizado (desktop)
+    if (!isMobile && playerMinimized) {
+      // Destruir WaveSurfer se existir quando minimizar
+      if (wavesurferRef.current) {
+        try {
+          wavesurferRef.current.destroy();
+          wavesurferRef.current = null;
+          setIsWaveReady(false);
+          lastInitializedFile.current = null;
+        } catch (e) {
+          logger.warn('Erro ao destruir WaveSurfer ao minimizar:', e);
+        }
+      }
+      lastPlayerMinimizedRef.current = playerMinimized;
+      return;
+    }
+
+    // Verificar se o player acabou de ser maximizado
+    const wasMinimized = lastPlayerMinimizedRef.current === true;
+    const justMaximized = wasMinimized && !playerMinimized;
+    
+    // Se acabou de ser maximizado, forçar reinicialização mesmo que o arquivo seja o mesmo
+    if (justMaximized && wavesurferRef.current) {
+      logger.debug('🔄 Player acabou de ser maximizado - destruindo WaveSurfer para reinicializar');
+      try {
+        wavesurferRef.current.destroy();
+        wavesurferRef.current = null;
+        setIsWaveReady(false);
+        lastInitializedFile.current = null;
+      } catch (e) {
+        logger.warn('Erro ao destruir WaveSurfer ao maximizar:', e);
+      }
+    }
+
+    // Atualizar ref do estado de minimização
+    lastPlayerMinimizedRef.current = playerMinimized;
+
     // Delay fixo para garantir que o container está visível
+    // Delay maior quando o player é maximizado para garantir renderização completa
     let isCancelled = false;
     let timeoutId: NodeJS.Timeout | null = null;
+    const delay = justMaximized ? 800 : 500;
 
     timeoutId = setTimeout(() => {
       if (isCancelled) return;
 
-      // Evitar re-inicialização desnecessária
-      if (lastInitializedFile.current === currentFile.name && wavesurferRef.current) {
+      // Evitar re-inicialização desnecessária apenas se o arquivo não mudou e não acabou de ser maximizado
+      if (lastInitializedFile.current === currentFile.name && wavesurferRef.current && !justMaximized) {
         logger.debug('⚠️ WaveSurfer já inicializado para:', currentFile.name);
         return;
       }
@@ -554,7 +813,7 @@ export default function AudioPlayer() {
       };
 
       initWaveSurfer();
-    }, 500);
+    }, delay);
 
     return () => {
       isCancelled = true;
@@ -582,7 +841,7 @@ export default function AudioPlayer() {
         wavesurferRef.current = null;
       }
     };
-  }, [currentFile?.name, isMobile, isClient]); // Removido settings.disableDynamicColors para evitar re-execuções
+  }, [currentFile?.name, isMobile, isClient, playerMinimized]); // Adicionado playerMinimized para reinicializar quando maximizar
 
   // Timeout de fallback para evitar loading infinito da wave
   useEffect(() => {
@@ -612,15 +871,184 @@ export default function AudioPlayer() {
     }
   }, [isPlaying, pause, resume]);
 
+  // Ref para controlar volume durante arrasto sem causar re-renders
+  const isDraggingVolumeRef = useRef(false);
+  const volumeUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastContextVolumeRef = useRef(playerState.volume);
+  const lastContextMutedRef = useRef(playerState.isMuted);
+
+  // Sincronizar estado local com contexto quando contexto mudar externamente
+  // Mas não durante arrasto para evitar conflitos
+  useEffect(() => {
+    if (!isDraggingVolumeRef.current) {
+      // Só sincronizar se não estiver arrastando e se realmente mudou
+      const volumeChanged = Math.abs(lastContextVolumeRef.current - playerState.volume) > 0.01;
+      const mutedChanged = lastContextMutedRef.current !== playerState.isMuted;
+      
+      if (volumeChanged || mutedChanged) {
+        // Atualizar refs primeiro
+        lastContextVolumeRef.current = playerState.volume;
+        lastContextMutedRef.current = playerState.isMuted;
+        
+        // Atualizar estado local usando função de atualização para evitar dependências
+        if (volumeChanged) {
+          setLocalVolume(prev => {
+            // Só atualizar se realmente mudou
+            if (Math.abs(prev - playerState.volume) > 0.01) {
+              return playerState.volume;
+            }
+            return prev;
+          });
+        }
+        if (mutedChanged) {
+          setLocalIsMuted(prev => {
+            // Só atualizar se realmente mudou
+            if (prev !== playerState.isMuted) {
+              return playerState.isMuted;
+            }
+            return prev;
+          });
+        }
+      }
+    }
+  }, [playerState.volume, playerState.isMuted]);
+
+  // Ref para os elementos de input do volume para atualização direta do DOM
+  const volumeSliderVerticalRef = useRef<HTMLInputElement | null>(null);
+  const volumeSliderHorizontalRef = useRef<HTMLInputElement | null>(null);
+  const volumeProgressFillRef = useRef<HTMLDivElement | null>(null);
+
+  // Cores do tema baseadas na cor dominante - mais claras e visíveis
+  const themeColors = useMemo(() => {
+    const baseColor = playerDominantColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (baseColor) {
+      const [, r, g, b] = baseColor;
+      return {
+        primary: `rgb(${r}, ${g}, ${b})`,
+        primaryLight: `rgba(${r}, ${g}, ${b}, 0.9)`,
+        primaryDark: `rgba(${r}, ${g}, ${b}, 0.7)`,
+        background: `rgba(${r}, ${g}, ${b}, 0.15)`,
+        border: `rgba(${r}, ${g}, ${b}, 0.4)`
+      };
+    }
+    return {
+      primary: 'rgb(16, 185, 129)',
+      primaryLight: 'rgba(16, 185, 129, 0.9)',
+      primaryDark: 'rgba(16, 185, 129, 0.7)',
+      background: 'rgba(16, 185, 129, 0.15)',
+      border: 'rgba(16, 185, 129, 0.4)'
+    };
+  }, [playerDominantColor]);
+
   const handleVolumeChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newVolume = parseFloat(e.target.value);
-    setVolume(newVolume);
-    setIsMuted(newVolume === 0);
+    const newIsMuted = newVolume === 0;
+    
+    // Atualizar áudio imediatamente para feedback instantâneo (sem esperar re-render)
+    if (audioRef.current) {
+      audioRef.current.volume = newVolume;
+    }
+    
+    // Atualizar estado local imediatamente (isso atualiza o input e o useEffect de volume)
+    setLocalVolume(newVolume);
+    setLocalIsMuted(newIsMuted);
+    
+    // Durante arrasto, atualizar DOM diretamente também (para performance visual)
+    if (isDraggingVolumeRef.current) {
+      // Atualizar barra de progresso visual diretamente
+      if (volumeProgressFillRef.current) {
+        volumeProgressFillRef.current.style.height = `${newVolume * 100}%`;
+        volumeProgressFillRef.current.style.transition = 'none';
+      }
+      // Atualizar background do slider horizontal diretamente
+      if (volumeSliderHorizontalRef.current) {
+        const primaryColor = themeColors.primary;
+        volumeSliderHorizontalRef.current.style.background = 
+          `linear-gradient(to right, ${primaryColor} 0%, ${primaryColor} ${newVolume * 100}%, rgb(63, 63, 70) ${newVolume * 100}%, rgb(63, 63, 70) 100%)`;
+        volumeSliderHorizontalRef.current.style.transition = 'none';
+      }
+      
+      // Limpar timeout anterior
+      if (volumeUpdateTimeoutRef.current) {
+        clearTimeout(volumeUpdateTimeoutRef.current);
+      }
+      
+      // Atualizar contexto apenas com debounce durante arrasto (evita re-renders do contexto)
+      volumeUpdateTimeoutRef.current = setTimeout(() => {
+        if (!isDraggingVolumeRef.current) {
+          // Só atualizar se não estiver mais arrastando
+          setVolume(newVolume);
+          setIsMuted(newIsMuted);
+          lastContextVolumeRef.current = newVolume;
+          lastContextMutedRef.current = newIsMuted;
+        }
+      }, 300); // Debounce aumentado para 300ms durante arrasto
+    } else {
+      // Quando não está arrastando, atualizar contexto imediatamente
+      // Limpar timeout anterior se existir
+      if (volumeUpdateTimeoutRef.current) {
+        clearTimeout(volumeUpdateTimeoutRef.current);
+        volumeUpdateTimeoutRef.current = null;
+      }
+      
+      // Atualizar contexto (isso pode causar re-render, mas é aceitável quando não está arrastando)
+      setVolume(newVolume);
+      setIsMuted(newIsMuted);
+      lastContextVolumeRef.current = newVolume;
+      lastContextMutedRef.current = newIsMuted;
+    }
+  }, [setVolume, setIsMuted, themeColors.primary]);
+
+  const handleVolumeMouseDown = useCallback(() => {
+    isDraggingVolumeRef.current = true;
+  }, []);
+
+  const handleVolumeMouseUp = useCallback((e: React.MouseEvent<HTMLInputElement>) => {
+    isDraggingVolumeRef.current = false;
+    
+    const finalVolume = parseFloat((e.target as HTMLInputElement).value);
+    const finalIsMuted = finalVolume === 0;
+    
+    // Limpar timeout pendente
+    if (volumeUpdateTimeoutRef.current) {
+      clearTimeout(volumeUpdateTimeoutRef.current);
+      volumeUpdateTimeoutRef.current = null;
+    }
+    
+    // Restaurar transições CSS
+    if (volumeProgressFillRef.current) {
+      volumeProgressFillRef.current.style.transition = 'height 0.1s ease';
+    }
+    if (volumeSliderHorizontalRef.current) {
+      volumeSliderHorizontalRef.current.style.transition = 'background 0.1s ease';
+    }
+    
+    // Garantir que estado local está sincronizado (já deve estar, mas garantir)
+    setLocalVolume(finalVolume);
+    setLocalIsMuted(finalIsMuted);
+    
+    // Atualizar contexto imediatamente quando soltar (sem debounce)
+    setVolume(finalVolume);
+    setIsMuted(finalIsMuted);
+    lastContextVolumeRef.current = finalVolume;
+    lastContextMutedRef.current = finalIsMuted;
   }, [setVolume, setIsMuted]);
 
   const toggleMute = useCallback(() => {
-    setIsMuted(!isMuted);
-  }, [isMuted, setIsMuted]);
+    const newMuted = !localIsMuted;
+    
+    // Atualizar estado local primeiro
+    setLocalIsMuted(newMuted);
+    
+    // Atualizar áudio diretamente para feedback instantâneo
+    if (audioRef.current) {
+      audioRef.current.volume = newMuted ? 0 : localVolumeRef.current;
+    }
+    
+    // Atualizar contexto (pode causar re-render, mas é aceitável para toggle)
+    setIsMuted(newMuted);
+    lastContextMutedRef.current = newMuted;
+  }, [localIsMuted, setIsMuted]);
 
   const seekToPosition = useCallback((clientX: number, element: HTMLElement) => {
     logger.debug('🎯 seekToPosition called', { 
@@ -757,8 +1185,7 @@ export default function AudioPlayer() {
       title: currentFile.title || currentFile.displayName,
       artist: currentFile.artist,
       path: currentFile.path,
-      thumbnail: getThumbnailUrl(currentFile.name),
-      ...currentFile
+      thumbnail: getThumbnailUrl(currentFile.name)
     });
   }, [currentFile, toggleTrack]);
 
@@ -822,28 +1249,6 @@ export default function AudioPlayer() {
     };
   }, [currentFile, duration, formatTime]);
 
-  // Cores do tema baseadas na cor dominante - mais claras e visíveis
-  const themeColors = useMemo(() => {
-    const baseColor = playerDominantColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-    if (baseColor) {
-      const [, r, g, b] = baseColor;
-      return {
-        primary: `rgb(${r}, ${g}, ${b})`,
-        primaryLight: `rgba(${r}, ${g}, ${b}, 0.9)`,
-        primaryDark: `rgba(${r}, ${g}, ${b}, 0.7)`,
-        background: `rgba(${r}, ${g}, ${b}, 0.15)`,
-        border: `rgba(${r}, ${g}, ${b}, 0.4)`
-      };
-    }
-    return {
-      primary: 'rgb(16, 185, 129)',
-      primaryLight: 'rgba(16, 185, 129, 0.9)',
-      primaryDark: 'rgba(16, 185, 129, 0.7)',
-      background: 'rgba(16, 185, 129, 0.15)',
-      border: 'rgba(16, 185, 129, 0.4)'
-    };
-  }, [playerDominantColor]);
-
   // Não renderizar no servidor
   if (!isClient) return null;
   
@@ -877,7 +1282,8 @@ export default function AudioPlayer() {
                 rgba(15, 23, 42, 0.8) 100%
               )`,
               boxShadow: `0 8px 32px ${themeColors.background}, 0 2px 8px rgba(0, 0, 0, 0.3)`,
-              minWidth: 260
+              minWidth: 260,
+              pointerEvents: 'auto'
             }}
           >
             {/* Main Content */}
@@ -973,16 +1379,115 @@ export default function AudioPlayer() {
                     </svg>
                   )}
                 </button>
-                <button 
-                  onClick={handleMusicStudyClick}
-                  className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-white transition-colors rounded-full hover:bg-zinc-800/50 hover:scale-110 duration-200"
-                  style={{ color: themeColors.primaryLight }}
-                  title="Análise de Música Eletrônica"
+                <div 
+                  className="relative flex items-center"
+                  onMouseEnter={() => setShowVolumeSlider(true)}
+                  onMouseLeave={() => setShowVolumeSlider(false)}
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                  </svg>
-                </button>
+                  <button 
+                    onClick={toggleMute} 
+                    className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-white transition-colors rounded-full hover:bg-zinc-800/50 hover:scale-110 duration-200"
+                    style={{ color: isMuted ? 'rgb(239, 68, 68)' : themeColors.primaryLight }}
+                    title={isMuted ? 'Desmutar' : 'Mutar'}
+                  >
+                    {isMuted || volume === 0 ? (
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+                      </svg>
+                    )}
+                  </button>
+                  {showVolumeSlider && (
+                    <div 
+                      className="absolute bottom-full left-1/2 px-1 py-3 rounded-lg backdrop-blur-xl shadow-lg border flex items-center justify-center"
+                      style={{
+                        background: `linear-gradient(135deg, 
+                          ${playerDominantColor.replace('0.2', '0.3')} 0%, 
+                          rgba(0, 0, 0, 0.4) 70%, 
+                          rgba(15, 23, 42, 0.5) 100%
+                        )`,
+                        borderColor: themeColors.border,
+                        height: '120px',
+                        transform: 'translateX(-50%)',
+                        zIndex: 1000,
+                        marginBottom: '0px',
+                        boxShadow: `0 4px 16px ${themeColors.background}, 0 2px 8px rgba(0, 0, 0, 0.2)`,
+                        pointerEvents: 'auto'
+                      }}
+                      onMouseEnter={() => setShowVolumeSlider(true)}
+                      onMouseLeave={() => setShowVolumeSlider(false)}
+                    >
+                      <div className="relative flex items-center justify-center" style={{ height: '100px', width: '16px' }}>
+                        {/* Background track */}
+                        <div 
+                          className="absolute"
+                          style={{
+                            width: '2px',
+                            height: '100px',
+                            backgroundColor: 'rgb(63, 63, 70)',
+                            borderRadius: '1px',
+                            left: '50%',
+                            transform: 'translateX(-50%)'
+                          }}
+                        />
+                        {/* Progress fill */}
+                        <div 
+                          ref={volumeProgressFillRef}
+                          className="absolute bottom-0"
+                          style={{
+                            width: '2px',
+                            height: `${(isMuted ? 0 : volume) * 100}%`,
+                            backgroundColor: themeColors.primary,
+                            borderRadius: '1px',
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            transition: isDraggingVolumeRef.current ? 'none' : 'height 0.1s ease'
+                          }}
+                        />
+                        {/* Slider input */}
+                        <div 
+                          className="absolute"
+                          style={{
+                            width: '100px',
+                            height: '2px',
+                            top: '50%',
+                            left: '50%',
+                            transform: 'translate(-50%, -50%) rotate(-90deg)',
+                            transformOrigin: 'center center',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}
+                        >
+                          <input
+                            ref={volumeSliderVerticalRef}
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.01"
+                            value={isMuted ? 0 : volume}
+                            onChange={handleVolumeChange}
+                            onMouseDown={handleVolumeMouseDown}
+                            onMouseUp={handleVolumeMouseUp}
+                            className="volume-slider-vertical"
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              color: themeColors.primary, // Verde Legolas
+                              margin: 0,
+                              padding: 0,
+                              display: 'block',
+                              accentColor: themeColors.primary // Para navegadores modernos
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <button 
                   onClick={() => setPlayerMinimized(false)} 
                   className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-white transition-colors rounded-full hover:bg-zinc-800/50 hover:scale-110 duration-200"
@@ -997,7 +1502,7 @@ export default function AudioPlayer() {
             </div>
 
             {/* Progress Bar */}
-            <div className="px-3 pt-1 pb-2" onClick={(e) => e.stopPropagation()}>
+            <div className="px-3 pt-1 pb-2">
               <div 
                 className="w-full h-3 cursor-pointer relative shadow-md rounded-full overflow-hidden"
                 onClick={(e) => {
@@ -1293,16 +1798,20 @@ export default function AudioPlayer() {
                 )}
               </button>
               <input
+                ref={volumeSliderHorizontalRef}
                 type="range"
                 min="0"
                 max="1"
                 step="0.01"
                 value={isMuted ? 0 : volume}
                 onChange={handleVolumeChange}
+                onMouseDown={handleVolumeMouseDown}
+                onMouseUp={handleVolumeMouseUp}
                 className="w-20 audio-slider"
                 style={{
                   color: themeColors.primary,
-                  background: `linear-gradient(to right, ${themeColors.primary} 0%, ${themeColors.primary} ${(isMuted ? 0 : volume) * 100}%, rgb(63, 63, 70) ${(isMuted ? 0 : volume) * 100}%, rgb(63, 63, 70) 100%)`
+                  background: `linear-gradient(to right, ${themeColors.primary} 0%, ${themeColors.primary} ${(isMuted ? 0 : volume) * 100}%, rgb(63, 63, 70) ${(isMuted ? 0 : volume) * 100}%, rgb(63, 63, 70) 100%)`,
+                  transition: isDraggingVolumeRef.current ? 'none' : 'background 0.1s ease'
                 }}
               />
             </div>

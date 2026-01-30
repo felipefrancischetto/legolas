@@ -393,7 +393,7 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
               outro: 0
             },
             arrangement: (apiAnalysis.temporalArrangement && apiAnalysis.temporalArrangement.length > 0)
-              ? apiAnalysis.temporalArrangement.map(el => ({
+              ? apiAnalysis.temporalArrangement.map((el: { name: string; type: 'synth' | 'instrument' | 'drum' | 'bass'; startTime: number; endTime: number; confidence?: number }) => ({
                   name: el.name,
                   type: el.type,
                   startTime: el.startTime,
@@ -1510,7 +1510,7 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                                       className="absolute h-full flex items-center justify-center text-xs font-semibold text-white"
                                       style={{
                                         left: '0%',
-                                        width: `${(intro / duration) * 100}%`,
+                                        width: `${(intro / realDuration) * 100}%`,
                                         backgroundColor: `${themeColors.primary}40`
                                       }}
                                     >
@@ -1519,8 +1519,8 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                                     <div 
                                       className="absolute h-full flex items-center justify-center text-xs font-semibold text-white"
                                       style={{
-                                        left: `${(intro / duration) * 100}%`,
-                                        width: `${(breakdown / duration) * 100}%`,
+                                        left: `${(intro / realDuration) * 100}%`,
+                                        width: `${(breakdown / realDuration) * 100}%`,
                                         backgroundColor: `${themeColors.primaryDark}40`
                                       }}
                                     >
@@ -1529,8 +1529,8 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                                     <div 
                                       className="absolute h-full flex items-center justify-center text-xs font-semibold text-white"
                                       style={{
-                                        left: `${((intro + breakdown) / duration) * 100}%`,
-                                        width: `${(drop / duration) * 100}%`,
+                                        left: `${((intro + breakdown) / realDuration) * 100}%`,
+                                        width: `${(drop / realDuration) * 100}%`,
                                         backgroundColor: `${themeColors.primary}60`
                                       }}
                                     >
@@ -1539,8 +1539,8 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                                     <div 
                                       className="absolute h-full flex items-center justify-center text-xs font-semibold text-white"
                                       style={{
-                                        left: `${((intro + breakdown + drop) / duration) * 100}%`,
-                                        width: `${(outro / duration) * 100}%`,
+                                        left: `${((intro + breakdown + drop) / realDuration) * 100}%`,
+                                        width: `${(outro / realDuration) * 100}%`,
                                         backgroundColor: `${themeColors.primaryDark}40`
                                       }}
                                     >

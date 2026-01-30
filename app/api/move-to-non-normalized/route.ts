@@ -7,7 +7,7 @@ import { getDownloadsPath } from '../utils/common';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const fileName = body.fileName;
+    let fileName = body.fileName;
     
     if (!fileName) {
       return NextResponse.json({ error: 'Nome do arquivo não informado' }, { status: 400 });
