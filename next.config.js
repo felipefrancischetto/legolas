@@ -128,8 +128,8 @@ const nextConfig = {
       buildActivity: true,
       buildActivityPosition: 'bottom-right',
     },
-    // Desabilitar overlay de erros que pode causar problemas com source maps
-    reactStrictMode: true,
+    // Desabilitar Strict Mode para evitar rebuilds duplos em desenvolvimento
+    reactStrictMode: false,
   }),
   
   // Configurações para melhorar o tratamento de erros

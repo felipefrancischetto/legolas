@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { mkdir, access, unlink, readdir, readFile, rename } from 'fs/promises';
+import { mkdir, access, unlink, readdir, readFile } from 'fs/promises';
 import { join } from 'path';
-import { constants } from 'fs';
+import { constants, existsSync } from 'fs';
 import NodeID3 from 'node-id3';
 import { sendProgressEvent } from '@/lib/utils/progressEventService';
-import { hasValidCookiesFile } from '@/app/api/utils/common';
+import { hasValidCookiesFile, getDownloadsPath, moveFile } from '@/app/api/utils/common';
 
 const execAsync = promisify(exec);
 
@@ -74,17 +74,7 @@ function deduplicateLabel(label: string): string {
   return uniqueWords.join(' ').trim();
 }
 
-async function getDownloadsPath() {
-  try {
-    const configPath = join(process.cwd(), 'downloads.config.json');
-    const config = await readFile(configPath, 'utf-8');
-    const { path } = JSON.parse(config);
-    return join(process.cwd(), path);
-  } catch (error) {
-    // Se não houver configuração, use o caminho padrão
-    return join(process.cwd(), 'downloads');
-  }
-}
+// getDownloadsPath agora é importado de @/app/api/utils/common
 
 export async function GET(request: NextRequest) {
   // 🔧 Declarar downloadId fora do try para estar disponível no catch
@@ -122,11 +112,40 @@ export async function GET(request: NextRequest) {
     }
 
     // Obter o caminho de downloads
-    const downloadsFolder = await getDownloadsPath();
+    let downloadsFolder: string;
+    try {
+      downloadsFolder = await getDownloadsPath();
+      console.log('📁 [Download] Caminho de downloads obtido:', downloadsFolder);
+    } catch (pathError) {
+      const errorMsg = pathError instanceof Error ? pathError.message : String(pathError);
+      console.error('❌ [Download] Erro ao obter caminho de downloads:', errorMsg);
+      throw new Error(`Erro ao obter caminho de downloads: ${errorMsg}`);
+    }
 
     // Criar pasta de downloads se não existir
-    await mkdir(downloadsFolder, { recursive: true });
-    console.log('Pasta de downloads criada/verificada:', downloadsFolder);
+    try {
+      await mkdir(downloadsFolder, { recursive: true });
+      // Verificar se a pasta foi criada e é acessível
+      await access(downloadsFolder, constants.F_OK);
+      await readdir(downloadsFolder);
+      console.log('✅ [Download] Pasta de downloads criada/verificada:', downloadsFolder);
+    } catch (mkdirError) {
+      const errorMsg = mkdirError instanceof Error ? mkdirError.message : String(mkdirError);
+      console.error('❌ [Download] Erro ao criar/verificar pasta de downloads:', downloadsFolder);
+      console.error('   Erro:', errorMsg);
+      
+      // Enviar evento de erro se houver downloadId
+      if (downloadId) {
+        sendProgressEvent(downloadId, {
+          type: 'error',
+          step: 'Erro ao criar pasta de downloads',
+          progress: 0,
+          detail: `Não foi possível criar ou acessar a pasta: ${downloadsFolder}. Erro: ${errorMsg}`
+        });
+      }
+      
+      throw new Error(`Não foi possível criar ou acessar a pasta de downloads: ${downloadsFolder}. Erro: ${errorMsg}`);
+    }
 
     // Evento: Verificando pasta
     if (downloadId) {
@@ -226,13 +245,16 @@ export async function GET(request: NextRequest) {
     let stdout: string;
     
     try {
+      // Normalizar caminho para o comando yt-dlp (Windows precisa de barras duplas ou barras normais escapadas)
+      const normalizedDownloadsFolder = downloadsFolder.replace(/\\/g, '/');
+      
       const result = await execAsync(
         `yt-dlp -x --audio-format ${format} --audio-quality 10 ` +
         `--embed-thumbnail --convert-thumbnails jpg ` +
         `--add-metadata ` +
         `${cookiesFlag}` +
         `--default-search "ytsearch" ` +
-        `-o "${downloadsFolder}/%(title)s.%(ext)s" ` +
+        `-o "${normalizedDownloadsFolder}/%(title)s.%(ext)s" ` +
         `--no-part --force-overwrites "${url}"`,
         {
           maxBuffer: 1024 * 1024 * 10 // 10MB buffer
@@ -243,12 +265,15 @@ export async function GET(request: NextRequest) {
       // Se falhar com cookies, tentar sem cookies
       if (hasValidCookies && error instanceof Error && error.message.includes('does not look like a Netscape format')) {
         console.log('Cookies inválidos no download, tentando sem cookies...');
+        // Normalizar caminho para o comando yt-dlp (Windows precisa de barras duplas ou barras normais escapadas)
+        const normalizedDownloadsFolder = downloadsFolder.replace(/\\/g, '/');
+        
         const result = await execAsync(
           `yt-dlp -x --audio-format ${format} --audio-quality 10 ` +
           `--embed-thumbnail --convert-thumbnails jpg ` +
           `--add-metadata ` +
           `--default-search "ytsearch" ` +
-          `-o "${downloadsFolder}/%(title)s.%(ext)s" ` +
+          `-o "${normalizedDownloadsFolder}/%(title)s.%(ext)s" ` +
           `--no-part --force-overwrites "${url}"`,
           {
             maxBuffer: 1024 * 1024 * 10 // 10MB buffer
@@ -407,7 +432,7 @@ export async function GET(request: NextRequest) {
     // Escrever metadados no arquivo
     console.log('\n📝 [Download] Iniciando escrita de metadados no arquivo...');
     try {
-      let audioFile = `${downloadsFolder}/${videoInfo.title}.${format}`;
+      let audioFile = join(downloadsFolder, `${videoInfo.title}.${format}`);
       const exists = await fileExists(audioFile);
       console.log(`   📁 Arquivo: ${audioFile}`);
       console.log(`   ✅ Arquivo existe: ${exists}`);
@@ -508,7 +533,7 @@ export async function GET(request: NextRequest) {
             }
             
             // Substituir arquivo original pelo arquivo com metadados
-            await rename(tempFile, audioFile);
+            await moveFile(tempFile, audioFile);
             
             success = true;
             console.log(`   ✅ [FLAC] Metadados Vorbis escritos com sucesso!`);
@@ -598,10 +623,6 @@ export async function GET(request: NextRequest) {
             // Mover arquivo para pasta nao-normalizadas se não foi normalizado pelo Beatport
             if (useBeatport && !fromBeatport && audioFile) {
               try {
-                const { rename, mkdir } = require('fs/promises');
-                const { join } = require('path');
-                const { existsSync } = require('fs');
-                
                 // Verificar se o arquivo já está na pasta nao-normalizadas
                 if (!audioFile.includes('nao-normalizadas')) {
                   const naoNormalizadasDir = join(downloadsFolder, 'nao-normalizadas');
@@ -610,6 +631,7 @@ export async function GET(request: NextRequest) {
                     console.log(`   ✅ Pasta nao-normalizadas criada: ${naoNormalizadasDir}`);
                   }
                   
+                  // Usar join para extrair o nome do arquivo de forma compatível com Windows
                   const fileName = audioFile.split(/[/\\]/).pop() || '';
                   if (fileName) {
                     let newFilePath = join(naoNormalizadasDir, fileName);
@@ -622,7 +644,7 @@ export async function GET(request: NextRequest) {
                       newFilePath = join(naoNormalizadasDir, `${fileBase}_${timestamp}${fileExt}`);
                     }
                     
-                    await rename(audioFile, newFilePath);
+                    await moveFile(audioFile, newFilePath);
                     audioFile = newFilePath; // Atualizar caminho do arquivo
                     console.log(`   📁 Arquivo movido para pasta nao-normalizadas: ${fileName}`);
                   }

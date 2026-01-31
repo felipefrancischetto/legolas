@@ -16,9 +16,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Salvar o caminho em um arquivo de configuração
+    // Salvar o caminho EXATAMENTE como foi fornecido pelo usuário
+    // Não fazer nenhuma normalização ou modificação - usar o que o usuário selecionou
     const configPath = join(process.cwd(), 'downloads.config.json');
-    await writeFile(configPath, JSON.stringify({ path }));
+    await writeFile(configPath, JSON.stringify({ path }, null, 2), 'utf-8');
+
+    console.log(`✅ [set-downloads-path] Caminho salvo exatamente como fornecido: ${path}`);
 
     return NextResponse.json({
       status: 'success',

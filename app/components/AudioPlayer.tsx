@@ -33,6 +33,7 @@ export default function AudioPlayer() {
   const [playerDominantColor, setPlayerDominantColor] = useState('rgba(16, 185, 129, 0.2)');
   const [isWaveReady, setIsWaveReady] = useState(false);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
   const lastInitializedFile = useRef<string | null>(null);
   const isInitializing = useRef(false); // Para evitar múltiplas inicializações simultâneas
@@ -70,6 +71,13 @@ export default function AudioPlayer() {
   const isLoading = playerState.isLoading;
   const isReady = playerState.isReady;
   const error = playerState.error;
+
+  // Resetar erro de imagem quando o arquivo mudar
+  useEffect(() => {
+    if (currentFile?.name) {
+      setImageError(false);
+    }
+  }, [currentFile?.name]);
   
   // Estado local para volume durante interação (evita re-renders)
   const [localVolume, setLocalVolume] = useState(playerState.volume);
@@ -1291,14 +1299,27 @@ export default function AudioPlayer() {
               {/* Foto */}
               <div className="flex-shrink-0">
                 <button onClick={handleAlbumClick} className="hover:scale-105 transition-transform duration-200">
-                  <Image
-                    src={getThumbnailUrl(currentFile.name)}
-                    alt={currentFile.title || currentFile.displayName}
-                    width={44}
-                    height={44}
-                    className="object-cover bg-zinc-800 rounded-lg cursor-pointer shadow-md"
-                    style={{ width: 44, height: 44 }}
-                  />
+                  {imageError ? (
+                    <div className="w-[82px] h-[82px] flex items-center justify-center bg-zinc-800 rounded-lg shadow-md" style={{ marginTop: '12px' }}>
+                      <svg className="w-10 h-10 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                      </svg>
+                    </div>
+                  ) : (
+                    <Image
+                      src={getThumbnailUrl(currentFile.name)}
+                      alt={currentFile.title || currentFile.displayName}
+                      width={82}
+                      height={82}
+                      className="object-cover bg-zinc-800 rounded-lg cursor-pointer shadow-md"
+                      style={{ width: 82, height: 82, marginTop: '12px' }}
+                      onError={() => {
+                        console.warn('Erro ao carregar imagem no player:', currentFile.name);
+                        setImageError(true);
+                      }}
+                      unoptimized
+                    />
+                  )}
                 </button>
               </div>
               
@@ -1308,17 +1329,6 @@ export default function AudioPlayer() {
                   {currentFile.title || currentFile.displayName}
                 </div>
                 <div className="text-xs truncate font-medium mt-0.5 flex items-center gap-2" style={{ color: themeColors.primary }}>
-                  <div 
-                    className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center"
-                    style={{ 
-                      backgroundColor: `${themeColors.primary}25`,
-                      border: `1px solid ${themeColors.primary}40`
-                    }}
-                  >
-                    <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-                    </svg>
-                  </div>
                   {currentFile.artist || '-'}
                 </div>
               </div>
@@ -1326,10 +1336,10 @@ export default function AudioPlayer() {
               {/* Controles */}
               <div className="flex items-center gap-2 flex-shrink-0">
                 <button 
-                  onClick={handlePrev} 
+                  onClick={handleNext} 
                   className="text-white player-button hover:scale-110 transition-transform duration-200" 
                   style={{ color: themeColors.primaryLight }}
-                  title="Música anterior"
+                  title="Próxima música"
                 >
                   <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
@@ -1351,10 +1361,10 @@ export default function AudioPlayer() {
                   )}
                 </button>
                 <button 
-                  onClick={handleNext} 
+                  onClick={handlePrev} 
                   className="text-white player-button hover:scale-110 transition-transform duration-200"
                   style={{ color: themeColors.primaryLight }}
-                  title="Próxima música"
+                  title="Música anterior"
                 >
                   <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
@@ -1362,10 +1372,20 @@ export default function AudioPlayer() {
                 </button>
                 <button 
                   onClick={handleAddToPlaylist}
-                  className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-white transition-colors rounded-full hover:bg-zinc-800/50 hover:scale-110 duration-200"
+                  className="w-8 h-8 flex items-center justify-center transition-all duration-200 hover:scale-105 backdrop-blur-md hover:shadow-lg rounded-xl"
                   style={{ 
-                    color: isInPlaylist(currentFile.name) ? themeColors.primary : themeColors.primaryLight,
-                    backgroundColor: isInPlaylist(currentFile.name) ? `${themeColors.primary}20` : 'transparent'
+                    background: `linear-gradient(135deg, ${themeColors.background} 0%, ${themeColors.background.replace('0.15', '0.25')} 100%)`,
+                    color: themeColors.primary,
+                    border: `1px solid ${themeColors.border}`,
+                    boxShadow: `0 4px 12px ${themeColors.primary}20, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                    e.currentTarget.style.boxShadow = `0 8px 24px ${themeColors.primary}30, inset 0 1px 0 rgba(255, 255, 255, 0.15)`;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                    e.currentTarget.style.boxShadow = `0 4px 12px ${themeColors.primary}20, inset 0 1px 0 rgba(255, 255, 255, 0.1)`;
                   }}
                   title={isInPlaylist(currentFile.name) ? 'Remover da playlist' : 'Adicionar à playlist'}
                 >
@@ -1587,6 +1607,11 @@ export default function AudioPlayer() {
             onClose={() => setShowAlbumModal(false)}
             albumData={getAlbumData()!}
             themeColors={themeColors}
+            currentFile={currentFile}
+            onSave={() => {
+              // Recarregar dados após salvar
+              // O contexto de arquivos será atualizado automaticamente quando necessário
+            }}
           />
         )}
 
@@ -1678,14 +1703,27 @@ export default function AudioPlayer() {
             {/* Foto do álbum */}
             <div className="flex-shrink-0">
               <button onClick={handleAlbumClick} className="hover:scale-105 transition-transform duration-200">
-                <Image
-                  src={getThumbnailUrl(currentFile.name)}
-                  alt={currentFile.title || currentFile.displayName}
-                  width={70}
-                  height={70}
-                  className="object-cover bg-zinc-800 rounded-lg cursor-pointer shadow-lg"
-                  style={{ width: 70, height: 70 }}
-                />
+                {imageError ? (
+                  <div className="w-[82px] h-[82px] flex items-center justify-center bg-zinc-800 rounded-lg shadow-lg" style={{ marginTop: '12px' }}>
+                    <svg className="w-10 h-10 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                    </svg>
+                  </div>
+                ) : (
+                  <Image
+                    src={getThumbnailUrl(currentFile.name)}
+                    alt={currentFile.title || currentFile.displayName}
+                    width={82}
+                    height={82}
+                    className="object-cover bg-zinc-800 rounded-lg cursor-pointer shadow-lg"
+                    style={{ width: 82, height: 82, marginTop: '12px' }}
+                    onError={() => {
+                      console.warn('Erro ao carregar imagem no player:', currentFile.name);
+                      setImageError(true);
+                    }}
+                    unoptimized
+                  />
+                )}
               </button>
             </div>
 
@@ -1695,17 +1733,6 @@ export default function AudioPlayer() {
                 {currentFile.title || currentFile.displayName}
               </div>
               <div className="text-base truncate font-medium mt-0.5 flex items-center gap-2" style={{ color: themeColors.primary }}>
-                <div 
-                  className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center"
-                  style={{ 
-                    backgroundColor: `${themeColors.primary}25`,
-                    border: `1px solid ${themeColors.primary}40`
-                  }}
-                >
-                  <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-                  </svg>
-                </div>
                 {currentFile.artist || '-'}
               </div>
               <div className="flex items-center gap-3 mt-1">
@@ -1744,7 +1771,7 @@ export default function AudioPlayer() {
             {/* Controles de reprodução */}
             <div className="flex items-center gap-3 flex-shrink-0">
               <button 
-                onClick={handlePrev} 
+                onClick={handleNext} 
                 className="text-white player-button hover:scale-110 transition-transform duration-200" 
                 style={{ color: themeColors.primaryLight }}
               >
@@ -1770,7 +1797,7 @@ export default function AudioPlayer() {
               </button>
 
               <button 
-                onClick={handleNext} 
+                onClick={handlePrev} 
                 className="text-white player-button hover:scale-110 transition-transform duration-200"
                 style={{ color: themeColors.primaryLight }}
               >
@@ -1820,10 +1847,20 @@ export default function AudioPlayer() {
             <div className="flex-shrink-0 ml-3">
               <button 
                 onClick={handleAddToPlaylist}
-                className="w-8 h-8 flex items-center justify-center transition-colors rounded-full hover:bg-zinc-800/50 hover:scale-110 duration-200"
+                className="w-8 h-8 flex items-center justify-center transition-all duration-200 hover:scale-105 backdrop-blur-md hover:shadow-lg rounded-xl"
                 style={{ 
-                  color: isInPlaylist(currentFile.name) ? themeColors.primary : themeColors.primaryLight,
-                  backgroundColor: isInPlaylist(currentFile.name) ? `${themeColors.primary}20` : 'transparent'
+                  background: `linear-gradient(135deg, ${themeColors.background} 0%, ${themeColors.background.replace('0.15', '0.25')} 100%)`,
+                  color: themeColors.primary,
+                  border: `1px solid ${themeColors.border}`,
+                  boxShadow: `0 4px 12px ${themeColors.primary}20, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                  e.currentTarget.style.boxShadow = `0 8px 24px ${themeColors.primary}30, inset 0 1px 0 rgba(255, 255, 255, 0.15)`;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                  e.currentTarget.style.boxShadow = `0 4px 12px ${themeColors.primary}20, inset 0 1px 0 rgba(255, 255, 255, 0.1)`;
                 }}
                 title={isInPlaylist(currentFile.name) ? 'Remover da playlist' : 'Adicionar à playlist'}
               >
@@ -1878,14 +1915,27 @@ export default function AudioPlayer() {
           <div className="flex items-center gap-3">
             <div className="flex-shrink-0">
               <button onClick={handleAlbumClick} className="hover:scale-105 transition-transform duration-200">
-                <Image
-                  src={getThumbnailUrl(currentFile.name)}
-                  alt={currentFile.title || currentFile.displayName}
-                  width={60}
-                  height={60}
-                  className="object-cover bg-zinc-800 rounded-lg cursor-pointer shadow-lg"
-                  style={{ width: 60, height: 60 }}
-                />
+                {imageError ? (
+                  <div className="w-[82px] h-[82px] flex items-center justify-center bg-zinc-800 rounded-lg shadow-lg" style={{ marginTop: '12px' }}>
+                    <svg className="w-10 h-10 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                    </svg>
+                  </div>
+                ) : (
+                  <Image
+                    src={getThumbnailUrl(currentFile.name)}
+                    alt={currentFile.title || currentFile.displayName}
+                    width={82}
+                    height={82}
+                    className="object-cover bg-zinc-800 rounded-lg cursor-pointer shadow-lg"
+                    style={{ width: 82, height: 82, marginTop: '12px' }}
+                    onError={() => {
+                      console.warn('Erro ao carregar imagem no player:', currentFile.name);
+                      setImageError(true);
+                    }}
+                    unoptimized
+                  />
+                )}
               </button>
             </div>
             <div className="flex-1 min-w-0 flex flex-col justify-center">
@@ -1893,17 +1943,6 @@ export default function AudioPlayer() {
                 {currentFile.title || currentFile.displayName}
               </div>
               <div className="text-sm truncate font-medium mt-0.5 flex items-center gap-2" style={{ color: themeColors.primary }}>
-                <div 
-                  className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center"
-                  style={{ 
-                    backgroundColor: `${themeColors.primary}25`,
-                    border: `1px solid ${themeColors.primary}40`
-                  }}
-                >
-                  <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-                  </svg>
-                </div>
                 {currentFile.artist || '-'}
               </div>
               <div className="flex items-center gap-2 mt-1">
@@ -2035,7 +2074,7 @@ export default function AudioPlayer() {
             {/* Controles de reprodução */}
             <div className="flex items-center gap-2">
               <button 
-                onClick={handlePrev} 
+                onClick={handleNext} 
                 className="text-white player-button hover:scale-110 transition-transform duration-200"
                 style={{ color: themeColors.primaryLight }}
               >
@@ -2061,7 +2100,7 @@ export default function AudioPlayer() {
               </button>
 
               <button 
-                onClick={handleNext} 
+                onClick={handlePrev} 
                 className="text-white player-button hover:scale-110 transition-transform duration-200"
                 style={{ color: themeColors.primaryLight }}
               >
@@ -2074,10 +2113,20 @@ export default function AudioPlayer() {
             {/* Botão adicionar à playlist */}
             <button 
               onClick={handleAddToPlaylist}
-              className="w-9 h-9 flex items-center justify-center transition-colors rounded-full hover:bg-zinc-800/50 hover:scale-110 duration-200"
+              className="w-9 h-9 flex items-center justify-center transition-all duration-200 hover:scale-105 backdrop-blur-md hover:shadow-lg rounded-xl"
               style={{ 
-                color: isInPlaylist(currentFile.name) ? themeColors.primary : themeColors.primaryLight,
-                backgroundColor: isInPlaylist(currentFile.name) ? `${themeColors.primary}20` : 'transparent'
+                background: `linear-gradient(135deg, ${themeColors.background} 0%, ${themeColors.background.replace('0.15', '0.25')} 100%)`,
+                color: themeColors.primary,
+                border: `1px solid ${themeColors.border}`,
+                boxShadow: `0 4px 12px ${themeColors.primary}20, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                e.currentTarget.style.boxShadow = `0 8px 24px ${themeColors.primary}30, inset 0 1px 0 rgba(255, 255, 255, 0.15)`;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                e.currentTarget.style.boxShadow = `0 4px 12px ${themeColors.primary}20, inset 0 1px 0 rgba(255, 255, 255, 0.1)`;
               }}
               title={isInPlaylist(currentFile.name) ? 'Remover da playlist' : 'Adicionar à playlist'}
             >
@@ -2129,6 +2178,11 @@ export default function AudioPlayer() {
           onClose={() => setShowAlbumModal(false)}
           albumData={getAlbumData()!}
           themeColors={themeColors}
+          currentFile={currentFile}
+          onSave={() => {
+            // Recarregar dados após salvar
+            // O contexto de arquivos será atualizado automaticamente quando necessário
+          }}
         />
       )}
 

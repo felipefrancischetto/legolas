@@ -77,14 +77,51 @@ const ThumbnailImage = memo(({ file, fileExists }: { file: FileInfo, fileExists:
         width={36}
         height={36}
         className="object-cover w-full h-full rounded"
-        onError={() => setError(true)}
+        onError={() => {
+          console.warn('Erro ao carregar thumbnail:', file.name);
+          setError(true);
+        }}
         loading="lazy"
+        unoptimized
       />
     </div>
   );
 });
 
 ThumbnailImage.displayName = 'ThumbnailImage';
+
+// Componente de imagem com tratamento de erro para lista compacta
+const CompactThumbnailImage = memo(({ file }: { file: FileInfo }) => {
+  const [error, setError] = useState(false);
+  
+  if (error) {
+    return (
+      <div className="w-9 h-9 flex items-center justify-center bg-zinc-800 rounded border border-zinc-700/50">
+        <svg className="w-5 h-5 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+        </svg>
+      </div>
+    );
+  }
+
+  return (
+    <Image
+      src={getThumbnailUrl(file.name)}
+      alt={file.title || file.displayName}
+      width={36}
+      height={36}
+      className="object-cover w-9 h-9 bg-zinc-800 rounded border border-zinc-700/50"
+      onError={() => {
+        console.warn('Erro ao carregar imagem compacta:', file.name);
+        setError(true);
+      }}
+      loading="lazy"
+      unoptimized
+    />
+  );
+});
+
+CompactThumbnailImage.displayName = 'CompactThumbnailImage';
 
 // Definição centralizada das colunas
 const columns: { label: string; key: string; width: number; always: boolean }[] = [
@@ -261,6 +298,7 @@ const DynamicFileItem = memo(({
     rgb: '16, 185, 129',
     rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})`
   });
+  const [imageError, setImageError] = useState(false);
 
   // Otimizar carregamento de cor com throttling
   useEffect(() => {
@@ -370,24 +408,38 @@ const DynamicFileItem = memo(({
         >
           <div className="flex flex-col sm:flex-row gap-0">
             {/* Capa do álbum - Ocupa toda a altura do card */}
-            <div className="relative w-full sm:w-[244.5px] sm:min-w-[244.5px] h-[244.5px] sm:h-auto sm:min-h-[244.5px] flex-shrink-0 bg-zinc-800 overflow-hidden rounded-tl-xl rounded-bl-xl sm:rounded-tr-none sm:rounded-br-none sm:self-stretch">
-              <Image
-                src={getThumbnailUrl(file.name)}
-                alt={file.title || file.displayName}
-                width={244.5}
-                height={244.5}
-                className="object-cover w-full h-full"
-                style={{ 
-                  width: '100%', 
-                  height: '100%',
-                  minHeight: '100%',
-                  objectFit: 'cover'
-                }}
-              />
+            <div className="relative w-full sm:w-[130px] sm:min-w-[130px] h-[130px] sm:h-auto sm:min-h-[130px] flex-shrink-0 bg-zinc-800 overflow-hidden rounded-tl-xl rounded-bl-xl sm:rounded-tr-none sm:rounded-br-none sm:self-stretch">
+              {imageError ? (
+                <div className="w-full h-full flex items-center justify-center bg-zinc-800">
+                  <svg className="w-12 h-12 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                  </svg>
+                </div>
+              ) : (
+                <Image
+                  src={getThumbnailUrl(file.name)}
+                  alt={file.title || file.displayName}
+                  width={130}
+                  height={130}
+                  className="object-cover w-full h-full"
+                  style={{ 
+                    width: '100%', 
+                    height: '100%',
+                    minHeight: '100%',
+                    objectFit: 'cover'
+                  }}
+                  onError={() => {
+                    console.warn('Erro ao carregar imagem:', file.name);
+                    setImageError(true);
+                  }}
+                  loading="lazy"
+                  unoptimized
+                />
+              )}
               
               {/* Overlay de reprodução */}
               {isPlaying && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-tl-xl rounded-bl-xl w-full sm:w-[244.5px]">
+                <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-tl-xl rounded-bl-xl w-full sm:w-[130px]">
                   {isPlayerPlaying ? (
                     <SoundWave 
                       color={`rgb(${itemColor.rgb})`}
@@ -396,8 +448,8 @@ const DynamicFileItem = memo(({
                       isLoading={isLoading}  
                     />
                   ) : (
-                    <div className="w-12 h-12 rounded-full bg-black/70 flex items-center justify-center">
-                      <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24">
+                    <div className="w-8 h-8 rounded-full bg-black/70 flex items-center justify-center">
+                      <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
                         <polygon points="8,5 19,12 8,19" />
                       </svg>
                     </div>
@@ -407,19 +459,95 @@ const DynamicFileItem = memo(({
               
               {/* Tag Beatport no canto superior direito */}
               {file.isBeatportFormat && (
-                <div className="absolute top-2 right-2 bg-emerald-500 px-2 py-1 rounded-md text-[10px] font-bold text-white uppercase tracking-wide shadow-lg z-10">
+                <div className="absolute top-1 right-1 bg-emerald-500 px-1 py-0.5 rounded text-[8px] font-bold text-white uppercase tracking-wide shadow-lg z-10">
                   Beatport
                 </div>
               )}
             </div>
             
             {/* Conteúdo principal */}
-            <div className="flex-1 p-5 flex flex-col min-w-0">
+            <div className="flex-1 p-3 flex flex-col min-w-0 relative">
+
+              {/* Botões de ação - Canto superior direito */}
+              <div className="flex items-center gap-1.5 absolute top-3 right-3 z-10">
+                <StarButton file={file} size="sm" />
+                
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
+                    const youtubeMusicUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
+                    window.open(youtubeMusicUrl, '_blank', 'noopener,noreferrer');
+                  }}
+                  className="w-7 h-7 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%)',
+                    color: 'rgb(16, 185, 129)',
+                    border: '1px solid rgba(16, 185, 129, 0.4)',
+                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                    e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+                  }}
+                  title="Abrir no YouTube Music"
+                  type="button"
+                >
+                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                  </svg>
+                </button>
+                
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
+                    const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
+                    window.open(beatportUrl, '_blank', 'noopener,noreferrer');
+                  }}
+                  className="w-7 h-7 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center font-bold"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%)',
+                    color: 'rgb(16, 185, 129)',
+                    border: '1px solid rgba(16, 185, 129, 0.4)',
+                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                    e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+                  }}
+                  title="Abrir no Beatport"
+                  type="button"
+                >
+                  <span className="text-[9px] font-extrabold">B</span>
+                </button>
+                
+                <ActionMenu 
+                  file={file} 
+                  onUpdate={onUpdate} 
+                  onEdit={onEdit} 
+                  onRemove={handleRemoveFile}
+                  onDownloadAlbum={onDownloadAlbum}
+                  onRemoveAlbum={onRemoveAlbum}
+                  files={files}
+                  addToast={addToast}
+                />
+              </div>
 
               {/* Debug mode */}
               {isDebugMode && (
-                <div className="mb-4 p-3 bg-black/50 rounded border border-zinc-700/50 max-h-40 overflow-auto custom-scroll">
-                  <div className="text-xs text-zinc-300 font-medium mb-1 flex items-center gap-2">
+                <div className="mb-2 p-2 bg-black/50 rounded border border-zinc-700/50 max-h-24 overflow-auto custom-scroll">
+                  <div className="text-[10px] text-zinc-300 font-medium mb-0.5 flex items-center gap-2">
                     <span>🔍 Debug Info</span>
                     <button 
                       onClick={(e) => {
@@ -432,23 +560,23 @@ const DynamicFileItem = memo(({
                       📋
                     </button>
                   </div>
-                  <pre className="text-xs text-zinc-400 font-mono leading-relaxed whitespace-pre-wrap break-words">
+                  <pre className="text-[9px] text-zinc-400 font-mono leading-relaxed whitespace-pre-wrap break-words">
                     {JSON.stringify(file, null, 2)}
                   </pre>
                 </div>
               )}
               
               {/* Título e Artista */}
-              <div className="mb-4">
-                <h3 className="text-white font-bold text-xl sm:text-lg leading-tight mb-1.5 line-clamp-2">
+              <div className="mb-2 pr-28">
+                <h3 className="text-white font-bold text-base sm:text-sm leading-tight mb-0.5 line-clamp-2">
                   {file.title || file.displayName}
                 </h3>
-                <p className="text-zinc-400 text-sm leading-tight truncate mb-3" style={{ color: `rgb(${itemColor.rgb})` }}>
+                <p className="text-zinc-400 text-sm leading-tight truncate mb-1.5" style={{ color: `rgb(${itemColor.rgb})` }}>
                   {file.artist || 'Artista desconhecido'}
                 </p>
                 
                 {/* Metadados principais - Texto simples */}
-                <div className="space-y-1 text-xs text-zinc-500">
+                <div className="space-y-0 text-xs text-zinc-500">
                   {((file as any).ano || (file as any).publishedDate) && (
                     <div>
                       <span className="text-zinc-600">Data de lançamento </span>
@@ -470,87 +598,9 @@ const DynamicFileItem = memo(({
                 </div>
               </div>
 
-              {/* Botões de ação - Abaixo das informações */}
-              <div className="flex items-center gap-2 mt-auto pt-3 border-t border-zinc-800">
-                <StarButton file={file} size="md" />
-                
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
-                    const youtubeMusicUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
-                    window.open(youtubeMusicUrl, '_blank', 'noopener,noreferrer');
-                  }}
-                  className="w-9 h-9 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 text-zinc-400 hover:text-red-400 flex items-center justify-center border"
-                  style={{
-                    background: 'linear-gradient(135deg, rgba(63, 63, 70, 0.8) 0%, rgba(63, 63, 70, 0.9) 100%)',
-                    borderColor: 'rgba(82, 82, 91, 0.5)',
-                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
-                    e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
-                    e.currentTarget.style.color = 'rgb(239, 68, 68)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
-                    e.currentTarget.style.color = '';
-                  }}
-                  title="Abrir no YouTube Music"
-                  type="button"
-                >
-                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
-                  </svg>
-                </button>
-                
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const query = `${file.artist || ''} ${file.title || file.displayName}`.trim();
-                    const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
-                    window.open(beatportUrl, '_blank', 'noopener,noreferrer');
-                  }}
-                  className="w-9 h-9 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 text-zinc-400 hover:text-emerald-400 flex items-center justify-center border font-bold"
-                  style={{
-                    background: 'linear-gradient(135deg, rgba(63, 63, 70, 0.8) 0%, rgba(63, 63, 70, 0.9) 100%)',
-                    borderColor: 'rgba(82, 82, 91, 0.5)',
-                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
-                    e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
-                    e.currentTarget.style.color = 'rgb(16, 185, 129)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
-                    e.currentTarget.style.color = '';
-                  }}
-                  title="Abrir no Beatport"
-                  type="button"
-                >
-                  <span className="text-xs font-extrabold">B</span>
-                </button>
-                
-                <ActionMenu 
-                  file={file} 
-                  onUpdate={onUpdate} 
-                  onEdit={onEdit} 
-                  onRemove={handleRemoveFile}
-                  onDownloadAlbum={onDownloadAlbum}
-                  onRemoveAlbum={onRemoveAlbum}
-                  files={files}
-                  addToast={addToast}
-                />
-              </div>
-
               {/* Informações adicionais - Texto pequeno e discreto */}
-              <div className="mt-3 pt-3 border-t border-zinc-800">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500">
+              <div className="mt-auto pt-1.5 border-t border-zinc-800">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0 text-xs text-zinc-500">
                   {file.duration && file.duration !== 'N/A' && (
                     <span className="font-mono">{file.duration}</span>
                   )}
@@ -1371,7 +1421,19 @@ export default function FileList() {
           console.error('Erro ao fazer parse da resposta:', parseError);
           throw new Error('Resposta inválida do servidor');
         });
-        if (!response.ok) throw new Error(result.error || 'Erro desconhecido');
+        
+        // Tratar caso onde não há metadados úteis encontrados como caso normal, não como erro
+        if (!response.ok) {
+          const errorMessage = result.error || 'Erro desconhecido';
+          // Se for apenas "No useful metadata found to enhance", tratar como sucesso (sem metadados para adicionar)
+          if (errorMessage === 'No useful metadata found to enhance') {
+            // Marcar como concluído sem atualizar metadados
+            setMetadataStatus({ ...metadataStatus, [fileName]: 'completed' });
+            return; // Sair da função sem lançar erro
+          }
+          // Para outros erros, lançar exceção normalmente
+          throw new Error(errorMessage);
+        }
         
         // Atualizar status para concluído
         setMetadataStatus({ ...metadataStatus, [fileName]: 'completed' });
@@ -1433,15 +1495,15 @@ export default function FileList() {
     });
     setUpdateProgress({ current: 0, total: filesToUpdate.length });
 
-    // Iniciando atualização de metadados
+    // Processar em paralelo com controle de concorrência (5 arquivos por vez)
+    const CONCURRENT_LIMIT = 5;
+    let completed = 0;
 
-    for (let i = 0; i < filesToUpdate.length; i++) {
-      const file = filesToUpdate[i];
-      setUpdateProgress({ current: i + 1, total: filesToUpdate.length });
-      
+    // Função para processar um arquivo
+    const processFile = async (file: any) => {
       try {
         // Atualizar status para loading
-        setMetadataStatus({ ...metadataStatus, [file.name]: 'loading' });
+        setMetadataStatus(prev => ({ ...prev, [file.name]: 'loading' }));
         
         // Usar a operação 'enhance' que busca e aplica metadados automaticamente
         const response = await fetch(`/api/metadata/unified`, {
@@ -1458,15 +1520,66 @@ export default function FileList() {
           console.error('Erro ao fazer parse da resposta:', parseError);
           throw new Error('Resposta inválida do servidor');
         });
-        if (!response.ok) throw new Error(result.error || 'Erro desconhecido');
+        
+        // Tratar caso onde não há metadados úteis encontrados como caso normal, não como erro
+        if (!response.ok) {
+          const errorMessage = result.error || 'Erro desconhecido';
+          // Se for apenas "No useful metadata found to enhance", tratar como sucesso (sem metadados para adicionar)
+          if (errorMessage === 'No useful metadata found to enhance') {
+            // Marcar como concluído sem atualizar metadados
+            setMetadataStatus(prev => ({ ...prev, [file.name]: 'completed' }));
+            completed++;
+            setUpdateProgress({ current: completed, total: filesToUpdate.length });
+            return; // Sair da função sem lançar erro
+          }
+          // Para outros erros, lançar exceção normalmente
+          throw new Error(errorMessage);
+        }
+        
+        // IMPORTANTE: Atualizar o arquivo localmente imediatamente após atualização bem-sucedida
+        // Isso garante que mesmo se ocorrer erro posteriormente, os arquivos já atualizados apareçam como atualizados
+        if (result.success && result.metadata) {
+          setFiles(prevFiles => prevFiles.map(f => {
+            if (f.name === file.name) {
+              // Atualizar metadados do arquivo com os dados retornados
+              const updatedFile = { ...f };
+              if (result.metadata.bpm) updatedFile.bpm = result.metadata.bpm;
+              if (result.metadata.key) updatedFile.key = result.metadata.key;
+              if (result.metadata.genre) updatedFile.genre = result.metadata.genre;
+              if (result.metadata.label) updatedFile.label = result.metadata.label;
+              if (result.metadata.year) updatedFile.ano = result.metadata.year;
+              if (result.metadata.album) updatedFile.album = result.metadata.album;
+              if (result.metadata.catalogNumber) updatedFile.catalogNumber = result.metadata.catalogNumber;
+              // Marcar como formato Beatport se veio do Beatport
+              if (result.metadata.sources?.includes('Beatport')) {
+                updatedFile.isBeatportFormat = true;
+              }
+              return updatedFile;
+            }
+            return f;
+          }));
+        }
         
         // Marcar como concluído
-        setMetadataStatus({ ...metadataStatus, [file.name]: 'completed' });
+        setMetadataStatus(prev => ({ ...prev, [file.name]: 'completed' }));
+        completed++;
+        setUpdateProgress({ current: completed, total: filesToUpdate.length });
         
       } catch (error: any) {
         console.error(`Erro ao atualizar metadados para ${file.name}:`, error.message);
-        setMetadataStatus({ ...metadataStatus, [file.name]: 'error' });
+        setMetadataStatus(prev => ({ ...prev, [file.name]: 'error' }));
+        completed++;
+        setUpdateProgress({ current: completed, total: filesToUpdate.length });
+        // Continuar processamento mesmo em caso de erro - não interromper o loop
       }
+    };
+
+    // Processar em chunks paralelos
+    // Usar Promise.allSettled para garantir que todos os arquivos sejam processados,
+    // mesmo se alguns falharem - isso permite que arquivos já atualizados apareçam como atualizados
+    for (let i = 0; i < filesToUpdate.length; i += CONCURRENT_LIMIT) {
+      const chunk = filesToUpdate.slice(i, i + CONCURRENT_LIMIT);
+      await Promise.allSettled(chunk.map(processFile));
     }
 
     // Recarregar tudo apenas no final
@@ -2253,13 +2366,7 @@ export default function FileList() {
                 >
                   <div className="flex items-center gap-3 w-full">
                     <div className="relative flex-shrink-0">
-                      <Image
-                        src={getThumbnailUrl(file.name)}
-                        alt={file.title || file.displayName}
-                        width={36}
-                        height={36}
-                        className="object-cover w-9 h-9 bg-zinc-800 rounded border border-zinc-700/50"
-                      />
+                      <CompactThumbnailImage file={file} />
                       {playerState.currentFile?.name === file.name && (
                         <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded">
                           {playerState.isPlaying ? (
@@ -2316,7 +2423,21 @@ export default function FileList() {
                           const youtubeMusicUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
                           window.open(youtubeMusicUrl, '_blank', 'noopener,noreferrer');
                         }}
-                        className="w-7 h-7 rounded-lg hover:bg-red-500/10 transition-colors text-zinc-400 hover:text-red-400 flex items-center justify-center border border-transparent hover:border-red-500/20"
+                        className="w-7 h-7 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%)',
+                          color: 'rgb(16, 185, 129)',
+                          border: '1px solid rgba(16, 185, 129, 0.4)',
+                          boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                          e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                          e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+                        }}
                         title={`Abrir "${file.title || file.displayName}" no YouTube Music`}
                         type="button"
                       >
@@ -2333,7 +2454,21 @@ export default function FileList() {
                           const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
                           window.open(beatportUrl, '_blank', 'noopener,noreferrer');
                         }}
-                        className="w-7 h-7 rounded-lg hover:bg-emerald-500/10 transition-colors text-zinc-400 hover:text-emerald-400 flex items-center justify-center border border-transparent hover:border-emerald-500/20 font-bold"
+                        className="w-7 h-7 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center font-bold"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%)',
+                          color: 'rgb(16, 185, 129)',
+                          border: '1px solid rgba(16, 185, 129, 0.4)',
+                          boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                          e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                          e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+                        }}
                         title={`Abrir "${file.title || file.displayName}" no Beatport`}
                         type="button"
                       >
@@ -2592,7 +2727,7 @@ function EditFileModal({ file, onClose, onSave, isListLoading, isUpdatingAll }: 
           
           <button
             onClick={handleClose}
-            className="absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded-lg text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition-all duration-200"
+            className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-xl text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition-all duration-200"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -2600,7 +2735,7 @@ function EditFileModal({ file, onClose, onSave, isListLoading, isUpdatingAll }: 
           </button>
           
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
+            <div className="w-7 h-7 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
               <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
               </svg>
@@ -3072,7 +3207,7 @@ function MobileActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, o
     <div className="relative inline-block">
       <button
         ref={buttonRef}
-        className="flex-shrink-0 w-10 h-10 flex items-center justify-center text-zinc-400 hover:text-emerald-400 transition-colors rounded-lg hover:bg-emerald-500/10"
+        className="flex-shrink-0 w-7 h-7 flex items-center justify-center text-zinc-400 hover:text-emerald-400 transition-colors rounded-xl hover:bg-emerald-500/10"
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -3561,19 +3696,20 @@ function ActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, onRemov
     <div className="relative inline-block">
       <button
         ref={buttonRef}
-        className="w-9 h-9 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 text-zinc-400 hover:text-white flex items-center justify-center border"
+        className="w-7 h-7 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center"
         style={{
-          background: 'linear-gradient(135deg, rgba(63, 63, 70, 0.8) 0%, rgba(63, 63, 70, 0.9) 100%)',
-          borderColor: 'rgba(82, 82, 91, 0.5)',
-          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+          background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%)',
+          color: 'rgb(16, 185, 129)',
+          border: '1px solid rgba(16, 185, 129, 0.4)',
+          boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
-          e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+          e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.transform = 'translateY(0) scale(1)';
-          e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+          e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
         }}
         onClick={(e) => {
           e.preventDefault();

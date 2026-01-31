@@ -87,6 +87,8 @@ export function FileProvider({ children }: { children: ReactNode }) {
   const isFetchingRef = useRef(false);
   // Ref para timeout de segurança
   const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Ref para controlar se é a inicialização (evitar fetch duplicado)
+  const isInitializingRef = useRef(true);
   
   const fetchFiles = useCallback(async (force = false, skipLoading = false) => {
     // Se está fazendo fetch e não é forçado, agendar para depois (mas não bloquear completamente)
@@ -290,23 +292,82 @@ export function FileProvider({ children }: { children: ReactNode }) {
 
   const selectDownloadsFolder = useCallback(async () => {
     try {
-      // @ts-ignore
-      const directoryHandle = await window.showDirectoryPicker({
-        mode: 'readwrite',
-        startIn: 'downloads'
-      });
+      let newPath: string | null = null;
       
-      const newPath = directoryHandle.name;
+      // Verificar se está rodando no Electron (retorna caminho completo)
+      // @ts-ignore
+      if (window.electronAPI && window.electronAPI.selectDownloadsFolder) {
+        try {
+          // @ts-ignore
+          newPath = await window.electronAPI.selectDownloadsFolder();
+          if (!newPath) {
+            // Usuário cancelou
+            return;
+          }
+        } catch (electronError) {
+          console.warn('⚠️ Erro ao usar Electron API, tentando API do navegador:', electronError);
+        }
+      }
+      
+      // Se não conseguiu pelo Electron ou não está disponível, usar API do navegador
+      if (!newPath) {
+        // @ts-ignore
+        const directoryHandle = await window.showDirectoryPicker({
+          mode: 'readwrite',
+          startIn: 'downloads'
+        });
+        
+        // A API do navegador só retorna o nome da pasta, não o caminho completo
+        // Tentar obter o caminho completo através de uma API auxiliar
+        newPath = directoryHandle.name;
+        
+        // Tentar obter o caminho completo via API do servidor
+        // Isso funciona se a pasta estiver dentro do projeto
+        try {
+          const response = await fetch('/api/resolve-folder-path', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folderName: newPath }),
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            if (data.fullPath && data.exists) {
+              newPath = data.fullPath;
+            }
+          }
+        } catch (apiError) {
+          console.warn('⚠️ Não foi possível resolver caminho completo, usando nome da pasta:', apiError);
+          // Continuar com apenas o nome da pasta
+        }
+      }
+      
+      if (!newPath) {
+        return;
+      }
+      
       const currentPath = safeGetItem<string>('customDownloadsPath');
       
+      console.log(`📂 [FileContext] Caminho selecionado pelo usuário: ${newPath}`);
+      console.log(`📂 [FileContext] Caminho atual: ${currentPath}`);
+      
       if (newPath !== currentPath) {
+        // Salvar no localStorage
         safeSetItem('customDownloadsPath', newPath, { maxSize: 1024 });
+        console.log(`📂 [FileContext] Caminho salvo no localStorage: ${newPath}`);
         
-        await fetch('/api/set-downloads-path', {
+        // Salvar no arquivo de configuração - usar EXATAMENTE o caminho selecionado
+        const response = await fetch('/api/set-downloads-path', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: newPath }),
         });
+        
+        if (response.ok) {
+          console.log(`✅ [FileContext] Caminho salvo no arquivo de configuração: ${newPath}`);
+        } else {
+          console.error(`❌ [FileContext] Erro ao salvar caminho no arquivo de configuração`);
+        }
         
         setCustomDownloadsPath(newPath);
         console.log('📂 Pasta de downloads alterada, disparando refresh automático.');
@@ -339,15 +400,39 @@ export function FileProvider({ children }: { children: ReactNode }) {
           console.log('🔄 [FileContext] Tentando fetch inicial novamente...');
           fetchFiles(true);
         }, 2000);
+      } finally {
+        // Marcar inicialização como completa após o fetch inicial (com pequeno delay para garantir)
+        setTimeout(() => {
+          isInitializingRef.current = false;
+        }, 100);
       }
     };
     
     initialFetch();
+    
+    // Timeout de segurança: garantir que a inicialização seja marcada como completa mesmo se houver problemas
+    const safetyTimeout = setTimeout(() => {
+      if (isInitializingRef.current) {
+        console.log('⚠️ [FileContext] Timeout de segurança: marcando inicialização como completa');
+        isInitializingRef.current = false;
+      }
+    }, 5000);
+    
+    return () => {
+      clearTimeout(safetyTimeout);
+    };
   }, []); // Dependência vazia para executar apenas uma vez
 
   // Re-fetch files quando o caminho da pasta de download é alterado
+  // Mas não durante a inicialização (evita fetch duplicado)
   useEffect(() => {
+    // Ignorar se ainda está inicializando (evita fetch duplicado quando customDownloadsPath é carregado do localStorage)
+    if (isInitializingRef.current) {
+      return;
+    }
+    
     if (customDownloadsPath !== null) {
+      console.log('🔄 [FileContext] customDownloadsPath alterado, refazendo fetch...');
       fetchFiles(true);
     }
   }, [customDownloadsPath, fetchFiles]);

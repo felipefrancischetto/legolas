@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { join } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { readFile, access, unlink } from 'fs/promises';
-import { constants } from 'fs';
+import { readFile, unlink } from 'fs/promises';
+import { getDownloadsPath, fileExists } from '@/app/api/utils/common';
 
 const execAsync = promisify(exec);
 
@@ -40,33 +40,8 @@ function cleanupCache() {
   }
 }
 
-// Função para obter o caminho correto da pasta de downloads
-async function getDownloadsPath() {
-  try {
-    const configPath = join(process.cwd(), 'downloads.config.json');
-    const config = await readFile(configPath, 'utf-8');
-    const { path } = JSON.parse(config);
-    const fullPath = join(process.cwd(), path);
-    return fullPath;
-  } catch (error) {
-    console.error('Erro ao ler configuração:', error);
-    // Se não houver configuração, use o caminho padrão
-    const defaultPath = join(process.cwd(), 'downloads');
-    return defaultPath;
-  }
-}
-
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await access(path, constants.F_OK);
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
 
 // Função para gerar thumbnail padrão baseado no nome do arquivo
 async function generateDefaultThumbnail(filename: string): Promise<Buffer> {
@@ -350,7 +325,21 @@ export async function GET(
         }
       });
     } catch (defaultError) {
-      return new NextResponse('Erro ao gerar thumbnail', { status: 500 });
+      console.error('❌ Erro ao gerar thumbnail padrão:', defaultError);
+      // Retornar uma imagem SVG mínima em caso de erro total
+      const minimalSvg = Buffer.from(`
+        <svg width="200" height="200" xmlns="http://www.w3.org/2000/svg">
+          <rect width="200" height="200" fill="#1f2937" rx="20"/>
+          <text x="100" y="100" font-family="Arial, sans-serif" font-size="16" fill="#9ca3af" text-anchor="middle">🎵</text>
+        </svg>
+      `);
+      return new NextResponse(minimalSvg, {
+        headers: {
+          'Content-Type': 'image/svg+xml',
+          'Cache-Control': 'public, max-age=3600',
+          'X-Cache': 'ERROR-FALLBACK'
+        }
+      });
     }
   }
 } 

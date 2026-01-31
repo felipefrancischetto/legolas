@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { metadataAggregator } from '@/lib/services/metadataService';
 import { individualMetadataAggregator } from '@/lib/services/individualMetadataService';
-import { getDownloadsPath, fileExists, sanitizeYear } from '../../utils/common';
+import { getDownloadsPath, fileExists, sanitizeYear, moveFile } from '../../utils/common';
 import { join } from 'path';
 import { readFile } from 'fs/promises';
 import NodeID3 from 'node-id3';
 import { spawn, exec } from 'child_process';
 import { promisify } from 'util';
-import { mkdtempSync, existsSync, renameSync } from 'fs';
+import { mkdtempSync, existsSync } from 'fs';
 import os from 'os';
 
 const execAsync = promisify(exec);
@@ -166,7 +166,7 @@ async function handleMetadataUpdate(params: MetadataRequest, request: NextReques
       }, { status: 400 });
     }
     try {
-      renameSync(filePath, newFilePath);
+      await moveFile(filePath, newFilePath);
       filePath = newFilePath;
     } catch (err) {
       return NextResponse.json({ 
@@ -227,10 +227,10 @@ async function handleMetadataUpdate(params: MetadataRequest, request: NextReques
         const ffmpeg = spawn('ffmpeg', args);
         let stderr = '';
         ffmpeg.stderr.on('data', (data) => { stderr += data.toString(); });
-        ffmpeg.on('close', (code) => {
+        ffmpeg.on('close', async (code) => {
           if (code === 0 && existsSync(outPath)) {
             try {
-              renameSync(outPath, filePath);
+              await moveFile(outPath, filePath);
               resolve(true);
             } catch (e) {
               reject(e);
@@ -648,10 +648,10 @@ async function handleMetadataEnhance(params: MetadataRequest) {
         const ffmpeg = spawn('ffmpeg', args);
         let stderr = '';
         ffmpeg.stderr.on('data', (data) => { stderr += data.toString(); });
-        ffmpeg.on('close', (code) => {
+        ffmpeg.on('close', async (code) => {
           if (code === 0 && existsSync(outPath)) {
             try {
-              renameSync(outPath, filePath);
+              await moveFile(outPath, filePath);
               resolve(true);
             } catch (e) {
               reject(e);

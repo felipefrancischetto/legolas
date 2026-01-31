@@ -1,5 +1,5 @@
-import { readFile, writeFile, access, constants, stat, unlink } from 'fs/promises';
-import { join } from 'path';
+import { readFile, writeFile, access, constants, stat, unlink, readdir, rename, copyFile, mkdir } from 'fs/promises';
+import { join, isAbsolute, dirname } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -9,15 +9,185 @@ const execAsync = promisify(exec);
  * Utilitários comuns para as APIs
  */
 
+/**
+ * Tenta resolver um caminho relativo de pasta procurando em locais comuns
+ */
+async function resolveFolderPath(folderName: string): Promise<string | null> {
+  // Se já é absoluto, retornar diretamente
+  if (isAbsolute(folderName)) {
+    try {
+      await access(folderName, constants.F_OK);
+      await readdir(folderName);
+      return folderName;
+    } catch {
+      return null;
+    }
+  }
+
+  // Tentar encontrar a pasta em locais comuns
+  const searchPaths = [
+    join(process.cwd(), folderName),
+    join(process.cwd(), 'downloads', folderName),
+    join(process.cwd(), 'public', 'downloads', folderName),
+  ];
+
+  // Também tentar em drives comuns do Windows (se estiver no Windows)
+  if (process.platform === 'win32') {
+    const drives = ['C:', 'D:', 'E:', 'F:'];
+    for (const drive of drives) {
+      searchPaths.push(join(drive, folderName));
+      // Tentar em subpastas comuns
+      searchPaths.push(join(drive, 'musicas', folderName));
+      
+      // Buscar em subpastas de anos dentro de musicas (2020-2026)
+      for (let year = 2020; year <= 2026; year++) {
+        searchPaths.push(join(drive, 'musicas', String(year), folderName));
+      }
+      
+      // Também tentar buscar recursivamente em musicas se existir
+      try {
+        const musicasPath = join(drive, 'musicas');
+        await access(musicasPath, constants.F_OK);
+        // Tentar listar subpastas e buscar a pasta dentro delas
+        const subdirs = await readdir(musicasPath);
+        for (const subdir of subdirs) {
+          const subdirPath = join(musicasPath, subdir);
+          try {
+            // Verificar se é uma pasta
+            const stats = await stat(subdirPath);
+            if (stats.isDirectory()) {
+              searchPaths.push(join(subdirPath, folderName));
+            }
+          } catch {
+            // Ignorar erros ao verificar subdiretórios
+          }
+        }
+      } catch {
+        // Se não conseguir acessar musicas, continuar normalmente
+      }
+      
+      searchPaths.push(join(drive, 'Music', folderName));
+      searchPaths.push(join(drive, 'Downloads', folderName));
+    }
+  }
+
+  // Verificar cada caminho
+  for (const searchPath of searchPaths) {
+    try {
+      await access(searchPath, constants.F_OK);
+      // Verificar se é realmente uma pasta (tentando listar)
+      await readdir(searchPath);
+      return searchPath;
+    } catch {
+      // Continuar procurando
+      continue;
+    }
+  }
+
+  return null;
+}
+
 export async function getDownloadsPath(): Promise<string> {
   try {
     const configPath = join(process.cwd(), 'downloads.config.json');
+    // Sempre ler do disco sem cache - garantir que pegamos o valor mais recente
     const config = await readFile(configPath, 'utf-8');
     const { path } = JSON.parse(config);
-    return join(process.cwd(), path);
+    
+    console.log(`📂 [getDownloadsPath] Caminho lido do arquivo de configuração: ${path}`);
+    
+    // Normalizar apenas barras duplicadas e espaços nas extremidades
+    // Manter o caminho exatamente como foi salvo pelo usuário
+    const normalizedPath = path.trim().replace(/[\\/]+/g, process.platform === 'win32' ? '\\' : '/');
+    
+    console.log(`📂 [getDownloadsPath] Caminho normalizado: ${normalizedPath}`);
+    
+    // Verificar se o caminho é absoluto usando a função do Node.js (mais confiável)
+    const isAbsolutePath = isAbsolute(normalizedPath);
+    
+    console.log(`📂 [getDownloadsPath] É caminho absoluto: ${isAbsolutePath}`);
+    
+    let finalPath: string;
+    
+    if (isAbsolutePath) {
+      // Caminho absoluto - NUNCA fazer join com process.cwd()
+      finalPath = normalizedPath;
+      
+      // Verificar se existe
+      try {
+        await access(finalPath, constants.F_OK);
+        // Verificar se é realmente uma pasta (tentando listar)
+        await readdir(finalPath);
+        console.log(`✅ [getDownloadsPath] Caminho absoluto encontrado e válido: ${finalPath}`);
+        return finalPath;
+      } catch (accessError) {
+        console.warn(`⚠️ [getDownloadsPath] Caminho absoluto não encontrado ou inacessível: ${finalPath}`);
+        console.warn(`   Erro: ${accessError instanceof Error ? accessError.message : String(accessError)}`);
+        
+        // Tentar criar o caminho completo
+        try {
+          await mkdir(finalPath, { recursive: true });
+          // Verificar se foi criado com sucesso
+          await access(finalPath, constants.F_OK);
+          await readdir(finalPath);
+          console.log(`✅ [getDownloadsPath] Caminho absoluto criado com sucesso: ${finalPath}`);
+          return finalPath;
+        } catch (mkdirError) {
+          const errorMsg = mkdirError instanceof Error ? mkdirError.message : String(mkdirError);
+          console.error(`❌ [getDownloadsPath] Erro ao criar caminho absoluto: ${finalPath}`);
+          console.error(`   Erro: ${errorMsg}`);
+          
+          // Se não conseguir criar, retornar o caminho original mesmo que não exista
+          // O código que chama esta função tentará criar novamente
+          // NÃO tentar resolver usando resolveFolderPath pois pode retornar caminho incorreto
+          console.warn(`⚠️ [getDownloadsPath] Retornando caminho absoluto original (será criado pelo chamador): ${finalPath}`);
+          return finalPath;
+        }
+      }
+    } else {
+      // Caminho relativo - tentar resolver primeiro
+      const resolved = await resolveFolderPath(normalizedPath);
+      if (resolved) {
+        console.log(`✅ [getDownloadsPath] Caminho relativo resolvido: ${normalizedPath} -> ${resolved}`);
+        return resolved;
+      }
+      
+      // Se não conseguir resolver, fazer join com process.cwd() como fallback
+      // Mas garantir que não estamos fazendo join de um caminho absoluto
+      finalPath = join(process.cwd(), normalizedPath);
+      console.warn(`⚠️ [getDownloadsPath] Não foi possível resolver caminho relativo: ${normalizedPath}, usando fallback: ${finalPath}`);
+      
+      // Tentar criar o caminho de fallback
+      try {
+        await mkdir(finalPath, { recursive: true });
+        await access(finalPath, constants.F_OK);
+        await readdir(finalPath);
+        console.log(`✅ [getDownloadsPath] Caminho de fallback criado: ${finalPath}`);
+        return finalPath;
+      } catch (mkdirError) {
+        console.error(`❌ [getDownloadsPath] Erro ao criar caminho de fallback: ${finalPath}`);
+        console.error(`   Erro: ${mkdirError instanceof Error ? mkdirError.message : String(mkdirError)}`);
+        // Retornar mesmo assim, o código que chama tentará criar
+        return finalPath;
+      }
+    }
   } catch (error) {
     // Se não houver configuração, use o caminho padrão
-    return join(process.cwd(), 'downloads');
+    const defaultPath = join(process.cwd(), 'downloads');
+    console.warn(`⚠️ [getDownloadsPath] Erro ao ler configuração, usando padrão:`, error);
+    console.warn(`   Caminho padrão: ${defaultPath}`);
+    
+    // Tentar criar o caminho padrão
+    try {
+      await mkdir(defaultPath, { recursive: true });
+      await access(defaultPath, constants.F_OK);
+      console.log(`✅ [getDownloadsPath] Caminho padrão criado: ${defaultPath}`);
+    } catch (mkdirError) {
+      console.error(`❌ [getDownloadsPath] Erro ao criar caminho padrão: ${defaultPath}`);
+      console.error(`   Erro: ${mkdirError instanceof Error ? mkdirError.message : String(mkdirError)}`);
+    }
+    
+    return defaultPath;
   }
 }
 
@@ -54,6 +224,45 @@ export function sanitizeYear(year: string | number): string {
     return match ? match[0] : '';
   }
   return String(year);
+}
+
+/**
+ * Move/rename a file from source to destination
+ * Handles cross-device moves (EXDEV) by using copy+delete
+ */
+export async function moveFile(sourcePath: string, destPath: string): Promise<void> {
+  try {
+    // Tentar rename primeiro (mais rápido para mesmo dispositivo)
+    await rename(sourcePath, destPath);
+  } catch (error: any) {
+    // Se for erro EXDEV (cross-device link), usar copy+delete
+    if (error.code === 'EXDEV' || error.code === 'EPERM') {
+      console.log(`⚠️ [moveFile] Cross-device move detectado, usando copy+delete: ${sourcePath} -> ${destPath}`);
+      try {
+        // Garantir que o diretório de destino existe
+        const destDir = dirname(destPath);
+        try {
+          await access(destDir, constants.F_OK);
+        } catch {
+          // Diretório não existe, criar
+          await mkdir(destDir, { recursive: true });
+          console.log(`📁 [moveFile] Diretório de destino criado: ${destDir}`);
+        }
+        
+        // Copiar arquivo
+        await copyFile(sourcePath, destPath);
+        // Deletar arquivo original
+        await unlink(sourcePath);
+        console.log(`✅ [moveFile] Arquivo movido com sucesso (copy+delete)`);
+      } catch (copyError: any) {
+        console.error(`❌ [moveFile] Erro ao mover arquivo (copy+delete):`, copyError);
+        throw new Error(`Failed to move file: ${copyError.message || String(copyError)}`);
+      }
+    } else {
+      // Outros erros, propagar
+      throw error;
+    }
+  }
 }
 
 export function generateDownloadId(): string {

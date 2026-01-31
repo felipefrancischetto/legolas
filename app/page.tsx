@@ -61,26 +61,31 @@ export default function Home() {
   }, []);
 
   // Salvar estados no localStorage quando mudarem (após inicialização)
+  // Usar debounce para evitar salvamentos excessivos
   useEffect(() => {
     if (!isInitialized) return;
     
-    try {
-      const state: SavedPageState = {
-        downloadFormMinimized,
-        showQueue,
-        beatportModalOpen,
-        beatportDownloaderModalOpen,
-        settingsModalOpen
-      };
-      safeSetItem(STORAGE_KEY_PAGE_STATE, state, {
-        maxSize: 10 * 1024, // 10KB máximo
-        onError: (err) => {
-          console.warn('⚠️ Erro ao salvar estado da página:', err.message);
-        }
-      });
-    } catch (err) {
-      console.warn('Erro ao salvar estado da página:', err);
-    }
+    const timeoutId = setTimeout(() => {
+      try {
+        const state: SavedPageState = {
+          downloadFormMinimized,
+          showQueue,
+          beatportModalOpen,
+          beatportDownloaderModalOpen,
+          settingsModalOpen
+        };
+        safeSetItem(STORAGE_KEY_PAGE_STATE, state, {
+          maxSize: 10 * 1024, // 10KB máximo
+          onError: (err) => {
+            console.warn('⚠️ Erro ao salvar estado da página:', err.message);
+          }
+        });
+      } catch (err) {
+        console.warn('Erro ao salvar estado da página:', err);
+      }
+    }, 300); // Debounce de 300ms
+    
+    return () => clearTimeout(timeoutId);
   }, [downloadFormMinimized, showQueue, beatportModalOpen, beatportDownloaderModalOpen, settingsModalOpen, isInitialized]);
   
   return (
@@ -101,14 +106,14 @@ export default function Home() {
           />
         </div>
 
-        {/* Container da lista de arquivos */}
-        <div className="flex-1 min-h-0 max-w-7xl mx-auto w-full px-6 md:px-4 sm:px-3">
-          <div className="h-full overflow-hidden">
+        {/* Container da lista de arquivos - ocupa todo espaço disponível menos o player */}
+        <div className="flex-1 min-h-0 max-w-7xl mx-auto w-full px-6 md:px-4 sm:px-3 overflow-hidden">
+          <div className="h-full overflow-y-auto pb-[200px] sm:pb-[90px]">
             <FileList />
           </div>
         </div>
 
-        {/* Player de áudio - sempre visível */}
+        {/* Player de áudio - sempre visível (fixo na parte inferior) */}
         <AudioPlayer />
       </div>
       

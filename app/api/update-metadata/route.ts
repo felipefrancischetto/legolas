@@ -5,8 +5,9 @@ import { constants } from 'fs';
 import { access } from 'fs/promises';
 import NodeID3 from 'node-id3';
 import { spawn } from 'child_process';
-import { mkdtempSync, existsSync, renameSync } from 'fs';
+import { mkdtempSync, existsSync } from 'fs';
 import os from 'os';
+import { getDownloadsPath, moveFile } from '@/app/api/utils/common';
 
 function deduplicateLabel(label: string): string {
   if (!label) return '';
@@ -69,16 +70,7 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-async function getDownloadsPath() {
-  try {
-    const configPath = join(process.cwd(), 'downloads.config.json');
-    const config = await readFile(configPath, 'utf-8');
-    const { path } = JSON.parse(config);
-    return join(process.cwd(), path);
-  } catch (error) {
-    return join(process.cwd(), 'downloads');
-  }
-}
+// getDownloadsPath agora é importado de @/app/api/utils/common
 
 export async function POST(req: NextRequest) {
   try {
@@ -100,9 +92,10 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Já existe um arquivo com o novo nome.' }, { status: 400 });
       }
       try {
-        renameSync(filePath, newFilePath);
+        await moveFile(filePath, newFilePath);
         filePath = newFilePath;
       } catch (err) {
+        console.error('Erro ao renomear arquivo:', err);
         return NextResponse.json({ error: 'Erro ao renomear o arquivo.' }, { status: 500 });
       }
     }
@@ -159,8 +152,7 @@ export async function POST(req: NextRequest) {
           ffmpeg.on('close', (code) => {
             if (code === 0 && existsSync(outPath)) {
               try {
-                renameSync(outPath, filePath);
-                resolve(true);
+                moveFile(outPath, filePath).then(() => resolve(true)).catch(reject);
               } catch (e) {
                 reject(e);
               }

@@ -51,24 +51,22 @@ export default function StarButton({ file, size = 'md', className = '' }: StarBu
   return (
     <button
       onClick={handleClick}
-      className={`${buttonSize} rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center group ${className}`}
+      className={`w-7 h-7 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center group ${className}`}
       style={{
         background: isStarred 
           ? 'linear-gradient(135deg, rgba(251, 191, 36, 0.2) 0%, rgba(251, 191, 36, 0.15) 100%)'
-          : 'linear-gradient(135deg, rgba(63, 63, 70, 0.8) 0%, rgba(63, 63, 70, 0.9) 100%)',
-        borderColor: isStarred ? 'rgba(251, 191, 36, 0.4)' : 'rgba(82, 82, 91, 0.5)',
+          : 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%)',
+        borderColor: isStarred ? 'rgba(251, 191, 36, 0.4)' : 'rgba(16, 185, 129, 0.4)',
         boxShadow: isStarred 
           ? '0 4px 12px rgba(251, 191, 36, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)' 
-          : '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+          : '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
         if (isStarred) {
           e.currentTarget.style.boxShadow = '0 8px 24px rgba(251, 191, 36, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
         } else {
-          e.currentTarget.style.backgroundColor = 'rgba(251, 191, 36, 0.1)';
-          e.currentTarget.style.borderColor = 'rgba(251, 191, 36, 0.3)';
-          e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+          e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
         }
       }}
       onMouseLeave={(e) => {
@@ -76,9 +74,7 @@ export default function StarButton({ file, size = 'md', className = '' }: StarBu
         if (isStarred) {
           e.currentTarget.style.boxShadow = '0 4px 12px rgba(251, 191, 36, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
         } else {
-          e.currentTarget.style.backgroundColor = '';
-          e.currentTarget.style.borderColor = '';
-          e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+          e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
         }
       }}
       title={isStarred ? 'Remover da quick playlist' : 'Adicionar à quick playlist'}
@@ -91,7 +87,7 @@ export default function StarButton({ file, size = 'md', className = '' }: StarBu
         strokeWidth={isStarred ? 0 : 1.5}
         viewBox="0 0 24 24"
         style={{ 
-          color: isStarred ? '#fbbf24' : '#9ca3af',
+          color: isStarred ? '#fbbf24' : 'rgb(16, 185, 129)',
           filter: isStarred ? 'drop-shadow(0 0 4px rgba(251, 191, 36, 0.5))' : 'none'
         }}
       >

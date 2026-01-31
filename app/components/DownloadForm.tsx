@@ -89,6 +89,7 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
   const [showQuickPlaylist, setShowQuickPlaylist] = useState(savedState.showQuickPlaylist);
   const [showPlaylistManager, setShowPlaylistManager] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [currentFolderPath, setCurrentFolderPath] = useState<string>('');
   const [themeColors, setThemeColors] = useState({
     primary: 'rgb(16, 185, 129)',
     primaryLight: 'rgba(16, 185, 129, 0.9)',
@@ -107,7 +108,7 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
     toasts,
     removeToast
   } = useDownload();
-  const { selectDownloadsFolder } = useFile();
+  const { selectDownloadsFolder, customDownloadsPath } = useFile();
   const { playerState } = usePlayer();
   const { settings } = useSettings();
   const { count: playlistCount } = useQuickPlaylist();
@@ -116,6 +117,81 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
   useEffect(() => {
     setIsInitialized(true);
   }, []);
+
+  // Buscar caminho atual da pasta de downloads
+  useEffect(() => {
+    const fetchCurrentPath = async () => {
+      // Primeiro tentar pegar do localStorage (mais rápido)
+      const savedPath = safeGetItem<string>('customDownloadsPath');
+      if (savedPath) {
+        setCurrentFolderPath(savedPath);
+        return;
+      }
+      
+      // Se não houver no localStorage, buscar da API
+      try {
+        const response = await fetch('/api/get-downloads-path');
+        if (response.ok) {
+          const data = await response.json();
+          setCurrentFolderPath(data.displayPath || data.path || 'downloads');
+        }
+      } catch (error) {
+        console.error('Erro ao buscar caminho da pasta:', error);
+        setCurrentFolderPath('downloads');
+      }
+    };
+    
+    fetchCurrentPath();
+  }, []);
+
+  // Atualizar caminho quando customDownloadsPath mudar
+  useEffect(() => {
+    if (customDownloadsPath) {
+      setCurrentFolderPath(customDownloadsPath);
+    } else {
+      // Se customDownloadsPath for null, buscar da API
+      const fetchPath = async () => {
+        try {
+          const response = await fetch('/api/get-downloads-path');
+          if (response.ok) {
+            const data = await response.json();
+            setCurrentFolderPath(data.displayPath || data.path || 'downloads');
+          }
+        } catch (error) {
+          console.error('Erro ao buscar caminho da pasta:', error);
+        }
+      };
+      fetchPath();
+    }
+  }, [customDownloadsPath]);
+
+  // Handler para trocar pasta
+  const handleSelectFolder = async () => {
+    try {
+      await selectDownloadsFolder();
+      // Atualizar caminho após seleção - usar o customDownloadsPath do contexto
+      // que já é atualizado pelo FileContext quando a pasta é selecionada
+      const savedPath = safeGetItem<string>('customDownloadsPath');
+      if (savedPath) {
+        setCurrentFolderPath(savedPath);
+      } else {
+        // Se não houver no localStorage, buscar da API
+        setTimeout(async () => {
+          try {
+            const response = await fetch('/api/get-downloads-path');
+            if (response.ok) {
+              const data = await response.json();
+              setCurrentFolderPath(data.displayPath || data.path || 'downloads');
+            }
+          } catch (error) {
+            console.error('Erro ao atualizar caminho da pasta:', error);
+          }
+        }, 300);
+      }
+    } catch (error) {
+      console.error('Erro ao selecionar pasta:', error);
+    }
+  };
 
   // Salvar estados no localStorage quando mudarem (após inicialização)
   useEffect(() => {
@@ -953,8 +1029,8 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
                     </label>
                     <button
                       type="button"
-                      onClick={selectDownloadsFolder}
-                      className="w-full h-11 md:h-10 sm:h-9 flex items-center justify-center gap-2 rounded-xl transition-all duration-200 hover:scale-105 text-sm font-medium backdrop-blur-md hover:shadow-lg"
+                      onClick={handleSelectFolder}
+                      className="w-full h-11 md:h-10 sm:h-9 flex items-center justify-between gap-2 px-3 md:px-2 rounded-xl transition-all duration-200 hover:scale-105 text-sm font-medium backdrop-blur-md hover:shadow-lg group relative"
                       style={{
                         background: `linear-gradient(135deg, ${themeColors.background} 0%, ${themeColors.background.replace('0.15', '0.25')} 100%)`,
                         color: themeColors.primary,
@@ -970,9 +1046,26 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
                         e.currentTarget.style.transform = 'translateY(0) scale(1)';
                         e.currentTarget.style.boxShadow = `0 4px 12px ${themeColors.primary}20, inset 0 1px 0 rgba(255, 255, 255, 0.1)`;
                       }}
+                      title={currentFolderPath ? `Pasta atual: ${currentFolderPath}\nClique para trocar de pasta` : 'Selecionar pasta de downloads'}
                     >
-                      <FontAwesomeIcon icon={faFolderOpen} className="w-4 h-4" />
-                      <span className="hidden md:inline">Pasta</span>
+                      <div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
+                        <FontAwesomeIcon icon={faFolderOpen} className="w-4 h-4 flex-shrink-0" />
+                        <span 
+                          className="truncate text-left flex-1 whitespace-nowrap overflow-hidden text-ellipsis" 
+                          style={{ fontSize: '0.875rem', lineHeight: '1.25rem' }}
+                        >
+                          {currentFolderPath || 'Selecionar pasta'}
+                        </span>
+                      </div>
+                      <svg 
+                        className="w-4 h-4 flex-shrink-0 opacity-60 group-hover:opacity-100 transition-opacity" 
+                        fill="none" 
+                        stroke="currentColor" 
+                        viewBox="0 0 24 24"
+                        style={{ marginLeft: 'auto' }}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
                     </button>
                   </div>
 

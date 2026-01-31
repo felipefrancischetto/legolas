@@ -117,14 +117,19 @@ export async function GET(request: NextRequest) {
   try {
     // Obter o caminho de downloads usando utilitário compartilhado
     const downloadsFolder = await getDownloadsPath();
+    
+    console.log(`📂 [files API] Procurando arquivos em: ${downloadsFolder}`);
 
     let files: string[] = [];
     try {
       // Listar arquivos na pasta de downloads
       files = await readdir(downloadsFolder);
+      console.log(`✅ [files API] Encontrados ${files.length} arquivos na pasta`);
     } catch (err: any) {
+      console.error(`❌ [files API] Erro ao listar arquivos em ${downloadsFolder}:`, err);
       if (err?.code === 'ENOENT') {
         // Pasta não existe, retorna lista vazia
+        console.warn(`⚠️ [files API] Pasta não existe: ${downloadsFolder}`);
         return NextResponse.json({ files: [] });
       }
       throw err;

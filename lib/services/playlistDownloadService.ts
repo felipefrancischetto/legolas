@@ -9,6 +9,7 @@ import { metadataAggregator } from './metadataService';
 import { logger } from '../utils/logger';
 import { scrapeTracklist } from '../tracklistScraper';
 import { sendProgressEvent } from '../utils/progressEventService';
+import { getDownloadsPath } from '@/app/api/utils/common';
 
 const execAsync = promisify(exec);
 
@@ -33,16 +34,7 @@ export interface PlaylistDownloadResult {
   tracklistScraping?: any[];
 }
 
-async function getDownloadsPath() {
-  try {
-    const configPath = join(process.cwd(), 'downloads.config.json');
-    const config = await readFile(configPath, 'utf-8');
-    const { path } = JSON.parse(config);
-    return join(process.cwd(), path);
-  } catch (error) {
-    return join(process.cwd(), 'downloads');
-  }
-}
+// getDownloadsPath agora é importado de @/app/api/utils/common
 
 function sanitizeTitle(title: string): string {
   // Preservar caracteres especiais importantes para música, mas remover caracteres problemáticos para arquivos
@@ -147,8 +139,30 @@ export class PlaylistDownloadService {
       maxConcurrent
     });
 
-    const downloadsFolder = await getDownloadsPath();
-    await mkdir(downloadsFolder, { recursive: true });
+    // Obter o caminho de downloads
+    let downloadsFolder: string;
+    try {
+      downloadsFolder = await getDownloadsPath();
+      logger.info(`📁 [Playlist] Caminho de downloads obtido: ${downloadsFolder}`);
+    } catch (pathError) {
+      const errorMsg = pathError instanceof Error ? pathError.message : String(pathError);
+      logger.error(`❌ [Playlist] Erro ao obter caminho de downloads: ${errorMsg}`);
+      throw new Error(`Erro ao obter caminho de downloads: ${errorMsg}`);
+    }
+
+    // Criar pasta de downloads se não existir
+    try {
+      await mkdir(downloadsFolder, { recursive: true });
+      // Verificar se a pasta foi criada e é acessível
+      await access(downloadsFolder, constants.F_OK);
+      await readdir(downloadsFolder);
+      logger.info(`✅ [Playlist] Pasta de downloads criada/verificada: ${downloadsFolder}`);
+    } catch (mkdirError) {
+      const errorMsg = mkdirError instanceof Error ? mkdirError.message : String(mkdirError);
+      logger.error(`❌ [Playlist] Erro ao criar/verificar pasta de downloads: ${downloadsFolder}`);
+      logger.error(`   Erro: ${errorMsg}`);
+      throw new Error(`Não foi possível criar ou acessar a pasta de downloads: ${downloadsFolder}. Erro: ${errorMsg}`);
+    }
 
     const result: PlaylistDownloadResult = {
       success: false,

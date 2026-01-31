@@ -21,49 +21,77 @@ function formatDuration(seconds: number): string {
 }
 
 async function getPlaylistInfo(id: string, retryCount = 0): Promise<any> {
-  const maxRetries = 3;
+  const maxRetries = 4;
   const commands = [
-    // Primeira tentativa: Com Token PO e cookies do Chrome
-    `yt-dlp --dump-json --flat-playlist --cookies-from-browser chrome --extractor-args "youtube:player_skip=webpage,configs" "https://www.youtube.com/playlist?list=${id}"`,
-    // Segunda tentativa: Com Token PO e cookies do Firefox
-    `yt-dlp --dump-json --flat-playlist --cookies-from-browser firefox --extractor-args "youtube:player_skip=webpage,configs" "https://www.youtube.com/playlist?list=${id}"`,
-    // Terceira tentativa: Modo mais agressivo com delay
-    `yt-dlp --dump-json --flat-playlist --extractor-args "youtube:player_client=android" --no-check-certificate --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" --sleep-interval 5 "https://www.youtube.com/playlist?list=${id}"`
+    // Primeira tentativa: Android client (menos detectável, funciona sem cookies)
+    `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=android" "https://www.youtube.com/playlist?list=${id}"`,
+    // Segunda tentativa: iOS client
+    `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=ios" "https://www.youtube.com/playlist?list=${id}"`,
+    // Terceira tentativa: Web client
+    `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=web" "https://www.youtube.com/playlist?list=${id}"`,
+    // Quarta tentativa: Básico sem limite
+    `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 "https://www.youtube.com/playlist?list=${id}"`,
   ];
 
   try {
+    console.log(`🔄 Tentativa ${retryCount + 1}/${maxRetries} para obter informações da playlist...`);
     const { stdout } = await execAsync(commands[retryCount], { maxBuffer: 1024 * 1024 * 10 });
-    return stdout.trim().split('\n').map(line => JSON.parse(line));
-  } catch (error) {
-    console.error(`Tentativa ${retryCount + 1} falhou:`, error);
+    const entries = stdout.trim().split('\n').filter(l => l.trim()).map(line => {
+      try {
+        return JSON.parse(line);
+      } catch (e) {
+        return null;
+      }
+    }).filter(e => e !== null);
+    
+    if (entries.length > 0) {
+      console.log(`✅ Método ${retryCount + 1} funcionou! Encontradas ${entries.length} entradas.`);
+      return entries;
+    } else {
+      throw new Error('Nenhuma entrada encontrada');
+    }
+  } catch (error: any) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.warn(`⚠️ Tentativa ${retryCount + 1} falhou: ${errorMsg.substring(0, 200)}`);
     
     if (retryCount < maxRetries - 1) {
-      console.log(`Tentando método alternativo ${retryCount + 2}...`);
+      console.log(`🔄 Tentando método alternativo ${retryCount + 2}...`);
       return getPlaylistInfo(id, retryCount + 1);
     }
+    
+    // Se todos os métodos falharam, lançar erro
+    console.error(`❌ Todos os métodos falharam para obter informações da playlist`);
     throw error;
   }
 }
 
 async function getVideoInfo(videoId: string, retryCount = 0): Promise<any> {
-  const maxRetries = 2;
+  const maxRetries = 3;
   const commands = [
-    // Primeira tentativa: Configuração básica
-    `yt-dlp --dump-json "https://www.youtube.com/watch?v=${videoId}"`,
-    // Segunda tentativa: Modo mais agressivo de contornar restrições
-    `yt-dlp --dump-json --extractor-args "youtube:player_client=android" --no-check-certificate --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" "https://www.youtube.com/watch?v=${videoId}"`
+    // Primeira tentativa: Android client (menos detectável)
+    `yt-dlp --dump-json --extractor-args "youtube:player_client=android" "https://www.youtube.com/watch?v=${videoId}"`,
+    // Segunda tentativa: iOS client
+    `yt-dlp --dump-json --extractor-args "youtube:player_client=ios" "https://www.youtube.com/watch?v=${videoId}"`,
+    // Terceira tentativa: Configuração básica
+    `yt-dlp --dump-json "https://www.youtube.com/watch?v=${videoId}"`
   ];
 
   try {
+    console.log(`🔄 Tentativa ${retryCount + 1}/${maxRetries} para obter informações do vídeo ${videoId}...`);
     const { stdout } = await execAsync(commands[retryCount], { maxBuffer: 1024 * 1024 * 10 });
-    return JSON.parse(stdout);
-  } catch (error) {
-    console.error(`Tentativa ${retryCount + 1} falhou:`, error);
+    const videoInfo = JSON.parse(stdout);
+    console.log(`✅ Método ${retryCount + 1} funcionou para o vídeo ${videoId}!`);
+    return videoInfo;
+  } catch (error: any) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.warn(`⚠️ Tentativa ${retryCount + 1} falhou para vídeo ${videoId}: ${errorMsg.substring(0, 200)}`);
     
     if (retryCount < maxRetries - 1) {
-      console.log(`Tentando método alternativo ${retryCount + 2}...`);
+      console.log(`🔄 Tentando método alternativo ${retryCount + 2}...`);
       return getVideoInfo(videoId, retryCount + 1);
     }
+    
+    console.error(`❌ Todos os métodos falharam para obter informações do vídeo ${videoId}`);
     throw error;
   }
 }
@@ -90,21 +118,36 @@ export async function GET(request: NextRequest) {
     if (hasValidCookies) {
       // Tentar primeiro com cookies do arquivo
       try {
+        console.log('🍪 Tentando usar cookies do arquivo cookies.txt...');
         const { stdout } = await execAsync(
-          `yt-dlp --dump-json --flat-playlist ` +
+          `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 ` +
           `--cookies "cookies.txt" ` +
           `"https://www.youtube.com/playlist?list=${id}"`,
           { maxBuffer: 1024 * 1024 * 10 }
         );
-        entries = stdout.trim().split('\n').map(line => JSON.parse(line));
-      } catch (error) {
-        // Se falhar com cookies, usar métodos alternativos
-        console.log('Falhou com cookies, tentando métodos alternativos...');
+        const parsedEntries = stdout.trim().split('\n').filter(l => l.trim()).map(line => {
+          try {
+            return JSON.parse(line);
+          } catch (e) {
+            return null;
+          }
+        }).filter(e => e !== null);
+        
+        if (parsedEntries.length > 0) {
+          console.log(`✅ Cookies funcionaram! Encontradas ${parsedEntries.length} entradas.`);
+          entries = parsedEntries;
+        } else {
+          throw new Error('Nenhuma entrada encontrada com cookies');
+        }
+      } catch (error: any) {
+        // Se falhar com cookies, usar métodos alternativos SEM cookies
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`⚠️ Falhou com cookies (${errorMsg.substring(0, 100)}), tentando métodos alternativos SEM cookies...`);
         entries = await getPlaylistInfo(id);
       }
     } else {
-      // Usar métodos alternativos diretamente
-      console.log('Arquivo de cookies inválido ou ausente, usando métodos alternativos...');
+      // Usar métodos alternativos diretamente (SEM cookies)
+      console.log('ℹ️ Arquivo de cookies inválido ou ausente, usando métodos alternativos SEM cookies...');
       entries = await getPlaylistInfo(id);
     }
     
@@ -117,8 +160,9 @@ export async function GET(request: NextRequest) {
 
     // Obter informações do primeiro vídeo para pegar a thumbnail da playlist
     let firstVideo: any;
-    if (hasValidCookies) {
+    if (hasValidCookies && entries.length > 0) {
       try {
+        console.log(`🍪 Tentando obter informações do primeiro vídeo com cookies...`);
         const { stdout: firstVideoInfo } = await execAsync(
           `yt-dlp --dump-json ` +
           `--cookies "cookies.txt" ` +
@@ -126,12 +170,21 @@ export async function GET(request: NextRequest) {
           { maxBuffer: 1024 * 1024 * 10 }
         );
         firstVideo = JSON.parse(firstVideoInfo);
-      } catch (error) {
-        // Se falhar com cookies, usar método alternativo
+        console.log(`✅ Informações do primeiro vídeo obtidas com cookies!`);
+      } catch (error: any) {
+        // Se falhar com cookies, usar método alternativo SEM cookies
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`⚠️ Falhou com cookies para primeiro vídeo (${errorMsg.substring(0, 100)}), usando método alternativo...`);
         firstVideo = await getVideoInfo(entries[0].id);
       }
-    } else {
+    } else if (entries.length > 0) {
       firstVideo = await getVideoInfo(entries[0].id);
+    } else {
+      // Se não houver entradas, retornar erro
+      return NextResponse.json(
+        { error: 'Nenhuma entrada encontrada na playlist' },
+        { status: 404 }
+      );
     }
 
     return NextResponse.json({

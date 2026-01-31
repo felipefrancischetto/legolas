@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readdir, readFile, stat, rename, mkdir } from 'fs/promises';
+import { readdir, readFile, stat, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { getDownloadsPath } from '../utils/common';
+import { getDownloadsPath, moveFile } from '../utils/common';
 
 const execAsync = promisify(exec);
 
@@ -91,7 +91,7 @@ async function moveToNonNormalizedFolder(
 
     while (attempts < maxAttempts) {
       try {
-        await rename(filePath, newFilePath);
+        await moveFile(filePath, newFilePath);
         return { success: true, message: `Arquivo movido: ${fileName}` };
       } catch (renameErr: any) {
         attempts++;
@@ -149,8 +149,10 @@ export async function POST(request: NextRequest) {
       details: [] as Array<{ fileName: string; status: string; message: string }>
     };
 
-    // Processar cada arquivo
-    for (const file of audioFiles) {
+    // Processar arquivos em paralelo com controle de concorrência (10 por vez)
+    const CONCURRENT_LIMIT = 10;
+    
+    const processFile = async (file: string) => {
       const filePath = join(downloadsFolder, file);
       
       try {
@@ -195,6 +197,12 @@ export async function POST(request: NextRequest) {
         });
         console.error(`❌ Erro ao processar: ${file}`, error);
       }
+    };
+
+    // Processar em chunks paralelos
+    for (let i = 0; i < audioFiles.length; i += CONCURRENT_LIMIT) {
+      const chunk = audioFiles.slice(i, i + CONCURRENT_LIMIT);
+      await Promise.all(chunk.map(processFile));
     }
 
     console.log(`\n📊 [organize-non-normalized] Resumo:`);

@@ -98,19 +98,24 @@ export function UIProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Salvar estados no localStorage quando mudarem (após inicialização)
+  // Usar debounce para evitar salvamentos excessivos e rebuilds
   useEffect(() => {
     if (!isInitialized || typeof window === 'undefined') return;
     
-    try {
-      safeSetItem('uiSearch', search, { maxSize: 10 * 1024 }); // 10KB máximo
-      safeSetItem('uiSortBy', sortBy, { maxSize: 1024 });
-      safeSetItem('uiSortOrder', sortOrder, { maxSize: 1024 });
-      safeSetItem('uiGroupByAlbum', groupByAlbum.toString(), { maxSize: 1024 });
-      safeSetItem('uiShowQueue', showQueue.toString(), { maxSize: 1024 });
-      safeSetItem('playerMinimized', playerMinimized.toString(), { maxSize: 1024 });
-    } catch (e) {
-      console.warn('Erro ao salvar estados da UI:', e);
-    }
+    const timeoutId = setTimeout(() => {
+      try {
+        safeSetItem('uiSearch', search, { maxSize: 10 * 1024 }); // 10KB máximo
+        safeSetItem('uiSortBy', sortBy, { maxSize: 1024 });
+        safeSetItem('uiSortOrder', sortOrder, { maxSize: 1024 });
+        safeSetItem('uiGroupByAlbum', groupByAlbum.toString(), { maxSize: 1024 });
+        safeSetItem('uiShowQueue', showQueue.toString(), { maxSize: 1024 });
+        safeSetItem('playerMinimized', playerMinimized.toString(), { maxSize: 1024 });
+      } catch (e) {
+        console.warn('Erro ao salvar estados da UI:', e);
+      }
+    }, 300); // Debounce de 300ms
+    
+    return () => clearTimeout(timeoutId);
   }, [search, sortBy, sortOrder, groupByAlbum, showQueue, playerMinimized, isInitialized]);
 
   // Memoizar funções para evitar re-renders

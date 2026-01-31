@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { rename, access, readdir, stat, mkdir } from 'fs/promises';
+import { access, readdir, stat, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { existsSync } from 'fs';
-import { getDownloadsPath } from '../utils/common';
+import { getDownloadsPath, moveFile } from '../utils/common';
 
 export async function POST(request: NextRequest) {
   try {
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
       const newFilePathWithTimestamp = join(naoNormalizadasDir, newFileNameWithTimestamp);
       
       try {
-        await rename(filePath, newFilePathWithTimestamp);
+        await moveFile(filePath, newFilePathWithTimestamp);
         console.log('✅ [move-to-non-normalized] Arquivo movido para nao-normalizadas (com timestamp):', fileName, '->', newFileNameWithTimestamp);
         return NextResponse.json({ 
           success: true,
@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
     
     while (attempts < maxAttempts) {
       try {
-        await rename(filePath, newFilePath);
+        await moveFile(filePath, newFilePath);
         console.log('✅ [move-to-non-normalized] Arquivo movido para nao-normalizadas com sucesso:', fileName, '->', newFilePath);
         return NextResponse.json({ 
           success: true,
