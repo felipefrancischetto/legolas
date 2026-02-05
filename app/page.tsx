@@ -30,33 +30,26 @@ interface SavedPageState {
 }
 
 export default function Home() {
-  // Carregar estados salvos do localStorage
-  const loadSavedState = (): SavedPageState => {
-    const saved = safeGetItem<SavedPageState>(STORAGE_KEY_PAGE_STATE);
-    if (saved) {
-      return saved;
-    }
-    return {
-      downloadFormMinimized: true,
-      showQueue: false,
-      beatportModalOpen: false,
-      beatportDownloaderModalOpen: false,
-      settingsModalOpen: false
-    };
-  };
-
-  const savedState = loadSavedState();
-  
-  const [beatportModalOpen, setBeatportModalOpen] = useState(savedState.beatportModalOpen);
-  const [beatportDownloaderModalOpen, setBeatportDownloaderModalOpen] = useState(savedState.beatportDownloaderModalOpen);
-  const [settingsModalOpen, setSettingsModalOpen] = useState(savedState.settingsModalOpen);
+  // Inicializar estados com valores padrão (para evitar hydration mismatch)
+  // Os valores salvos serão carregados no useEffect após montagem
+  const [beatportModalOpen, setBeatportModalOpen] = useState(false);
+  const [beatportDownloaderModalOpen, setBeatportDownloaderModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const { playerOpen, playerMinimized } = useUI();
-  const [downloadFormMinimized, setDownloadFormMinimized] = useState(savedState.downloadFormMinimized);
-  const [showQueue, setShowQueue] = useState(savedState.showQueue);
+  const [downloadFormMinimized, setDownloadFormMinimized] = useState(true);
+  const [showQueue, setShowQueue] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Marcar como inicializado após montagem
+  // Carregar estados salvos do localStorage após montagem (client-side only)
   useEffect(() => {
+    const saved = safeGetItem<SavedPageState>(STORAGE_KEY_PAGE_STATE);
+    if (saved) {
+      setBeatportModalOpen(saved.beatportModalOpen);
+      setBeatportDownloaderModalOpen(saved.beatportDownloaderModalOpen);
+      setSettingsModalOpen(saved.settingsModalOpen);
+      setDownloadFormMinimized(saved.downloadFormMinimized);
+      setShowQueue(saved.showQueue);
+    }
     setIsInitialized(true);
   }, []);
 

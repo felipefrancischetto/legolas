@@ -32,7 +32,7 @@ const nextConfig = {
     // Configurações que podem ser acessadas no cliente
   },
 
-  webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, dev }) => {
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
@@ -61,6 +61,21 @@ const nextConfig = {
       ...config.resolve.alias,
       '@': __dirname,
     };
+    
+    // Otimizações para desenvolvimento - reduzir tamanho de mensagens durante Fast Refresh
+    if (dev && !isServer) {
+      // Limitar o tamanho máximo de chunks durante desenvolvimento
+      config.optimization = {
+        ...config.optimization,
+        splitChunks: {
+          ...config.optimization?.splitChunks,
+          maxSize: 244000, // ~240KB por chunk para evitar mensagens muito grandes
+        },
+      };
+      
+      // Reduzir informações de debug durante hot-reload
+      config.devtool = 'eval-cheap-module-source-map';
+    }
     
     return config;
   },
@@ -130,6 +145,8 @@ const nextConfig = {
     },
     // Desabilitar Strict Mode para evitar rebuilds duplos em desenvolvimento
     reactStrictMode: false,
+    // Otimizar Fast Refresh para reduzir tamanho de mensagens
+    reactRefresh: true,
   }),
   
   // Configurações para melhorar o tratamento de erros

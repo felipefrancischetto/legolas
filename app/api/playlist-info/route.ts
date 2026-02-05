@@ -21,17 +21,28 @@ function formatDuration(seconds: number): string {
 }
 
 async function getPlaylistInfo(id: string, retryCount = 0): Promise<any> {
-  const maxRetries = 4;
-  const commands = [
-    // Primeira tentativa: Android client (menos detectável, funciona sem cookies)
-    `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=android" "https://www.youtube.com/playlist?list=${id}"`,
-    // Segunda tentativa: iOS client
-    `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=ios" "https://www.youtube.com/playlist?list=${id}"`,
-    // Terceira tentativa: Web client
-    `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=web" "https://www.youtube.com/playlist?list=${id}"`,
-    // Quarta tentativa: Básico sem limite
-    `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 "https://www.youtube.com/playlist?list=${id}"`,
+  const maxRetries = 8;
+  // URLs base para tentar (YouTube Music e YouTube regular)
+  const baseUrls = [
+    `https://music.youtube.com/playlist?list=${id}`,
+    `https://www.youtube.com/playlist?list=${id}`
   ];
+  
+  const commands: string[] = [];
+  
+  // Para cada URL base, tentar diferentes clientes
+  for (const baseUrl of baseUrls) {
+    commands.push(
+      // Android client (menos detectável, funciona sem cookies)
+      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=android" "${baseUrl}"`,
+      // iOS client
+      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=ios" "${baseUrl}"`,
+      // Web client
+      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=web" "${baseUrl}"`,
+      // Básico sem limite
+      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse "${baseUrl}"`
+    );
+  }
 
   try {
     console.log(`🔄 Tentativa ${retryCount + 1}/${maxRetries} para obter informações da playlist...`);
@@ -96,14 +107,31 @@ async function getVideoInfo(videoId: string, retryCount = 0): Promise<any> {
   }
 }
 
+function extractPlaylistId(input: string): string | null {
+  // Se já é um ID simples (sem caracteres especiais de URL)
+  if (!input.includes('http') && !input.includes('?')) {
+    return input;
+  }
+  
+  // Tentar extrair da URL (suporta youtube.com e music.youtube.com)
+  const match = input.match(/[?&]list=([^#&]+)/);
+  return match ? match[1] : null;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
-    const id = searchParams.get('id');
+    let id = searchParams.get('id');
+    const url = searchParams.get('url');
+    
+    // Se não tem id mas tem url, tentar extrair o id da url
+    if (!id && url) {
+      id = extractPlaylistId(url);
+    }
     
     if (!id) {
       return NextResponse.json(
-        { error: 'ID da playlist é obrigatório' },
+        { error: 'ID da playlist é obrigatório. Forneça o parâmetro "id" ou "url" com uma URL válida do YouTube.' },
         { status: 400 }
       );
     }
@@ -119,12 +147,29 @@ export async function GET(request: NextRequest) {
       // Tentar primeiro com cookies do arquivo
       try {
         console.log('🍪 Tentando usar cookies do arquivo cookies.txt...');
-        const { stdout } = await execAsync(
-          `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 ` +
-          `--cookies "cookies.txt" ` +
-          `"https://www.youtube.com/playlist?list=${id}"`,
-          { maxBuffer: 1024 * 1024 * 10 }
-        );
+        // Tentar primeiro com YouTube Music, depois com YouTube regular
+        let stdout = '';
+        let lastError: any = null;
+        
+        for (const baseUrl of [`https://music.youtube.com/playlist?list=${id}`, `https://www.youtube.com/playlist?list=${id}`]) {
+          try {
+            const result = await execAsync(
+              `yt-dlp --dump-json --flat-playlist --no-playlist-reverse ` +
+              `--cookies "cookies.txt" ` +
+              `"${baseUrl}"`,
+              { maxBuffer: 1024 * 1024 * 10 }
+            );
+            stdout = result.stdout;
+            break; // Se funcionou, sair do loop
+          } catch (err) {
+            lastError = err;
+            continue; // Tentar próxima URL
+          }
+        }
+        
+        if (!stdout) {
+          throw lastError || new Error('Falhou com ambas as URLs');
+        }
         const parsedEntries = stdout.trim().split('\n').filter(l => l.trim()).map(line => {
           try {
             return JSON.parse(line);
@@ -160,25 +205,46 @@ export async function GET(request: NextRequest) {
 
     // Obter informações do primeiro vídeo para pegar a thumbnail da playlist
     let firstVideo: any;
-    if (hasValidCookies && entries.length > 0) {
-      try {
-        console.log(`🍪 Tentando obter informações do primeiro vídeo com cookies...`);
-        const { stdout: firstVideoInfo } = await execAsync(
-          `yt-dlp --dump-json ` +
-          `--cookies "cookies.txt" ` +
-          `"https://www.youtube.com/watch?v=${entries[0].id}"`,
-          { maxBuffer: 1024 * 1024 * 10 }
-        );
-        firstVideo = JSON.parse(firstVideoInfo);
-        console.log(`✅ Informações do primeiro vídeo obtidas com cookies!`);
-      } catch (error: any) {
-        // Se falhar com cookies, usar método alternativo SEM cookies
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        console.warn(`⚠️ Falhou com cookies para primeiro vídeo (${errorMsg.substring(0, 100)}), usando método alternativo...`);
-        firstVideo = await getVideoInfo(entries[0].id);
+    if (entries.length > 0) {
+      const firstEntryId = entries[0].id;
+      if (!firstEntryId) {
+        console.warn('⚠️ Primeira entrada da playlist não tem ID válido');
+        // Continuar sem thumbnail, usar uma padrão
+        firstVideo = { thumbnail: null };
+      } else {
+        if (hasValidCookies) {
+          try {
+            console.log(`🍪 Tentando obter informações do primeiro vídeo com cookies...`);
+            const { stdout: firstVideoInfo } = await execAsync(
+              `yt-dlp --dump-json ` +
+              `--cookies "cookies.txt" ` +
+              `"https://www.youtube.com/watch?v=${firstEntryId}"`,
+              { maxBuffer: 1024 * 1024 * 10 }
+            );
+            firstVideo = JSON.parse(firstVideoInfo);
+            console.log(`✅ Informações do primeiro vídeo obtidas com cookies!`);
+          } catch (error: any) {
+            // Se falhar com cookies, usar método alternativo SEM cookies
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            console.warn(`⚠️ Falhou com cookies para primeiro vídeo (${errorMsg.substring(0, 100)}), usando método alternativo...`);
+            try {
+              firstVideo = await getVideoInfo(firstEntryId);
+            } catch (videoError: any) {
+              console.warn(`⚠️ Não foi possível obter informações do primeiro vídeo: ${videoError instanceof Error ? videoError.message : String(videoError)}`);
+              // Continuar sem thumbnail
+              firstVideo = { thumbnail: null };
+            }
+          }
+        } else {
+          try {
+            firstVideo = await getVideoInfo(firstEntryId);
+          } catch (videoError: any) {
+            console.warn(`⚠️ Não foi possível obter informações do primeiro vídeo: ${videoError instanceof Error ? videoError.message : String(videoError)}`);
+            // Continuar sem thumbnail
+            firstVideo = { thumbnail: null };
+          }
+        }
       }
-    } else if (entries.length > 0) {
-      firstVideo = await getVideoInfo(entries[0].id);
     } else {
       // Se não houver entradas, retornar erro
       return NextResponse.json(
@@ -188,11 +254,13 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({
-      title: entries[0].playlist_title || 'Playlist do YouTube',
-      thumbnail: firstVideo.thumbnail,
+      title: entries[0]?.playlist_title || entries[0]?.title || 'Playlist do YouTube',
+      thumbnail: firstVideo?.thumbnail || null,
       videos: entries.map((entry: any) => ({
-        title: entry.title,
-        duration: formatDuration(entry.duration || 0)
+        title: entry.title || 'Título não disponível',
+        duration: formatDuration(entry.duration || 0),
+        videoId: entry.id, // ID do vídeo do YouTube
+        id: entry.id // Manter compatibilidade
       }))
     });
 

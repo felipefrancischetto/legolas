@@ -300,30 +300,52 @@ const DynamicFileItem = memo(({
   });
   const [imageError, setImageError] = useState(false);
 
+  // Memoizar thumbnail URL para evitar recálculos e recarregamentos
+  const thumbnailUrl = useMemo(() => getThumbnailUrl(file.name), [file.name]);
+
+  // Sincronizar cor quando dominantColors mudar (apenas para este arquivo)
+  useEffect(() => {
+    const cachedColor = dominantColors[file.name];
+    if (cachedColor) {
+      setItemColor(cachedColor);
+    }
+  }, [dominantColors[file.name], file.name]); // Apenas reage quando a cor específica deste arquivo mudar
+
   // Otimizar carregamento de cor com throttling
   useEffect(() => {
     let isCancelled = false;
     
     const loadColor = async () => {
-      if (dominantColors[file.name]) {
+      // Verificar se já temos a cor em cache
+      const cachedColor = dominantColors[file.name];
+      if (cachedColor) {
         if (!isCancelled) {
-          setItemColor(dominantColors[file.name]);
+          setItemColor(cachedColor);
         }
-      } else {
-        // Throttle para evitar chamadas excessivas
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        if (isCancelled) return;
-        
-        const thumbnailUrl = getThumbnailUrl(file.name);
-        try {
-          const color = await extractDominantColor(file.name, thumbnailUrl);
-          if (!isCancelled) {
-            setItemColor(color);
-          }
-        } catch (error) {
-          console.error('Erro ao carregar cor:', error);
+        return;
+      }
+      
+      // Throttle para evitar chamadas excessivas
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      if (isCancelled) return;
+      
+      // Verificar novamente após o throttle (pode ter sido adicionado por outro componente)
+      const cachedColorAfterDelay = dominantColors[file.name];
+      if (cachedColorAfterDelay) {
+        if (!isCancelled) {
+          setItemColor(cachedColorAfterDelay);
         }
+        return;
+      }
+      
+      try {
+        const color = await extractDominantColor(file.name, thumbnailUrl);
+        if (!isCancelled) {
+          setItemColor(color);
+        }
+      } catch (error) {
+        console.error('Erro ao carregar cor:', error);
       }
     };
     
@@ -332,7 +354,7 @@ const DynamicFileItem = memo(({
     return () => {
       isCancelled = true;
     };
-  }, [file.name, dominantColors, extractDominantColor]);
+  }, [file.name, thumbnailUrl, extractDominantColor]); // Removido dominantColors da dependência para evitar loops
 
   // Memoizar verificação de metadados completos
   const isComplete = useMemo(() => Boolean(
@@ -417,7 +439,7 @@ const DynamicFileItem = memo(({
                 </div>
               ) : (
                 <Image
-                  src={getThumbnailUrl(file.name)}
+                  src={thumbnailUrl}
                   alt={file.title || file.displayName}
                   width={130}
                   height={130}
@@ -629,7 +651,28 @@ const DynamicFileItem = memo(({
         </div>
       </div>
   );
+}, (prevProps, nextProps) => {
+  // Comparação personalizada para evitar re-renders desnecessários
+  // Retorna true se as props são iguais (não re-renderizar), false se diferentes (re-renderizar)
+  const prevColor = prevProps.dominantColors[prevProps.file.name];
+  const nextColor = nextProps.dominantColors[nextProps.file.name];
+  
+  return (
+    prevProps.file.name === nextProps.file.name &&
+    prevProps.file.title === nextProps.file.title &&
+    prevProps.file.displayName === nextProps.file.displayName &&
+    prevProps.file.artist === nextProps.file.artist &&
+    prevProps.isPlaying === nextProps.isPlaying &&
+    prevProps.isPlayerPlaying === nextProps.isPlayerPlaying &&
+    prevProps.isLoading === nextProps.isLoading &&
+    prevProps.isAdding === nextProps.isAdding &&
+    prevProps.isRemoving === nextProps.isRemoving &&
+    prevColor === nextColor &&
+    prevProps.fileIndex === nextProps.fileIndex
+  );
 });
+
+DynamicFileItem.displayName = 'DynamicFileItem';
 
 export default function FileList() {
   
@@ -1231,6 +1274,16 @@ export default function FileList() {
   const [dominantColors, setDominantColors] = useState<{ [fileName: string]: { rgb: string, rgba: (opacity: number) => string } }>({});
   const [mobileActionMenus, setMobileActionMenus] = useState<{ [fileName: string]: boolean }>({});
 
+  // Ref para rastrear cores sendo processadas (evita múltiplas chamadas simultâneas)
+  const processingColorsRef = useRef<Set<string>>(new Set());
+  // Ref para manter referência atualizada de dominantColors sem causar re-renders
+  const dominantColorsRef = useRef(dominantColors);
+  
+  // Atualizar ref sempre que dominantColors mudar
+  useEffect(() => {
+    dominantColorsRef.current = dominantColors;
+  }, [dominantColors]);
+
   // Função para extrair cor dominante (respeitando configurações)
   const extractDominantColor = useCallback(async (fileName: string, imageUrl: string) => {
     // Usar cor padrão se cores dinâmicas estiverem desabilitadas
@@ -1239,7 +1292,21 @@ export default function FileList() {
       return fallbackColor;
     }
 
-    if (dominantColors[fileName]) return dominantColors[fileName];
+    // Verificar se já está em cache usando ref (evita dependência circular)
+    const cachedColor = dominantColorsRef.current[fileName];
+    if (cachedColor) {
+      return cachedColor;
+    }
+    
+    // Verificar se já está processando esta cor
+    if (processingColorsRef.current.has(fileName)) {
+      // Aguardar um pouco e verificar novamente
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const cachedColorAfterWait = dominantColorsRef.current[fileName];
+      if (cachedColorAfterWait) {
+        return cachedColorAfterWait;
+      }
+    }
 
     // Verificar se estamos no cliente
     if (typeof window === 'undefined') {
@@ -1247,16 +1314,37 @@ export default function FileList() {
       return fallbackColor;
     }
 
+    // Verificar novamente antes de processar (pode ter sido adicionado por outro componente)
+    const cachedColorBeforeProcess = dominantColorsRef.current[fileName];
+    if (cachedColorBeforeProcess) {
+      return cachedColorBeforeProcess;
+    }
+
+    // Marcar como processando
+    processingColorsRef.current.add(fileName);
+
     try {
       const img = new (window as any).Image();
       img.crossOrigin = 'anonymous';
       
       return new Promise<{ rgb: string, rgba: (opacity: number) => string }>((resolve) => {
         img.onload = () => {
+          // Verificar novamente antes de processar (pode ter sido adicionado enquanto carregava)
+          setDominantColors(prev => {
+            if (prev[fileName]) {
+              processingColorsRef.current.delete(fileName);
+              resolve(prev[fileName]);
+              return prev;
+            }
+            return prev;
+          });
+
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
           if (!ctx) {
-            resolve({ rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` });
+            const fallbackColor = { rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` };
+            processingColorsRef.current.delete(fileName);
+            resolve(fallbackColor);
             return;
           }
 
@@ -1302,13 +1390,26 @@ export default function FileList() {
             rgba: (opacity: number) => `rgba(${adjustedColor}, ${opacity})`
           };
 
-          setDominantColors(prev => ({ ...prev, [fileName]: colorData }));
+          setDominantColors(prev => {
+            // Só atualizar se ainda não existe (evita sobrescrever)
+            if (!prev[fileName]) {
+              return { ...prev, [fileName]: colorData };
+            }
+            return prev;
+          });
+          processingColorsRef.current.delete(fileName);
           resolve(colorData);
         };
 
         img.onerror = () => {
           const fallbackColor = { rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` };
-          setDominantColors(prev => ({ ...prev, [fileName]: fallbackColor }));
+          setDominantColors(prev => {
+            if (!prev[fileName]) {
+              return { ...prev, [fileName]: fallbackColor };
+            }
+            return prev;
+          });
+          processingColorsRef.current.delete(fileName);
           resolve(fallbackColor);
         };
 
@@ -1317,10 +1418,16 @@ export default function FileList() {
     } catch (error) {
       console.error('Erro ao extrair cor:', error);
       const fallbackColor = { rgb: '16, 185, 129', rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})` };
-      setDominantColors(prev => ({ ...prev, [fileName]: fallbackColor }));
+      setDominantColors(prev => {
+        if (!prev[fileName]) {
+          return { ...prev, [fileName]: fallbackColor };
+        }
+        return prev;
+      });
+      processingColorsRef.current.delete(fileName);
       return fallbackColor;
     }
-  }, [dominantColors, settings.disableDynamicColors]);
+  }, [settings.disableDynamicColors]); // Removido dominantColors da dependência para evitar loops
 
   // Função para ajustar cor para melhor contraste na UI
   const adjustColorForUI = (r: number, g: number, b: number): string => {
@@ -2305,7 +2412,7 @@ export default function FileList() {
       {/* Lista de arquivos - Layout mobile (cards) */}
       <div id="file-list-scroll-container" className="block sm:hidden flex-1 overflow-y-auto space-y-1 custom-scroll-square">
         {Object.keys(groupedFiles).length === 0 || Object.values(groupedFiles).every(group => group.length === 0) ? (
-          <div className="text-center py-12">
+          <div className="text-center pt-32 pb-12">
             <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
               <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
@@ -2497,7 +2604,7 @@ export default function FileList() {
       {/* Lista de arquivos - Layout desktop (cards como mobile) */}
       <div id="file-list-scroll-container" className="hidden sm:block flex-1 overflow-y-auto space-y-1 custom-scroll-square">
         {Object.keys(groupedFiles).length === 0 || Object.values(groupedFiles).every(group => group.length === 0) ? (
-          <div className="text-center py-12">
+          <div className="text-center pt-32 pb-12">
             <div className="w-16 h-16 mx-auto mb-4 bg-zinc-800/50 rounded-full flex items-center justify-center">
               <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />

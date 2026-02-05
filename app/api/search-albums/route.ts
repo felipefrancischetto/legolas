@@ -20,18 +20,18 @@ async function fetchAllPlaylistTracks(playlistUrl: string, cookiesFlag: string):
     console.log(`🔍 [fetchAllPlaylistTracks] Buscando todas as faixas de: ${playlistUrl}`);
     
     // Lista de métodos de extração (prioridade: Android > iOS > Web > básico)
-    // Usar --playlist-end 0 para buscar TODAS as faixas sem limite
+    // Remover --playlist-end para buscar TODAS as faixas sem limite
     const extractionMethods: string[] = [
-      // Método 1: Android client com limite zero (todas as faixas)
-      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=android" ${cookiesFlag}"${playlistUrl}"`,
-      // Método 2: iOS client com limite zero
-      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=ios" ${cookiesFlag}"${playlistUrl}"`,
-      // Método 3: Web client com limite zero
-      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=web" ${cookiesFlag}"${playlistUrl}"`,
+      // Método 1: Android client (todas as faixas)
+      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=android" ${cookiesFlag}"${playlistUrl}"`,
+      // Método 2: iOS client
+      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=ios" ${cookiesFlag}"${playlistUrl}"`,
+      // Método 3: Web client
+      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=web" ${cookiesFlag}"${playlistUrl}"`,
       // Método 4: TV client (pode retornar mais faixas)
-      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=tv" ${cookiesFlag}"${playlistUrl}"`,
+      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=tv" ${cookiesFlag}"${playlistUrl}"`,
       // Método 5: Básico sem limite explícito
-      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 ${cookiesFlag}"${playlistUrl}"`,
+      `yt-dlp --dump-json --flat-playlist --no-playlist-reverse ${cookiesFlag}"${playlistUrl}"`,
       // Método 6: Com limite muito alto como fallback
       `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 999999 ${cookiesFlag}"${playlistUrl}"`,
       // Método 7: Sem flags de playlist (pode funcionar em alguns casos)

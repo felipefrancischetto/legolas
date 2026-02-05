@@ -32,18 +32,46 @@ export default function PlaylistTracklistModal({ isOpen, onClose, playlistUrl }:
     }
   }, [isOpen, playlistUrl]);
 
+  const getPlaylistId = (url: string): string | null => {
+    // Suporta tanto youtube.com quanto music.youtube.com
+    const match = url.match(/[?&]list=([^#&]+)/);
+    return match ? match[1] : null;
+  };
+
   const fetchTracks = async () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch(`/api/playlist-info?url=${encodeURIComponent(playlistUrl)}`);
+      
+      // Extrair o ID da playlist da URL
+      const playlistId = getPlaylistId(playlistUrl);
+      if (!playlistId) {
+        throw new Error('URL da playlist inválida. Não foi possível extrair o ID da playlist.');
+      }
+      
+      const response = await fetch(`/api/playlist-info?id=${encodeURIComponent(playlistId)}`);
       const data = await response.json();
       
       if (!response.ok) {
         throw new Error(data.error || 'Erro ao carregar playlist');
       }
       
-      setTracks(data.tracks);
+      // Converter o formato de resposta da API para o formato esperado pelo componente
+      if (data.videos && Array.isArray(data.videos)) {
+        setTracks(data.videos.map((video: any) => {
+          const videoId = video.videoId || video.id || '';
+          return {
+            title: video.title || '',
+            artist: '', // A API não retorna artista separado
+            duration: video.duration || '',
+            thumbnail: data.thumbnail,
+            url: videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined,
+            youtubeUrl: videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined
+          };
+        }));
+      } else {
+        setTracks([]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao carregar playlist');
     } finally {
@@ -133,9 +161,31 @@ export default function PlaylistTracklistModal({ isOpen, onClose, playlistUrl }:
             Fechar
           </button>
           <button
-            onClick={() => {
-              // Implementar download de toda a playlist
-              alert('Funcionalidade em desenvolvimento');
+            onClick={async () => {
+              if (!playlistUrl || tracks.length === 0) return;
+              
+              try {
+                // Adicionar a playlist completa à fila de download
+                const playlistId = getPlaylistId(playlistUrl);
+                if (playlistId) {
+                  addToQueue({
+                    url: playlistUrl,
+                    title: `Playlist (${tracks.length} faixas)`,
+                    format: 'flac',
+                    enrichWithBeatport: true,
+                    showBeatportPage: false,
+                    isPlaylist: true,
+                    status: 'pending' as const,
+                    steps: []
+                  });
+                  onClose();
+                } else {
+                  alert('Erro: Não foi possível identificar a playlist');
+                }
+              } catch (err) {
+                console.error('Erro ao adicionar playlist à fila:', err);
+                alert('Erro ao adicionar playlist à fila de download');
+              }
             }}
             disabled={loading || tracks.length === 0}
             className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors sm:px-3 sm:py-1.5 sm:text-sm"

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { hasValidCookiesFile } from '../utils/common';
+import { searchYouTubeMusic as searchYouTubeMusicService } from '@/lib/services/youtubeSearchService';
 
 const execAsync = promisify(exec);
 
@@ -21,153 +22,51 @@ function formatDuration(seconds: number): string {
 }
 
 async function searchYouTubeMusic(query: string): Promise<any | null> {
-  try {
-    console.log(`🎵 [YouTube Music] Buscando: "${query}"`);
-    
-    // Buscar primeiro no YouTube Music usando a API unificada
-    const response = await fetch(`https://music.youtube.com/youtubei/v1/search?key=AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX94`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Origin': 'https://music.youtube.com',
-        'Referer': 'https://music.youtube.com/',
-        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-        'X-YouTube-Client-Name': '67',
-        'X-YouTube-Client-Version': '1.20240101.01.00',
-      },
-      body: JSON.stringify({
-        query,
-        params: 'EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D', // Parâmetro para buscar apenas músicas
-        context: {
-          client: {
-            clientName: 'WEB_REMIX',
-            clientVersion: '1.20240101.01.00',
-            hl: 'pt-BR',
-            gl: 'BR',
-            utcOffsetMinutes: -180,
-          },
-          user: { lockedSafetyMode: false },
-          request: {
-            sessionId: '1234567890',
-            internalExperimentFlags: [],
-            consistencyTokenJars: [],
-          },
-        },
-      }),
-    });
-
-    if (!response.ok) {
-      console.warn(`⚠️ [YouTube Music] Resposta não OK: ${response.status}`);
-      return null;
-    }
-
-    const data = await response.json();
-    
-    // Tentar múltiplos caminhos na estrutura de resposta
-    let videoResults = data.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents?.[0]?.musicShelfRenderer?.contents;
-    
-    // Tentar caminho alternativo
-    if (!videoResults || videoResults.length === 0) {
-      videoResults = data.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.musicShelfRenderer?.contents;
-    }
-    
-    // Tentar outro caminho alternativo - buscar em todas as seções
-    if (!videoResults || videoResults.length === 0) {
-      const sections = data.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents;
-      if (sections && sections.length > 0) {
-        for (const section of sections) {
-          if (section.musicShelfRenderer?.contents) {
-            videoResults = section.musicShelfRenderer.contents;
-            break;
-          }
-        }
-      }
-    }
-    
-    if (!videoResults || videoResults.length === 0) {
-      console.warn(`⚠️ [YouTube Music] Nenhum resultado encontrado na estrutura esperada`);
-      return null;
-    }
-
-    console.log(`✅ [YouTube Music] Encontrados ${videoResults.length} resultados`);
-
-    // Pegar o primeiro resultado
-    const firstResult = videoResults[0];
-    const item = firstResult.musicResponsiveListItemRenderer;
-    
-    if (!item) {
-      console.warn(`⚠️ [YouTube Music] Estrutura do resultado inválida`);
-      return null;
-    }
-    
-    // Tentar múltiplos caminhos para extrair o videoId
-    const videoId = item?.playlistItemData?.videoId 
-      || item?.videoId 
-      || item?.navigationEndpoint?.watchEndpoint?.videoId
-      || item?.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
-    
-    // Extrair título
-    const titleRuns = item?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
-    const title = titleRuns?.[0]?.text || item?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.simpleText;
-    
-    // Extrair artista
-    const artistRuns = item?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
-    const artist = artistRuns?.[0]?.text || item?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.simpleText;
-    
-    // Tentar extrair thumbnail
-    let thumbnail: string | undefined;
-    const thumbnailData = item?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
-    if (thumbnailData && thumbnailData.length > 0) {
-      thumbnail = thumbnailData[thumbnailData.length - 1].url;
-    }
-
-    if (videoId && title) {
-      console.log(`✅ [YouTube Music] Vídeo encontrado: ${title} - ${artist || 'N/A'}`);
-      
-      // Buscar informações completas do vídeo usando yt-dlp para garantir dados completos
-      try {
-        const hasValidCookies = await hasValidCookiesFile();
-        const cookiesFlag = hasValidCookies ? '--cookies "cookies.txt" ' : '';
-        const { stdout } = await execAsync(
-          `yt-dlp --dump-json ${cookiesFlag}"https://www.youtube.com/watch?v=${videoId}"`,
-          { maxBuffer: 1024 * 1024 * 10, timeout: 10000 }
-        );
-        
-        const videoInfo = JSON.parse(stdout);
-        return {
-          title: videoInfo.title || title,
-          thumbnail: videoInfo.thumbnail || videoInfo.thumbnails?.[0]?.url || thumbnail || '',
-          duration: formatDuration(videoInfo.duration),
-          url: videoInfo.webpage_url || `https://www.youtube.com/watch?v=${videoId}`,
-          videoId: videoInfo.id || videoId,
-          uploader: videoInfo.uploader || artist || videoInfo.channel || '',
-          viewCount: videoInfo.view_count || 0,
-          source: 'youtube-music'
-        };
-      } catch (ytdlpError) {
-        console.warn(`⚠️ [YouTube Music] Erro ao buscar detalhes com yt-dlp, usando dados básicos:`, ytdlpError);
-        // Retornar dados básicos mesmo se yt-dlp falhar
-        return {
-          title: title,
-          thumbnail: thumbnail || `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
-          duration: undefined,
-          url: `https://www.youtube.com/watch?v=${videoId}`,
-          videoId: videoId,
-          uploader: artist || '',
-          viewCount: 0,
-          source: 'youtube-music'
-        };
-      }
-    }
-    
-    console.warn(`⚠️ [YouTube Music] Vídeo ID ou título não encontrado`);
-    return null;
-  } catch (error) {
-    console.error('❌ [YouTube Music] Erro ao buscar:', error);
+  // Usar o novo serviço unificado
+  const results = await searchYouTubeMusicService(query, { maxResults: 1, preferMusic: true });
+  
+  if (results.length === 0) {
     return null;
   }
+  
+  const result = results[0];
+  
+  // Buscar informações completas do vídeo usando yt-dlp
+  try {
+    const hasValidCookies = await hasValidCookiesFile();
+    const cookiesFlag = hasValidCookies ? '--cookies "cookies.txt" ' : '';
+    const { stdout } = await execAsync(
+      `yt-dlp --dump-json ${cookiesFlag}"https://www.youtube.com/watch?v=${result.videoId}"`,
+      { maxBuffer: 1024 * 1024 * 10, timeout: 10000 }
+    );
+    
+    const videoInfo = JSON.parse(stdout);
+    return {
+      title: videoInfo.title || result.title,
+      thumbnail: videoInfo.thumbnail || videoInfo.thumbnails?.[0]?.url || result.thumbnail || '',
+      duration: formatDuration(videoInfo.duration),
+      url: videoInfo.webpage_url || result.url,
+      videoId: videoInfo.id || result.videoId,
+      uploader: videoInfo.uploader || result.artist || videoInfo.channel || '',
+      viewCount: videoInfo.view_count || 0,
+      source: result.source
+    };
+  } catch (ytdlpError) {
+    console.warn(`⚠️ [YouTube Music] Erro ao buscar detalhes com yt-dlp, usando dados básicos:`, ytdlpError);
+    // Retornar dados básicos mesmo se yt-dlp falhar
+    return {
+      title: result.title,
+      thumbnail: result.thumbnail || `https://img.youtube.com/vi/${result.videoId}/maxresdefault.jpg`,
+      duration: result.duration,
+      url: result.url,
+      videoId: result.videoId,
+      uploader: result.artist || '',
+      viewCount: 0,
+      source: result.source
+    };
+  }
 }
+
 
 export async function GET(request: NextRequest) {
   try {
@@ -187,15 +86,11 @@ export async function GET(request: NextRequest) {
     // Se for YouTube Music, tentar primeiro e FORÇAR retorno apenas se encontrar
     if (platform === 'youtube-music') {
       const musicResult = await searchYouTubeMusic(query);
-      if (musicResult && musicResult.source === 'youtube-music') {
-        console.log(`✅ Vídeo encontrado no YouTube Music: ${musicResult.title}`);
+      if (musicResult) {
+        console.log(`✅ Vídeo encontrado: ${musicResult.title} (${musicResult.source})`);
         return NextResponse.json(musicResult);
       }
-      if (musicResult) {
-        console.log(`⚠️ Resultado encontrado mas não é YouTube Music, tentando novamente...`);
-      } else {
-        console.log('⚠️ Não encontrado no YouTube Music, tentando YouTube normal...');
-      }
+      console.log('⚠️ Não encontrado no YouTube Music, tentando YouTube normal...');
     }
 
     // Fallback para YouTube normal usando yt-dlp

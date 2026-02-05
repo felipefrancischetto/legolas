@@ -190,7 +190,7 @@ export class PlaylistDownloadService {
       }
       
       // Usar comando melhorado para garantir que todas as faixas sejam extraídas
-      // --playlist-end 0 significa sem limite (todas as faixas)
+      // Sem --playlist-end significa sem limite (todas as faixas)
       // --no-playlist-reverse mantém a ordem original
       let playlistInfo = '';
       let playlistStderr = '';
@@ -201,13 +201,13 @@ export class PlaylistDownloadService {
       // Lista de métodos de extração SEM cookies (prioridade: Android > iOS > Web > básico)
       const extractionMethods: string[] = [
         // Método 1: Android client (menos detectável)
-        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=android" "${url}"`,
+        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=android" "${url}"`,
         // Método 2: iOS client
-        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=ios" "${url}"`,
+        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=ios" "${url}"`,
         // Método 3: Web client
-        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 --extractor-args "youtube:player_client=web" "${url}"`,
+        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=web" "${url}"`,
         // Método 4: Básico sem limite
-        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 0 "${url}"`,
+        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse "${url}"`,
         // Método 5: Básico com limite alto
         `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 999999 "${url}"`,
         // Método 6: Comando básico
@@ -543,17 +543,14 @@ export class PlaylistDownloadService {
         const baseTitle = sanitizeTitle(entry.title || 'Unknown');
         const tempFilename = `${baseTitle} [${entry.id}]`; // Incluir ID para garantir unicidade
         
-        // Escapar o caminho corretamente para Windows/PowerShell
-        // O yt-dlp espera o caminho entre aspas, mas precisamos escapar aspas internas
-        const escapedFolder = escapePathForWindows(downloadsFolder);
-        const escapedFilename = escapePathForWindows(tempFilename);
-        // Usar caminho completo escapado entre aspas para garantir que funciona no Windows
-        const outputPath = `"${escapedFolder}\\${escapedFilename}.%(ext)s"`;
+        // Construir o caminho de saída sem aspas (serão adicionadas no comando)
+        // Usar barras normais / que funcionam tanto no Windows quanto no Linux/Mac
+        const outputPath = `${downloadsFolder.replace(/\\/g, '/')}/${tempFilename}.%(ext)s`;
         
         logger.info(`   📝 Título original: "${entry.title}"`);
         logger.info(`   📝 Título sanitizado: "${baseTitle}"`);
         logger.info(`   📝 Nome do arquivo temporário: ${tempFilename}.${format}`);
-        logger.info(`   📝 Caminho de saída (escapado): ${outputPath}`);
+        logger.info(`   📝 Caminho de saída: ${outputPath}`);
         logger.info(`   📝 Caminho de saída (raw): ${downloadsFolder}\\${tempFilename}.%(ext)s`);
 
         logger.info(`   ⬇️ Downloading track ${trackNumber}...`);
@@ -564,6 +561,8 @@ export class PlaylistDownloadService {
         let hadYouTubeIssues = false;
         
         // Lista de estratégias de download SEM cookies (foco no que funciona)
+        // Escapar o outputPath para uso seguro em comandos (escapar aspas duplas)
+        const escapedOutputPath = outputPath.replace(/"/g, '\\"');
         const downloadStrategies = [
           // Estratégia 1: Cliente Android (menos detectável)
           {
@@ -573,7 +572,8 @@ export class PlaylistDownloadService {
               `--add-metadata ` +
               `--extractor-args "youtube:player_client=android" ` +
               `--sleep-interval 1 --max-sleep-interval 2 ` +
-              `-o "${outputPath}" ` +
+              `--no-playlist ` +
+              `-o "${escapedOutputPath}" ` +
               `--no-part --force-overwrites "${trackUrl}"`
           },
           // Estratégia 2: Cliente iOS
@@ -584,7 +584,8 @@ export class PlaylistDownloadService {
               `--add-metadata ` +
               `--extractor-args "youtube:player_client=ios" ` +
               `--sleep-interval 1 --max-sleep-interval 2 ` +
-              `-o "${outputPath}" ` +
+              `--no-playlist ` +
+              `-o "${escapedOutputPath}" ` +
               `--no-part --force-overwrites "${trackUrl}"`
           },
           // Estratégia 3: Cliente Web (padrão)
@@ -595,7 +596,8 @@ export class PlaylistDownloadService {
               `--add-metadata ` +
               `--extractor-args "youtube:player_client=web" ` +
               `--sleep-interval 1 --max-sleep-interval 2 ` +
-              `-o "${outputPath}" ` +
+              `--no-playlist ` +
+              `-o "${escapedOutputPath}" ` +
               `--no-part --force-overwrites "${trackUrl}"`
           }
         ];

@@ -56,37 +56,20 @@ interface SavedDownloadFormState {
 }
 
 export default function DownloadForm({ minimized, setMinimized, showQueue, setShowQueue, setSettingsModalOpen }: DownloadFormProps) {
-  // Carregar estados salvos do localStorage
-  const loadSavedState = (): SavedDownloadFormState => {
-    const saved = safeGetItem<SavedDownloadFormState>(STORAGE_KEY_DOWNLOAD_FORM);
-    if (saved) {
-      return saved;
-    }
-    return {
-      url: '',
-      format: 'flac',
-      enrichWithBeatport: true,
-      showBeatportPage: false,
-      showPlaylistModal: false,
-      showYouTubeSearchModal: false,
-      showQuickPlaylist: false
-    };
-  };
-
-  const savedState = loadSavedState();
-  
-  const [url, setUrl] = useState(savedState.url);
+  // Estados iniciais com valores padrão (para evitar hydration mismatch)
+  // Os valores salvos serão carregados no useEffect após montagem
+  const [url, setUrl] = useState('');
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [isLoadingVideoInfo, setIsLoadingVideoInfo] = useState(false);
   const [selectedTracks, setSelectedTracks] = useState<number[]>([]);
-  const [format, setFormat] = useState(savedState.format);
-  const [enrichWithBeatport, setEnrichWithBeatport] = useState(savedState.enrichWithBeatport);
-  const [showBeatportPage, setShowBeatportPage] = useState(savedState.showBeatportPage);
+  const [format, setFormat] = useState('flac');
+  const [enrichWithBeatport, setEnrichWithBeatport] = useState(true);
+  const [showBeatportPage, setShowBeatportPage] = useState(false);
   const [currentDownloadId, setCurrentDownloadId] = useState<string | null>(null);
   const [toastDismissed, setToastDismissed] = useState<Set<string>>(new Set());
-  const [showPlaylistModal, setShowPlaylistModal] = useState(savedState.showPlaylistModal);
-  const [showYouTubeSearchModal, setShowYouTubeSearchModal] = useState(savedState.showYouTubeSearchModal);
-  const [showQuickPlaylist, setShowQuickPlaylist] = useState(savedState.showQuickPlaylist);
+  const [showPlaylistModal, setShowPlaylistModal] = useState(false);
+  const [showYouTubeSearchModal, setShowYouTubeSearchModal] = useState(false);
+  const [showQuickPlaylist, setShowQuickPlaylist] = useState(false);
   const [showPlaylistManager, setShowPlaylistManager] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [currentFolderPath, setCurrentFolderPath] = useState<string>('');
@@ -116,6 +99,20 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
   // Marcar como inicializado após montagem
   useEffect(() => {
     setIsInitialized(true);
+  }, []);
+
+  // Carregar estados salvos do localStorage após montagem (client-side only)
+  useEffect(() => {
+    const saved = safeGetItem<SavedDownloadFormState>(STORAGE_KEY_DOWNLOAD_FORM);
+    if (saved) {
+      setUrl(saved.url);
+      setFormat(saved.format);
+      setEnrichWithBeatport(saved.enrichWithBeatport);
+      setShowBeatportPage(saved.showBeatportPage);
+      setShowPlaylistModal(saved.showPlaylistModal);
+      setShowYouTubeSearchModal(saved.showYouTubeSearchModal);
+      setShowQuickPlaylist(saved.showQuickPlaylist);
+    }
   }, []);
 
   // Buscar caminho atual da pasta de downloads
@@ -363,6 +360,21 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
           const response = await fetch(endpoint, { signal });
           if (signal.aborted) return;
 
+          if (!response.ok) {
+            // Tentar extrair mensagem de erro do JSON
+            let errorMessage = 'Erro ao buscar informações da playlist';
+            try {
+              const errorData = await response.json();
+              if (errorData.error) {
+                errorMessage = errorData.error;
+              }
+            } catch {
+              // Se não conseguir fazer parse, usar mensagem padrão
+              errorMessage = `Erro ${response.status}: ${response.statusText}`;
+            }
+            throw new Error(errorMessage);
+          }
+
           const data = await response.json().catch((parseError) => {
             console.error('Erro ao fazer parse da resposta da playlist:', parseError);
             throw new Error('Resposta inválida do servidor');
@@ -378,10 +390,25 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
             return;
           }
 
-                      // Chamando video-info para ID
+          // Chamando video-info para ID
           const endpoint = `/api/video-info?id=${encodeURIComponent(videoId)}`;
           const response = await fetch(endpoint, { signal });
           if (signal.aborted) return;
+
+          if (!response.ok) {
+            // Tentar extrair mensagem de erro do JSON
+            let errorMessage = 'Erro ao buscar informações do vídeo';
+            try {
+              const errorData = await response.json();
+              if (errorData.error) {
+                errorMessage = errorData.error;
+              }
+            } catch {
+              // Se não conseguir fazer parse, usar mensagem padrão
+              errorMessage = `Erro ${response.status}: ${response.statusText}`;
+            }
+            throw new Error(errorMessage);
+          }
 
           const data = await response.json().catch((parseError) => {
             console.error('Erro ao fazer parse da resposta do vídeo:', parseError);
@@ -396,6 +423,8 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         if (err.name !== 'AbortError') {
           console.error(`❌ Erro ao buscar info:`, err);
           setVideoInfo(null);
+          // O erro será logado no console, mas não há UI de toast aqui
+          // O DownloadContext pode mostrar toasts se necessário
         }
       } finally {
         if (!signal.aborted) {
@@ -506,7 +535,7 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         if (!displayDownload || !isActive || isDismissed) return null;
         
         return (
-          <div className="mb-4 px-4 sm:px-2">
+          <div className="mb-4 mt-4 max-w-7xl mx-auto px-3 md:px-2 sm:px-2">
             <div
               className="backdrop-blur-md border rounded-xl p-4 shadow-lg relative"
               style={{
@@ -656,21 +685,31 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
                 {/* Input e botão quando minimizado */}
                 {minimized && (
                   <div className="flex items-center gap-3 flex-1 ml-6 mr-2">
-                    <input
-                      type="url"
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      className="flex-1 h-10 px-4 py-2 rounded-xl text-white text-sm transition-all duration-200 focus:outline-none backdrop-blur-md placeholder-zinc-400 focus:ring-2 focus:ring-emerald-500/50"
-                      style={{
-                        background: `linear-gradient(135deg, ${themeColors.background} 0%, ${themeColors.background.replace('0.15', '0.25')} 100%)`,
-                        border: `1px solid ${themeColors.border}`,
-                        boxShadow: url 
-                          ? `0 4px 12px ${themeColors.primary}25, 0 0 0 1px ${themeColors.primaryLight}, inset 0 1px 0 rgba(255, 255, 255, 0.1)` 
-                          : `0 4px 12px ${themeColors.primary}15, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
-                      }}
-                      placeholder="Cole a URL do YouTube aqui..."
-                      suppressHydrationWarning
-                    />
+                    <div className="flex-1 relative">
+                      <input
+                        type="url"
+                        value={url}
+                        onChange={(e) => setUrl(e.target.value)}
+                        className="w-full h-10 px-4 py-2 pr-10 rounded-xl text-white text-sm transition-all duration-200 focus:outline-none backdrop-blur-md placeholder-zinc-400 focus:ring-2 focus:ring-emerald-500/50"
+                        style={{
+                          background: `linear-gradient(135deg, ${themeColors.background} 0%, ${themeColors.background.replace('0.15', '0.25')} 100%)`,
+                          border: `1px solid ${isLoadingVideoInfo ? themeColors.primary : themeColors.border}`,
+                          boxShadow: isLoadingVideoInfo
+                            ? `0 4px 12px ${themeColors.primary}40, 0 0 0 1px ${themeColors.primaryLight}, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
+                            : url 
+                              ? `0 4px 12px ${themeColors.primary}25, 0 0 0 1px ${themeColors.primaryLight}, inset 0 1px 0 rgba(255, 255, 255, 0.1)` 
+                              : `0 4px 12px ${themeColors.primary}15, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
+                        }}
+                        placeholder="Cole a URL do YouTube aqui..."
+                        disabled={isLoadingVideoInfo}
+                        suppressHydrationWarning
+                      />
+                      {isLoadingVideoInfo && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                          <LoadingSpinner size="xs" variant="dots" isLoading={true} themeColors={themeColors} />
+                        </div>
+                      )}
+                    </div>
                     <button
                       type="submit"
                       onClick={handleSubmit}
@@ -970,31 +1009,47 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
             )}
 
             {/* Formulário principal */}
-            <div className={`transition-all duration-300 max-w-7xl mx-auto ${minimized ? 'h-0 overflow-hidden' : 'p-4 md:p-3 sm:p-2'}`}>
+            <div className={`transition-all duration-300 max-w-7xl mx-auto ${minimized ? 'h-0 overflow-hidden' : 'p-4 md:p-3 sm:p-2 mt-6 md:mt-5 sm:mt-4'}`}>
               <form onSubmit={handleSubmit} className="space-y-4 md:space-y-3 sm:space-y-2">
                 {/* Linha principal - URL e controles */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-3 sm:gap-2">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-3 sm:gap-2 max-w-5xl lg:ml-[74px] md:ml-[64px] sm:ml-0">
                   {/* Campo URL */}
-                  <div className="lg:col-span-6">
+                  <div className="lg:col-span-5">
                     <label className="block text-sm font-medium mb-2 text-white">
                       URL do YouTube
                     </label>
-                    <input
-                      type="url"
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      className="w-full h-11 md:h-10 sm:h-9 px-4 md:px-3 sm:px-2 py-2 rounded-xl text-white transition-all duration-200 focus:outline-none backdrop-blur-md placeholder-zinc-400 focus:ring-2 focus:ring-emerald-500/50"
-                      style={{
-                        background: `linear-gradient(135deg, ${themeColors.background} 0%, ${themeColors.background.replace('0.15', '0.25')} 100%)`,
-                        border: `1px solid ${themeColors.border}`,
-                        boxShadow: url 
-                          ? `0 4px 12px ${themeColors.primary}25, 0 0 0 1px ${themeColors.primaryLight}, inset 0 1px 0 rgba(255, 255, 255, 0.1)` 
-                          : `0 4px 12px ${themeColors.primary}15, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
-                      }}
-                      placeholder="https://www.youtube.com/watch?v=..."
-                      required
-                      suppressHydrationWarning
-                    />
+                    <div className="relative">
+                      <input
+                        type="url"
+                        value={url}
+                        onChange={(e) => setUrl(e.target.value)}
+                        className="w-full h-11 md:h-10 sm:h-9 px-4 md:px-3 sm:px-2 py-2 pr-10 rounded-xl text-white transition-all duration-200 focus:outline-none backdrop-blur-md placeholder-zinc-400 focus:ring-2 focus:ring-emerald-500/50"
+                        style={{
+                          background: `linear-gradient(135deg, ${themeColors.background} 0%, ${themeColors.background.replace('0.15', '0.25')} 100%)`,
+                          border: `1px solid ${isLoadingVideoInfo ? themeColors.primary : themeColors.border}`,
+                          boxShadow: isLoadingVideoInfo
+                            ? `0 4px 12px ${themeColors.primary}40, 0 0 0 1px ${themeColors.primaryLight}, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
+                            : url 
+                              ? `0 4px 12px ${themeColors.primary}25, 0 0 0 1px ${themeColors.primaryLight}, inset 0 1px 0 rgba(255, 255, 255, 0.1)` 
+                              : `0 4px 12px ${themeColors.primary}15, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
+                        }}
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        required
+                        disabled={isLoadingVideoInfo}
+                        suppressHydrationWarning
+                      />
+                      {isLoadingVideoInfo && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                          <LoadingSpinner size="xs" variant="dots" isLoading={true} themeColors={themeColors} />
+                        </div>
+                      )}
+                    </div>
+                    {isLoadingVideoInfo && url && (
+                      <div className="mt-1.5 text-xs flex items-center gap-1.5" style={{ color: themeColors.primary }}>
+                        <LoadingSpinner size="xs" variant="pulse" isLoading={true} themeColors={themeColors} />
+                        <span>Buscando informações do vídeo...</span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Formato */}

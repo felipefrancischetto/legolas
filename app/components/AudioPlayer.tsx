@@ -1,7 +1,6 @@
 'use client';
 
-import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import Image from 'next/image';
+import { useRef, useEffect, useState, useCallback, useMemo, memo } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import { usePlayer } from '../contexts/PlayerContext';
 import { useUI } from '../contexts/UIContext';
@@ -15,6 +14,48 @@ import MusicStudyModal from './MusicStudyModal';
 import LoadingSpinner from './LoadingSpinner';
 import { SkeletonAudioPlayer } from './SkeletonComponents';
 import { logger } from '../utils/logger';
+
+// Componente memoizado para thumbnail que evita re-renders desnecessários
+const ThumbnailImage = memo(({ 
+  src, 
+  alt, 
+  onError, 
+  onLoad,
+  className,
+  style
+}: { 
+  src: string; 
+  alt: string; 
+  onError: () => void;
+  onLoad: (e: React.SyntheticEvent<HTMLImageElement>) => void;
+  className?: string;
+  style?: React.CSSProperties;
+}) => {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      width={82}
+      height={82}
+      className={className}
+      style={style}
+      onError={onError}
+      onLoad={onLoad}
+      loading="eager"
+      decoding="async"
+    />
+  );
+}, (prevProps, nextProps) => {
+  // Só re-renderizar se a URL mudar (retorna true se props são iguais = não re-renderizar)
+  // Retorna false se precisar re-renderizar
+  if (prevProps.src !== nextProps.src) {
+    return false; // URL mudou, precisa re-renderizar
+  }
+  // Se a URL é a mesma, não precisa re-renderizar
+  return true; // Props são iguais, não re-renderizar
+});
+
+ThumbnailImage.displayName = 'ThumbnailImage';
 
 
 export default function AudioPlayer() {
@@ -72,12 +113,56 @@ export default function AudioPlayer() {
   const isReady = playerState.isReady;
   const error = playerState.error;
 
+  // Memoizar URL do thumbnail para evitar requisições repetidas
+  const thumbnailUrl = useMemo(() => {
+    if (!currentFile?.name) return '';
+    return getThumbnailUrl(currentFile.name);
+  }, [currentFile?.name]);
+
+  // Ref para rastrear a última URL do thumbnail carregada e evitar re-renders
+  const lastThumbnailUrlRef = useRef<string>('');
+  const imageErrorRef = useRef<boolean>(false);
+  const imageLoadedUrlsRef = useRef<Set<string>>(new Set());
+  
   // Resetar erro de imagem quando o arquivo mudar
   useEffect(() => {
     if (currentFile?.name) {
       setImageError(false);
+      imageErrorRef.current = false;
+      lastThumbnailUrlRef.current = '';
+      // Limpar cache de URLs carregadas quando mudar de arquivo
+      imageLoadedUrlsRef.current.clear();
     }
   }, [currentFile?.name]);
+  
+  // Atualizar ref quando thumbnailUrl mudar
+  useEffect(() => {
+    if (thumbnailUrl && thumbnailUrl !== lastThumbnailUrlRef.current) {
+      lastThumbnailUrlRef.current = thumbnailUrl;
+      // Resetar erro quando URL mudar
+      if (imageErrorRef.current) {
+        setImageError(false);
+        imageErrorRef.current = false;
+      }
+    }
+  }, [thumbnailUrl]);
+  
+  // Handler memoizado para onError para evitar re-renders
+  const handleImageError = useCallback(() => {
+    if (!imageErrorRef.current && currentFile?.name) {
+      console.warn('Erro ao carregar imagem no player:', currentFile.name);
+      setImageError(true);
+      imageErrorRef.current = true;
+    }
+  }, [currentFile?.name]);
+  
+  // Handler para quando a imagem carregar com sucesso - evita requisições repetidas
+  const handleImageLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    if (img.src && !imageLoadedUrlsRef.current.has(img.src)) {
+      imageLoadedUrlsRef.current.add(img.src);
+    }
+  }, []);
   
   // Estado local para volume durante interação (evita re-renders)
   const [localVolume, setLocalVolume] = useState(playerState.volume);
@@ -233,7 +318,6 @@ export default function AudioPlayer() {
       }
 
       try {
-        const thumbnailUrl = getThumbnailUrl(currentFile.name);
         const colorData = await getCachedDominantColor(thumbnailUrl);
         const dominantColor = `rgba(${colorData.r}, ${colorData.g}, ${colorData.b}, 0.2)`;
         setPlayerDominantColor(dominantColor);
@@ -248,10 +332,61 @@ export default function AudioPlayer() {
 
   // Inicializar áudio nativo
   useEffect(() => {
-    if (!currentFile) return;
+    if (!currentFile) {
+      // Limpar referências quando não há arquivo
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+        audioRef.current = null;
+      }
+      lastInitializedFile.current = null;
+      isInitializing.current = false;
+      return;
+    }
+
+    // Proteção contra múltiplas inicializações do mesmo arquivo
+    if (lastInitializedFile.current === currentFile.name) {
+      // Verificar se o audioRef ainda está válido e com o mesmo arquivo
+      if (audioRef.current && audioRef.current.src && audioRef.current.src.includes(encodeURIComponent(currentFile.name))) {
+        logger.debug('⚠️ Áudio já inicializado para este arquivo, ignorando:', currentFile.name);
+        return;
+      }
+      // Se o audioRef não está mais válido, permitir re-inicialização
+      logger.debug('⚠️ Arquivo já foi inicializado mas audioRef não está válido, re-inicializando');
+    }
+
+    // Proteção contra inicializações simultâneas
+    if (isInitializing.current) {
+      logger.debug('⚠️ Inicialização já em andamento, ignorando nova inicialização');
+      return;
+    }
+
+    // Limpar áudio anterior se existir e for diferente
+    if (audioRef.current) {
+      const currentSrc = audioRef.current.src;
+      const newUrl = `/api/downloads/${encodeURIComponent(currentFile.name)}`;
+      if (currentSrc && !currentSrc.includes(encodeURIComponent(currentFile.name))) {
+        logger.debug('🧹 Limpando áudio anterior antes de inicializar novo');
+        audioRef.current.pause();
+        audioRef.current.src = '';
+        audioRef.current.removeEventListener('loadedmetadata', () => {});
+        audioRef.current.removeEventListener('canplay', () => {});
+        audioRef.current.removeEventListener('timeupdate', () => {});
+        audioRef.current.removeEventListener('ended', () => {});
+        audioRef.current.removeEventListener('error', () => {});
+        audioRef.current = null;
+      } else if (currentSrc && currentSrc.includes(encodeURIComponent(currentFile.name))) {
+        logger.debug('⚠️ Áudio já existe para este arquivo, ignorando:', currentFile.name);
+        return;
+      }
+    }
 
     const audioUrl = `/api/downloads/${encodeURIComponent(currentFile.name)}`;
-            // Inicializando áudio
+    logger.debug('🎵 Inicializando áudio para:', currentFile.name);
+    
+    // Marcar como inicializando ANTES de criar o novo Audio
+    isInitializing.current = true;
+    lastInitializedFile.current = currentFile.name;
     
     const audio = new Audio();
     audio.preload = 'metadata';
@@ -262,6 +397,11 @@ export default function AudioPlayer() {
     // Event listeners otimizados
     const handleLoadedMetadata = () => {
       logger.debug('✅ Metadados carregados');
+      // Verificar se ainda é o arquivo atual antes de atualizar estado
+      if (lastInitializedFile.current !== currentFile.name) {
+        logger.debug('⚠️ Arquivo mudou durante carregamento, ignorando metadados');
+        return;
+      }
       setPlayerState(prev => ({
         ...prev,
         duration: audio.duration || 0,
@@ -269,9 +409,16 @@ export default function AudioPlayer() {
         isLoading: false,
         error: null
       }));
+      isInitializing.current = false;
     };
 
     const handleCanPlay = () => {
+      // Verificar se ainda é o arquivo atual antes de processar
+      if (lastInitializedFile.current !== currentFile.name) {
+        logger.debug('⚠️ Arquivo mudou durante canplay, ignorando');
+        return;
+      }
+      
       const shouldPlay = isPlayingRef.current;
       const savedTime = currentTimeRef.current;
       
@@ -308,6 +455,9 @@ export default function AudioPlayer() {
           currentTime: newCurrentTime
         };
       });
+      
+      // Marcar inicialização como completa
+      isInitializing.current = false;
       
       // Auto-play se solicitado - garantir que realmente toque
       if (shouldPlay && audio.paused) {
@@ -397,11 +547,20 @@ export default function AudioPlayer() {
     };
 
     const handleError = (e: Event) => {
+      // Verificar se ainda é o arquivo atual antes de processar erro
+      if (lastInitializedFile.current !== currentFile.name) {
+        logger.debug('⚠️ Arquivo mudou durante erro, ignorando');
+        return;
+      }
+      
       const audioElement = e.target as HTMLAudioElement;
-      const error = audioElement.error;
+      const error = audioElement?.error;
       
       let errorMessage = 'Erro ao carregar áudio';
+      let errorCode: number | null = null;
+      
       if (error) {
+        errorCode = error.code;
         switch (error.code) {
           case MediaError.MEDIA_ERR_ABORTED:
             errorMessage = 'Reprodução cancelada';
@@ -418,14 +577,39 @@ export default function AudioPlayer() {
           default:
             errorMessage = `Erro ao carregar áudio (código: ${error.code})`;
         }
+      } else {
+        // Se não há objeto de erro, tentar inferir a causa
+        if (audioElement?.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) {
+          errorMessage = 'Nenhuma fonte de áudio disponível';
+        } else if (audioElement?.readyState === HTMLMediaElement.HAVE_NOTHING) {
+          errorMessage = 'Áudio não pôde ser carregado';
+        }
       }
       
-      logger.error('❌ Erro no áudio:', {
-        code: error?.code,
+      // Log detalhado apenas se houver informações úteis
+      const errorDetails: Record<string, any> = {
         message: errorMessage,
-        url: audioUrl,
-        event: e
-      });
+        url: audioUrl || 'N/A',
+        eventType: e.type || 'unknown'
+      };
+      
+      if (errorCode !== null) {
+        errorDetails.code = errorCode;
+      }
+      
+      if (audioElement) {
+        if (audioElement.readyState !== undefined) {
+          errorDetails.readyState = audioElement.readyState;
+        }
+        if (audioElement.networkState !== undefined) {
+          errorDetails.networkState = audioElement.networkState;
+        }
+        if (audioElement.src) {
+          errorDetails.src = audioElement.src;
+        }
+      }
+      
+      logger.error('❌ Erro no áudio:', errorDetails);
       
       setPlayerState(prev => ({
         ...prev,
@@ -434,6 +618,9 @@ export default function AudioPlayer() {
         isReady: false,
         isPlaying: false
       }));
+      
+      // Resetar flag de inicialização em caso de erro
+      isInitializing.current = false;
     };
 
     // Adicionar listeners
@@ -461,16 +648,25 @@ export default function AudioPlayer() {
     });
     
     return () => {
+      logger.debug('🧹 Limpando áudio anterior');
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('canplay', handleCanPlay);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('error', handleError);
       
-      if (audioRef.current) {
+      // Pausar e limpar áudio atual se for o mesmo que estamos limpando
+      if (audioRef.current === audio) {
         audioRef.current.pause();
         audioRef.current.src = '';
         audioRef.current = null;
+      }
+      
+      // Resetar flag de inicialização quando limpamos
+      // Se o arquivo mudou, o lastInitializedFile será atualizado no próximo useEffect
+      if (lastInitializedFile.current === currentFile?.name) {
+        isInitializing.current = false;
+        // Não resetar lastInitializedFile aqui - será atualizado quando novo arquivo for carregado
       }
     };
   }, [currentFile?.name]); // Apenas arquivo atual - volume é controlado separadamente
@@ -642,7 +838,6 @@ export default function AudioPlayer() {
           // Só extrair cores se não estiver desabilitado
           if (!settings.disableDynamicColors) {
             try {
-              const thumbnailUrl = getThumbnailUrl(currentFile.name);
               const colorData = await getCachedDominantColor(thumbnailUrl);
               waveColor = `rgba(${colorData.r}, ${colorData.g}, ${colorData.b}, 0.4)`;
               progressColor = `rgba(${colorData.r}, ${colorData.g}, ${colorData.b}, 0.8)`;
@@ -771,26 +966,14 @@ export default function AudioPlayer() {
           loadingTimeoutRef.current = null;
         }
 
-        // Carregar áudio no WaveSurfer de forma assíncrona
+        // Carregar áudio no WaveSurfer usando URL string
+        // IMPORTANTE: Sempre usar URL string, nunca passar HTMLAudioElement diretamente
         const audioUrl = `/api/downloads/${encodeURIComponent(currentFile.name)}`;
         
         logger.debug('📡 Preparando carregamento do WaveSurfer para:', currentFile.name);
         logger.debug('📡 URL do áudio:', audioUrl);
         
-        // Testar se a URL do áudio está acessível
-        fetch(audioUrl, { method: 'HEAD' })
-          .then(response => {
-            logger.debug('📡 Status da URL do áudio:', response.status, response.statusText);
-            logger.debug('📡 Headers da resposta:', Object.fromEntries(response.headers.entries()));
-            if (!response.ok) {
-              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-          })
-          .catch(error => {
-            logger.warn('⚠️ Erro ao verificar URL do áudio:', error);
-          });
-        
-                      // Carregar áudio imediatamente após criar o WaveSurfer
+        // Carregar áudio imediatamente após criar o WaveSurfer
         try {
           logger.debug('🎵 Carregando WaveSurfer:', currentFile.name);
           logger.debug('🎵 WaveSurfer instance:', wavesurferRef.current);
@@ -799,8 +982,9 @@ export default function AudioPlayer() {
           
           // Verificar se o container ainda está válido
           if (containerRef && containerRef.offsetWidth > 0 && containerRef.offsetHeight > 0 && wavesurferRef.current) {
+            // Sempre usar URL string para evitar erro [object HTMLAudioElement]
             wavesurferRef.current.load(audioUrl);
-            logger.debug('🎵 Comando load enviado para WaveSurfer');
+            logger.debug('🎵 Comando load enviado para WaveSurfer via URL');
             
             // Não precisamos de timeout aqui, já temos o timeout de fallback global
             
@@ -1193,7 +1377,7 @@ export default function AudioPlayer() {
       title: currentFile.title || currentFile.displayName,
       artist: currentFile.artist,
       path: currentFile.path,
-      thumbnail: getThumbnailUrl(currentFile.name)
+      thumbnail: thumbnailUrl
     });
   }, [currentFile, toggleTrack]);
 
@@ -1221,7 +1405,7 @@ export default function AudioPlayer() {
     return {
       title: currentFile.title || currentFile.displayName,
       artist: currentFile.artist || 'Artista Desconhecido',
-      artwork: getThumbnailUrl(currentFile.name),
+      artwork: thumbnailUrl,
       year: (currentFile as any).year,
       genre: (currentFile as any).genre,
       label: currentFile.label,
@@ -1306,18 +1490,14 @@ export default function AudioPlayer() {
                       </svg>
                     </div>
                   ) : (
-                    <Image
-                      src={getThumbnailUrl(currentFile.name)}
+                    <ThumbnailImage
+                      key={`thumbnail-minimized-${currentFile.name}`}
+                      src={thumbnailUrl}
                       alt={currentFile.title || currentFile.displayName}
-                      width={82}
-                      height={82}
                       className="object-cover bg-zinc-800 rounded-lg cursor-pointer shadow-md"
                       style={{ width: 82, height: 82, marginTop: '12px' }}
-                      onError={() => {
-                        console.warn('Erro ao carregar imagem no player:', currentFile.name);
-                        setImageError(true);
-                      }}
-                      unoptimized
+                      onError={handleImageError}
+                      onLoad={handleImageLoad}
                     />
                   )}
                 </button>
@@ -1710,18 +1890,14 @@ export default function AudioPlayer() {
                     </svg>
                   </div>
                 ) : (
-                  <Image
-                    src={getThumbnailUrl(currentFile.name)}
+                  <ThumbnailImage
+                    key={`thumbnail-desktop-main-${currentFile.name}`}
+                    src={thumbnailUrl}
                     alt={currentFile.title || currentFile.displayName}
-                    width={82}
-                    height={82}
                     className="object-cover bg-zinc-800 rounded-lg cursor-pointer shadow-lg"
                     style={{ width: 82, height: 82, marginTop: '12px' }}
-                    onError={() => {
-                      console.warn('Erro ao carregar imagem no player:', currentFile.name);
-                      setImageError(true);
-                    }}
-                    unoptimized
+                    onError={handleImageError}
+                    onLoad={handleImageLoad}
                   />
                 )}
               </button>
@@ -1922,18 +2098,14 @@ export default function AudioPlayer() {
                     </svg>
                   </div>
                 ) : (
-                  <Image
-                    src={getThumbnailUrl(currentFile.name)}
+                  <ThumbnailImage
+                    key={`thumbnail-mobile-${currentFile.name}`}
+                    src={thumbnailUrl}
                     alt={currentFile.title || currentFile.displayName}
-                    width={82}
-                    height={82}
                     className="object-cover bg-zinc-800 rounded-lg cursor-pointer shadow-lg"
                     style={{ width: 82, height: 82, marginTop: '12px' }}
-                    onError={() => {
-                      console.warn('Erro ao carregar imagem no player:', currentFile.name);
-                      setImageError(true);
-                    }}
-                    unoptimized
+                    onError={handleImageError}
+                    onLoad={handleImageLoad}
                   />
                 )}
               </button>
