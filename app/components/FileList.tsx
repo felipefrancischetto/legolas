@@ -626,11 +626,11 @@ const DynamicFileItem = memo(({
                   {file.duration && file.duration !== 'N/A' && (
                     <span className="font-mono">{file.duration}</span>
                   )}
-                  {file.bpm && typeof file.bpm === 'number' && (
-                    <span>BPM: {file.bpm}</span>
-                  )}
                   {file.key && file.key !== 'N/A' && (
                     <span>Key: {file.key}</span>
+                  )}
+                  {file.bpm && (
+                    <span>BPM: {file.bpm}</span>
                   )}
                   {file.genre && file.genre !== 'N/A' && (
                     <span className="truncate max-w-[200px]" title={file.genre}>Gênero: {file.genre}</span>
