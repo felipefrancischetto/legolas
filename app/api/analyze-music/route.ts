@@ -11,6 +11,11 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 // ──────────────────────────────────────────────────────────────────
+// DEDUPLICATION: Evitar análises simultâneas do mesmo arquivo
+// ──────────────────────────────────────────────────────────────────
+const pendingAnalyses = new Map<string, Promise<AudioAnalysis>>();
+
+// ──────────────────────────────────────────────────────────────────
 // INTERFACES
 // ──────────────────────────────────────────────────────────────────
 
@@ -216,9 +221,13 @@ interface AudioAnalysis {
     element: string;
     start: number;
     end: number;
+    startFormatted?: string;
+    endFormatted?: string;
     sections: string[];
     intensity: number;
     role: string;
+    behavior?: string;
+    function?: string;
   }>;
 
   // Retrocompatibilidade
@@ -357,9 +366,13 @@ interface PythonAnalysisResult {
     element: string;
     start: number;
     end: number;
+    start_formatted?: string;
+    end_formatted?: string;
     sections: string[];
     intensity: number;
     role: string;
+    behavior?: string;
+    function?: string;
   }>;
   // Retrocompatibilidade
   drum_detection?: {
@@ -391,16 +404,48 @@ async function analyzeWithPython(filePath: string): Promise<PythonAnalysisResult
       return null;
     }
 
-    console.log('🐍 [Python Analysis] Iniciando análise completa com librosa v2...');
-    console.log(`   Caminho do arquivo: ${filePath}`);
+    console.log(`🐍 [Python Analysis] Analisando: ${filePath.split(/[/\\]/).pop()}`);
 
-    const { stdout, stderr } = await execAsync(
-      `python "${scriptPath}" "${filePath}"`,
-      {
-        maxBuffer: 1024 * 1024 * 10,
-        timeout: 120000  // 120 segundos para análise completa
+    // Tentar python3.11 primeiro, depois python3, depois python
+    const pythonCommands = ['python3.11', 'python3', 'python'];
+    let stdout = '';
+    let stderr = '';
+    let lastError: Error | null = null;
+
+    for (const pythonCmd of pythonCommands) {
+      try {
+        const result = await execAsync(
+          `${pythonCmd} "${scriptPath}" "${filePath}"`,
+          {
+            maxBuffer: 1024 * 1024 * 10,
+            timeout: 300000,  // 300 segundos (5 min) para arquivos grandes
+            env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }  // Evitar __pycache__ (triggera rebuilds)
+          }
+        );
+        stdout = result.stdout;
+        stderr = result.stderr;
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error as Error;
+        const execError = error as Error & { stderr?: string; stdout?: string; killed?: boolean };
+        const errMsg = execError.stderr || execError.stdout || '';
+        // Se o erro é de dependências faltando, não tentar outro Python
+        if (errMsg.includes('Depend') && errMsg.includes('faltando')) {
+          throw error;
+        }
+        // Se foi killed (timeout/SIGTERM), não tentar outro Python
+        if (execError.killed) {
+          throw error;
+        }
+        // Tentar próximo comando Python
+        continue;
       }
-    );
+    }
+
+    if (lastError) {
+      throw lastError;
+    }
 
     if (stderr && !stderr.includes('UserWarning')) {
       console.warn('⚠️ [Python Analysis] Stderr:', stderr);
@@ -651,8 +696,20 @@ function convertPythonResult(pythonResult: PythonAnalysisResult, filePath: strin
     mixAnalysis,
     djAnalysis,
     executiveSummary,
-    // Arranjo temporal
-    temporalArrangement: pythonResult.temporal_arrangement || [],
+    // Arranjo temporal (v2: com behavior, function, timestamps formatados)
+    temporalArrangement: (pythonResult.temporal_arrangement || []).map(item => ({
+      category: item.category,
+      element: item.element,
+      start: item.start,
+      end: item.end,
+      startFormatted: item.start_formatted,
+      endFormatted: item.end_formatted,
+      sections: item.sections,
+      intensity: item.intensity,
+      role: item.role,
+      behavior: item.behavior,
+      function: item.function,
+    })),
     // Retrocompatibilidade
     detectedElements: {
       synths: pythonResult.detected_synths || [],
@@ -676,7 +733,7 @@ function convertPythonResult(pythonResult: PythonAnalysisResult, filePath: strin
 /**
  * Analisa um arquivo de áudio usando ffprobe e ffmpeg (fallback)
  */
-async function analyzeAudioFile(filePath: string): Promise<AudioAnalysis> {
+async function analyzeAudioFileInternal(filePath: string): Promise<AudioAnalysis> {
   try {
     // PRIORIDADE 1: Tentar análise Python v2 (mais completa e precisa)
     console.log('🎵 [Analyze] Tentando análise Python v2...');
@@ -752,6 +809,26 @@ async function analyzeAudioFile(filePath: string): Promise<AudioAnalysis> {
 }
 
 /**
+ * Wrapper com deduplicação: evita análises simultâneas do mesmo arquivo
+ */
+async function analyzeAudioFile(filePath: string): Promise<AudioAnalysis> {
+  // Se já existe uma análise em andamento para este arquivo, reutilizar
+  const existing = pendingAnalyses.get(filePath);
+  if (existing) {
+    console.log('♻️ [Analyze] Reutilizando análise em andamento para:', filePath);
+    return existing;
+  }
+
+  // Criar nova análise e registrar
+  const analysisPromise = analyzeAudioFileInternal(filePath).finally(() => {
+    pendingAnalyses.delete(filePath);
+  });
+
+  pendingAnalyses.set(filePath, analysisPromise);
+  return analysisPromise;
+}
+
+/**
  * POST /api/analyze-music
  */
 export async function POST(request: NextRequest) {
@@ -782,7 +859,7 @@ export async function POST(request: NextRequest) {
 
     const analysisPromise = analyzeAudioFile(filePath);
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Timeout: análise demorou mais de 120 segundos')), 120000)
+      setTimeout(() => reject(new Error('Timeout: análise demorou mais de 300 segundos')), 300000)
     );
 
     const analysis = await Promise.race([analysisPromise, timeoutPromise]);
@@ -798,10 +875,14 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     console.error('❌ [Analyze Music API] Erro:', error);
+    const errorMsg = error instanceof Error ? error.message : 'Erro ao analisar música';
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Erro ao analisar música'
+        error: errorMsg,
+        hint: errorMsg.includes('Timeout')
+          ? 'O arquivo é muito grande. A análise pode demorar vários minutos para arquivos FLAC grandes.'
+          : undefined
       },
       { status: 500 }
     );
@@ -833,19 +914,19 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log(`🎵 [Analyze Music API] Analisando arquivo: ${filename}`);
+    console.log(`🎵 [Analyze Music API GET] Analisando arquivo: ${filename}`);
 
     const startTime = Date.now();
 
     const analysisPromise = analyzeAudioFile(filePath);
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Timeout: análise demorou mais de 120 segundos')), 120000)
+      setTimeout(() => reject(new Error('Timeout: análise demorou mais de 300 segundos')), 300000)
     );
 
     const analysis = await Promise.race([analysisPromise, timeoutPromise]);
     const duration = Date.now() - startTime;
 
-    console.log(`✅ [Analyze Music API] Análise concluída em ${duration}ms`);
+    console.log(`✅ [Analyze Music API GET] Análise concluída em ${duration}ms`);
 
     return NextResponse.json({
       success: true,
@@ -854,11 +935,15 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('❌ [Analyze Music API] Erro:', error);
+    console.error('❌ [Analyze Music API GET] Erro:', error);
+    const errorMsg = error instanceof Error ? error.message : 'Erro ao analisar música';
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Erro ao analisar música'
+        error: errorMsg,
+        hint: errorMsg.includes('Timeout')
+          ? 'O arquivo é muito grande. A análise pode demorar vários minutos para arquivos FLAC grandes.'
+          : undefined
       },
       { status: 500 }
     );

@@ -8,7 +8,7 @@ import { getThumbnailUrl } from '../utils/thumbnailCache';
 import { getCachedDominantColor } from '../utils/colorExtractor';
 import { useSettings } from '../hooks/useSettings';
 import LoadingSpinner from './LoadingSpinner';
-import { generateAndDownloadMidi, type MidiGenerationContext } from '../utils/midiGenerator';
+import { generateAndDownloadMidi, downloadAllMidisAsZip, type MidiGenerationContext, type MidiElementInfo } from '../utils/midiGenerator';
 import { safeSetItem, safeGetItem } from '../utils/localStorage';
 
 // ──────────────────────────────────────────────────────────────────
@@ -61,9 +61,13 @@ interface ArrangementTimelineItem {
   element: string;
   start: number;
   end: number;
+  startFormatted?: string;
+  endFormatted?: string;
   sections: string[];
   intensity: number;
   role: string;
+  behavior?: string;
+  function?: string;
 }
 
 interface FullAnalysis {
@@ -266,6 +270,7 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
   const [activeTab, setActiveTab] = useState<TabType>('summary');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<FullAnalysis | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [themeColors, setThemeColors] = useState({
     primary: 'rgb(16, 185, 129)',
     primaryLight: 'rgba(16, 185, 129, 0.9)',
@@ -275,9 +280,65 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
   });
 
   const [midiDownloaded, setMidiDownloaded] = useState<string | null>(null);
+  const [allMidiDownloaded, setAllMidiDownloaded] = useState(false);
+  const [allMidiCount, setAllMidiCount] = useState(0);
 
   const currentFile = playerState.currentFile;
   const hasAnalysisRef = useRef<boolean>(false);
+
+  // ── Collect all MIDI-able elements from analysis ──
+  const collectAllMidiElements = useCallback((): MidiElementInfo[] => {
+    if (!analysis) return [];
+    const elements: MidiElementInfo[] = [];
+
+    // Drums
+    if (analysis.drumElements) {
+      const drums = analysis.drumElements;
+      if (drums.kick?.present) elements.push({ element: 'Kick', category: 'Drums', role: drums.kick.role, intensity: drums.kick.energy });
+      if (drums.snareClap?.present) elements.push({ element: 'Snare/Clap', category: 'Drums', role: drums.snareClap.role, intensity: drums.snareClap.energy });
+      if (drums.hihats?.present) elements.push({ element: 'Hi-Hats', category: 'Drums', role: drums.hihats.role, intensity: drums.hihats.energy });
+      if (drums.cymbalsRides?.present) elements.push({ element: 'Cymbals/Rides', category: 'Drums', role: drums.cymbalsRides.role, intensity: drums.cymbalsRides.energy });
+      if (drums.percussion?.present) elements.push({ element: 'Percussion', category: 'Drums', role: drums.percussion.role, intensity: drums.percussion.energy });
+      if (drums.fills?.present) elements.push({ element: 'Fills', category: 'Drums', role: drums.fills.role, intensity: drums.fills.energy });
+    }
+
+    // Bass
+    if (analysis.bassElements) {
+      const bass = analysis.bassElements;
+      if (bass.subBass?.present) elements.push({ element: 'Sub Bass', category: 'Bass', role: 'base', intensity: bass.subBass.energy });
+      if (bass.midBass?.present) elements.push({ element: 'Mid Bass', category: 'Bass', role: 'groove', intensity: bass.midBass.energy });
+      if (bass.bassline?.present) elements.push({ element: 'Bassline', category: 'Bass', role: 'groove', intensity: bass.bassline.energy });
+    }
+
+    // Synths
+    if (analysis.synthLayers) {
+      for (const layer of analysis.synthLayers) {
+        elements.push({ element: layer.name, category: 'Synths', role: layer.function, intensity: layer.energy });
+      }
+    }
+
+    return elements;
+  }, [analysis]);
+
+  // ── Download All MIDIs as ZIP ──
+  const handleDownloadAllMidis = useCallback(() => {
+    if (!analysis) return;
+    const elements = collectAllMidiElements();
+    if (elements.length === 0) return;
+
+    const trackName = currentFile?.title || currentFile?.displayName || 'track';
+    const count = downloadAllMidisAsZip(
+      elements,
+      analysis.bpm || 128,
+      analysis.key || analysis.harmony?.key || undefined,
+      analysis.musicalIdentity?.genre,
+      trackName
+    );
+
+    setAllMidiCount(count);
+    setAllMidiDownloaded(true);
+    setTimeout(() => setAllMidiDownloaded(false), 3000);
+  }, [analysis, currentFile, collectAllMidiElements]);
 
   // ── MIDI Download Handler ──
   const handleStemMidiDownload = useCallback((element: string, category: string, role: string, intensity: number) => {
@@ -328,7 +389,7 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
     extractColor();
   }, [currentFile?.name, isOpen, settings.disableDynamicColors]);
 
-  // Chamar API de análise (com cache em localStorage)
+  // Chamar API de análise (com cache em localStorage e AbortController para evitar duplicatas)
   useEffect(() => {
     if (!isOpen || !currentFile) {
       setAnalysis(null);
@@ -342,35 +403,45 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
     // 1) Tentar recuperar do cache
     const cached = safeGetItem<FullAnalysis>(cacheKey);
     if (cached) {
-      console.log('[MusicStudyModal] Análise carregada do cache:', currentFile.name);
       setAnalysis(cached);
       hasAnalysisRef.current = true;
       setIsAnalyzing(false);
       return;
     }
 
-    // 2) Sem cache → buscar da API
+    // 2) Sem cache → buscar da API com AbortController
+    const abortController = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
     const fetchAnalysis = async () => {
       try {
         setIsAnalyzing(true);
+        setAnalysisError(null);
         hasAnalysisRef.current = false;
 
-        const timeoutId = setTimeout(() => {
-          if (!hasAnalysisRef.current) {
+        timeoutId = setTimeout(() => {
+          if (!hasAnalysisRef.current && !abortController.signal.aborted) {
             console.warn('[MusicStudyModal] Timeout da análise');
+            setAnalysisError('Timeout: a análise demorou demais. Tente novamente.');
             setIsAnalyzing(false);
           }
-        }, 130000);
+        }, 310000);
 
         const response = await fetch('/api/analyze-music', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: currentFile.name })
+          body: JSON.stringify({ filename: currentFile.name }),
+          signal: abortController.signal
         });
 
-        clearTimeout(timeoutId);
+        if (timeoutId) clearTimeout(timeoutId);
 
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => null);
+          const errorMsg = errorData?.error || `HTTP ${response.status}`;
+          const hint = errorData?.hint || '';
+          throw new Error(hint ? `${errorMsg} - ${hint}` : errorMsg);
+        }
 
         const data = await response.json();
 
@@ -398,24 +469,36 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
           };
 
           setAnalysis(analysisData);
+          setAnalysisError(null);
           hasAnalysisRef.current = true;
 
           // 3) Salvar no cache para reutilizar depois
           safeSetItem(cacheKey, analysisData, {
-            maxSize: 512 * 1024, // 512KB limite por análise
+            maxSize: 512 * 1024,
             onError: (err) => console.warn('[MusicStudyModal] Cache não salvo:', err.message)
           });
         } else {
           throw new Error(data.error || 'Análise falhou');
         }
       } catch (error) {
+        // Ignorar erros de abort (cleanup normal do React)
+        if (error instanceof Error && error.name === 'AbortError') return;
         console.error('[MusicStudyModal] Erro:', error);
+        setAnalysisError(error instanceof Error ? error.message : 'Erro desconhecido na análise');
       } finally {
-        setIsAnalyzing(false);
+        if (!abortController.signal.aborted) {
+          setIsAnalyzing(false);
+        }
       }
     };
 
     fetchAnalysis();
+
+    // Cleanup: abortar requisição anterior quando o efeito re-executar
+    return () => {
+      abortController.abort();
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, [isOpen, currentFile?.name]);
 
   if (!isOpen) return null;
@@ -474,11 +557,42 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                 </p>
               )}
             </div>
-            {analysis?.analysisMethod && (
-              <div className="text-xs px-2 py-1 rounded-full border" style={{ borderColor: themeColors.border, color: themeColors.primary }}>
-                {analysis.analysisMethod === 'python' ? 'librosa' : 'ffmpeg'}
-              </div>
-            )}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {analysis?.analysisMethod && (
+                <div className="text-xs px-2 py-1 rounded-full border" style={{ borderColor: themeColors.border, color: themeColors.primary }}>
+                  {analysis.analysisMethod === 'python' ? 'librosa' : 'ffmpeg'}
+                </div>
+              )}
+              {analysis && (
+                <button
+                  onClick={handleDownloadAllMidis}
+                  disabled={allMidiDownloaded}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border hover:brightness-110 disabled:opacity-70"
+                  style={{
+                    backgroundColor: allMidiDownloaded ? 'rgba(34, 197, 94, 0.2)' : themeColors.background,
+                    borderColor: allMidiDownloaded ? 'rgba(34, 197, 94, 0.5)' : themeColors.border,
+                    color: allMidiDownloaded ? '#22c55e' : themeColors.primary,
+                  }}
+                  title="Baixar todos os MIDIs em um arquivo .zip"
+                >
+                  {allMidiDownloaded ? (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                      {allMidiCount} MIDIs baixados
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Baixar todos MIDIs
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Tabs - scrollável */}
@@ -506,7 +620,7 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
               <div className="flex flex-col items-center justify-center py-16">
                 <LoadingSpinner size="lg" themeColors={themeColors} isLoading={true} />
                 <p className="text-gray-400 mt-4 text-sm">Analisando música com librosa...</p>
-                <p className="text-gray-500 mt-1 text-xs">Isso pode levar até 2 minutos</p>
+                <p className="text-gray-500 mt-1 text-xs">Isso pode levar até 5 minutos para arquivos grandes</p>
               </div>
             ) : analysis ? (
               <>
@@ -989,23 +1103,66 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                       style={{ backgroundColor: 'rgba(0, 0, 0, 0.3)', borderColor: themeColors.border }}
                     >
                       {(() => {
-                        const totalDuration = analysis.duration || analysis.structure?.totalDuration || 300;
-                        const interval = totalDuration > 300 ? 60 : totalDuration > 180 ? 30 : 15;
+                        // Compute totalDuration from all available sources including arrangement items
+                        const maxArrangementEnd = analysis.temporalArrangement!.reduce(
+                          (max, item) => Math.max(max, item.end || 0), 0
+                        );
+                        const maxStructureEnd = analysis.structure?.sections?.reduce(
+                          (max, s) => Math.max(max, s.end || 0), 0
+                        ) || 0;
+                        const totalDuration = Math.max(
+                          analysis.duration || 0,
+                          analysis.structure?.totalDuration || 0,
+                          maxArrangementEnd,
+                          maxStructureEnd,
+                          60 // minimum 1 minute
+                        );
+
+                        // Dynamic time markers based on total duration
+                        const interval = totalDuration > 600 ? 60 : totalDuration > 300 ? 30 : totalDuration > 180 ? 30 : 15;
                         const markers: number[] = [];
                         for (let t = 0; t <= totalDuration; t += interval) markers.push(t);
                         if (markers[markers.length - 1] < totalDuration) markers.push(totalDuration);
 
-                        // Group by category
-                        const categories = ['Synths', 'Drums', 'Bass'];
-                        const categoryLabels: Record<string, string> = { Synths: 'Synths', Drums: 'Bateria', Bass: 'Bass' };
+                        // Minimum timeline width scales with duration to keep blocks readable
+                        // ~100px per minute ensures good readability
+                        const durationMinutes = totalDuration / 60;
+                        const timelineMinWidth = `${Math.max(500, Math.round(durationMinutes * 120))}px`;
+
+                        // Discover categories dynamically from data (preserving preferred order)
+                        const preferredOrder = ['Synths', 'Drums', 'Bass', 'FX', 'Pad', 'Vocals'];
+                        const allCategories = new Set(analysis.temporalArrangement!.map(el => el.category));
+                        const categories = [
+                          ...preferredOrder.filter(c => allCategories.has(c)),
+                          ...[...allCategories].filter(c => !preferredOrder.includes(c))
+                        ];
+
+                        const categoryLabels: Record<string, string> = {
+                          Synths: 'Synths', Drums: 'Bateria', Bass: 'Bass',
+                          FX: 'FX (Efeitos)', Pad: 'Pads', Vocals: 'Vocais'
+                        };
                         const categoryColors: Record<string, Record<string, string>> = {
                           Synths: { base: themeColors.primary, groove: themeColors.primaryLight || themeColors.primary, textura: themeColors.primaryDark || themeColors.primary, impacto: '#f59e0b' },
                           Drums: { base: '#ef4444', groove: '#f97316', textura: '#eab308', impacto: '#84cc16' },
-                          Bass: { base: '#3b82f6', groove: '#6366f1', textura: '#8b5cf6', impacto: '#a78bfa' }
+                          Bass: { base: '#3b82f6', groove: '#6366f1', textura: '#8b5cf6', impacto: '#a78bfa' },
+                          FX: { base: '#f59e0b', groove: '#eab308', textura: '#fbbf24', impacto: '#fcd34d' },
+                          Pad: { base: '#8b5cf6', groove: '#a78bfa', textura: '#c4b5fd', impacto: '#7c3aed' },
+                          Vocals: { base: '#ec4899', groove: '#f472b6', textura: '#f9a8d4', impacto: '#db2777' }
                         };
 
                         const getColor = (cat: string, role: string) => {
-                          return categoryColors[cat]?.[role] || categoryColors[cat]?.groove || themeColors.primary;
+                          return categoryColors[cat]?.[role] || categoryColors[cat]?.groove || categoryColors[cat]?.base || themeColors.primary;
+                        };
+
+                        // Group items by category + element name so each stem = one row
+                        const groupByElement = (items: ArrangementTimelineItem[]) => {
+                          const map = new Map<string, ArrangementTimelineItem[]>();
+                          for (const item of items) {
+                            const key = item.element;
+                            if (!map.has(key)) map.set(key, []);
+                            map.get(key)!.push(item);
+                          }
+                          return map;
                         };
 
                         return (
@@ -1013,7 +1170,7 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                             {/* Time Scale */}
                             <div className="mb-3 flex items-center gap-2">
                               <div className="w-36 flex-shrink-0 text-xs text-gray-500 font-medium">Elemento</div>
-                              <div className="flex-1 relative" style={{ minWidth: '500px' }}>
+                              <div className="flex-1 relative" style={{ minWidth: timelineMinWidth }}>
                                 <div className="flex justify-between text-[10px] text-gray-600 mb-1">
                                   {markers.map(time => (
                                     <span key={time}>{Math.floor(time / 60)}:{String(Math.floor(time % 60)).padStart(2, '0')}</span>
@@ -1032,26 +1189,50 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                             </div>
 
                             {/* Structure bar */}
-                            {analysis.structure?.sections && (
+                            {analysis.structure?.sections && analysis.structure.sections.length > 0 && (
                               <div className="mb-4 flex items-center gap-2">
                                 <div className="w-36 flex-shrink-0 text-[10px] text-gray-500 font-medium">Estrutura</div>
-                                <div className="flex-1 relative h-6 rounded overflow-hidden" style={{ minWidth: '500px' }}>
+                                <div className="flex-1 relative h-8 rounded overflow-hidden" style={{ minWidth: timelineMinWidth }}>
                                   {analysis.structure.sections.map((section, idx) => {
                                     const left = (section.start / totalDuration) * 100;
                                     const width = ((section.end - section.start) / totalDuration) * 100;
-                                    const colors = [
-                                      `${themeColors.primary}30`, `${themeColors.primary}45`,
-                                      `${themeColors.primary}60`, `${themeColors.primary}30`,
-                                      `${themeColors.primary}50`, `${themeColors.primary}25`
-                                    ];
+                                    // Cores distintas por tipo de seção para fácil identificação
+                                    const sectionColorMap: Record<string, string> = {
+                                      'Intro': 'rgba(99, 102, 241, 0.55)',       // indigo
+                                      'Build-up': 'rgba(245, 158, 11, 0.6)',     // amber
+                                      'Drop / Peak': 'rgba(239, 68, 68, 0.65)',  // red
+                                      'Breakdown': 'rgba(59, 130, 246, 0.5)',    // blue
+                                      'Desenvolvimento': 'rgba(16, 185, 129, 0.5)', // emerald
+                                      'Segunda Variação': 'rgba(168, 85, 247, 0.55)', // purple
+                                      'Outro': 'rgba(107, 114, 128, 0.5)',       // gray
+                                    };
+                                    // Para Drop 2, Drop 3, etc.
+                                    const sectionName = section.name || '';
+                                    const bgColor = sectionColorMap[sectionName]
+                                      || (sectionName.startsWith('Drop') ? 'rgba(239, 68, 68, 0.6)' : 'rgba(75, 85, 99, 0.5)');
+                                    // Abreviações para seções estreitas
+                                    const shortNames: Record<string, string> = {
+                                      'Build-up': 'Build',
+                                      'Drop / Peak': 'Drop',
+                                      'Breakdown': 'Break',
+                                      'Desenvolvimento': 'Desenv.',
+                                      'Segunda Variação': '2ª Var.',
+                                    };
+                                    const displayName = width > 8 ? sectionName : (shortNames[sectionName] || sectionName);
                                     return (
                                       <div
                                         key={idx}
-                                        className="absolute h-full flex items-center justify-center text-[9px] font-semibold text-white/70 border-r border-gray-700/50"
-                                        style={{ left: `${left}%`, width: `${width}%`, backgroundColor: colors[idx % colors.length] }}
-                                        title={`${section.name}: ${section.startFormatted} → ${section.endFormatted}`}
+                                        className="absolute h-full flex items-center justify-center text-[9px] font-bold text-white/90 border-r border-black/30 overflow-hidden whitespace-nowrap"
+                                        style={{
+                                          left: `${left}%`,
+                                          width: `${width}%`,
+                                          backgroundColor: bgColor,
+                                          textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+                                          minWidth: '2px'
+                                        }}
+                                        title={`${sectionName}: ${section.startFormatted} → ${section.endFormatted}\nEnergia: ${section.energy}%\n${section.function || ''}`}
                                       >
-                                        {width > 8 ? section.name : ''}
+                                        {width > 3 ? displayName : ''}
                                       </div>
                                     );
                                   })}
@@ -1059,47 +1240,61 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                               </div>
                             )}
 
-                            {/* Tracks by category */}
+                            {/* Tracks by category — each unique element = one row */}
                             {categories.map(cat => {
                               const items = analysis.temporalArrangement!.filter(el => el.category === cat);
                               if (items.length === 0) return null;
+
+                              const grouped = groupByElement(items);
+
                               return (
                                 <div key={cat} className="mb-3">
                                   <div className="text-[10px] font-semibold text-gray-500 mb-1.5 uppercase tracking-wider">
                                     {categoryLabels[cat] || cat}
                                   </div>
                                   <div className="space-y-1">
-                                    {items.map((item, idx) => {
-                                      const left = (item.start / totalDuration) * 100;
-                                      const width = Math.max(1, ((item.end - item.start) / totalDuration) * 100);
-                                      const color = getColor(cat, item.role);
-                                      const startMin = Math.floor(item.start / 60);
-                                      const startSec = Math.floor(item.start % 60);
-                                      const endMin = Math.floor(item.end / 60);
-                                      const endSec = Math.floor(item.end % 60);
+                                    {[...grouped.entries()].map(([elementName, segments]) => {
+                                      const firstSeg = segments[0];
+                                      const color = getColor(cat, firstSeg.role);
+
                                       return (
-                                        <div key={idx} className="flex items-center gap-2">
-                                          <div className="w-36 flex-shrink-0 text-[11px] text-gray-400 truncate" title={item.element}>
-                                            {item.element}
+                                        <div key={elementName} className="flex items-center gap-2">
+                                          <div className="w-36 flex-shrink-0 truncate" title={`${elementName}${firstSeg.function ? ` (${firstSeg.function})` : ''}`}>
+                                            <span className="text-[11px] text-gray-400">{elementName}</span>
                                           </div>
-                                          <div className="flex-1 relative h-7" style={{ minWidth: '500px' }}>
-                                            <div
-                                              className="absolute h-full rounded-sm flex items-center px-1.5 text-[9px] font-medium text-white/90 shadow-sm cursor-pointer transition-all hover:brightness-125 hover:shadow-md"
-                                              style={{
-                                                left: `${left}%`,
-                                                width: `${width}%`,
-                                                backgroundColor: midiDownloaded === item.element ? '#22c55e' : color,
-                                                opacity: 0.4 + (item.intensity / 170),
-                                                minWidth: '4px'
-                                              }}
-                                              title={`${midiDownloaded === item.element ? '✓ MIDI baixado!\n' : '🎹 Clique para baixar MIDI\n'}${item.element}\n${startMin}:${String(startSec).padStart(2, '0')} → ${endMin}:${String(endSec).padStart(2, '0')}\nIntensidade: ${item.intensity}% | Papel: ${item.role}\nSeções: ${item.sections.join(', ')}`}
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleStemMidiDownload(item.element, cat, item.role, item.intensity);
-                                              }}
-                                            >
-                                              <span className="truncate">{width > 10 ? item.element : ''}</span>
-                                            </div>
+                                          <div className="flex-1 relative h-7" style={{ minWidth: timelineMinWidth }}>
+                                            {/* Render each time segment as a block on the same row */}
+                                            {segments.map((item, segIdx) => {
+                                              const left = (item.start / totalDuration) * 100;
+                                              const width = Math.max(0.5, ((item.end - item.start) / totalDuration) * 100);
+                                              const startMin = Math.floor(item.start / 60);
+                                              const startSec = Math.floor(item.start % 60);
+                                              const endMin = Math.floor(item.end / 60);
+                                              const endSec = Math.floor(item.end % 60);
+                                              return (
+                                                <div
+                                                  key={segIdx}
+                                                  className="absolute h-full rounded-sm flex items-center px-1.5 text-[9px] font-medium text-white/90 shadow-sm cursor-pointer transition-all hover:brightness-125 hover:shadow-md"
+                                                  style={{
+                                                    left: `${left}%`,
+                                                    width: `${width}%`,
+                                                    backgroundColor: midiDownloaded === item.element ? '#22c55e' : color,
+                                                    opacity: 0.4 + (item.intensity / 170),
+                                                    minWidth: '4px',
+                                                    borderStyle: item.behavior === 'intermitente' ? 'dashed' : item.behavior === 'pontual' ? 'dotted' : 'solid',
+                                                    borderWidth: item.behavior && item.behavior !== 'contínuo' ? '1px' : '0',
+                                                    borderColor: 'rgba(255,255,255,0.3)'
+                                                  }}
+                                                  title={`${midiDownloaded === item.element ? '✓ MIDI baixado!\n' : '🎹 Clique para baixar MIDI\n'}${item.element}\n${item.startFormatted || `${startMin}:${String(startSec).padStart(2, '0')}`} → ${item.endFormatted || `${endMin}:${String(endSec).padStart(2, '0')}`}\nIntensidade: ${item.intensity}% | Papel: ${item.role}${item.behavior ? ` | ${item.behavior}` : ''}${item.function ? `\nFunção: ${item.function}` : ''}\nSeções: ${item.sections.join(', ')}`}
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleStemMidiDownload(item.element, cat, item.role, item.intensity);
+                                                  }}
+                                                >
+                                                  <span className="truncate">{width > 10 && segIdx === 0 ? item.element : ''}</span>
+                                                </div>
+                                              );
+                                            })}
                                           </div>
                                         </div>
                                       );
@@ -1124,14 +1319,22 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                                   <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#3b82f6' }} />
                                   <span>Bass</span>
                                 </div>
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#f59e0b' }} />
+                                  <span>FX</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#8b5cf6' }} />
+                                  <span>Pads</span>
+                                </div>
                                 <span className="text-gray-600">|</span>
-                                <span>base</span>
-                                <span>groove</span>
-                                <span>textura</span>
-                                <span>impacto</span>
+                                <span title="Elemento presente de forma contínua">&#9632; contínuo</span>
+                                <span title="Elemento com presença irregular">&#9634; intermitente</span>
+                                <span title="Aparição curta/pontual">&#9672; pontual</span>
                               </div>
                               <p className="text-[10px] text-gray-600 mt-2">
-                                Clique em qualquer bloco para baixar o padrão MIDI (.mid) compatível com Ableton Live.
+                                Cada linha representa um stem único. Blocos múltiplos na mesma linha indicam aparições em diferentes momentos da música.
+                                Clique em qualquer bloco para baixar o padrão MIDI (.mid).
                               </p>
                             </div>
                           </>
@@ -1144,7 +1347,56 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
             ) : (
               <div className="text-center py-12 text-gray-400">
                 <p>Não foi possível realizar a análise</p>
-                <p className="text-sm text-gray-500 mt-2">Verifique se o Python e librosa estão instalados</p>
+                {analysisError ? (
+                  <p className="text-sm text-gray-500 mt-2">{analysisError}</p>
+                ) : (
+                  <p className="text-sm text-gray-500 mt-2">Verifique se o Python e librosa estão instalados</p>
+                )}
+                <button
+                  onClick={() => {
+                    // Limpar cache e forçar nova análise
+                    if (currentFile) {
+                      const cacheKey = `legolas-analysis:${currentFile.name}`;
+                      try { localStorage.removeItem(cacheKey); } catch {}
+                    }
+                    setAnalysis(null);
+                    setAnalysisError(null);
+                    setIsAnalyzing(true);
+                    // Re-trigger fetch
+                    if (currentFile) {
+                      fetch('/api/analyze-music', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ filename: currentFile.name })
+                      })
+                        .then(r => r.json())
+                        .then(data => {
+                          if (data.success && data.analysis) {
+                            const a = data.analysis;
+                            setAnalysis({
+                              bpm: a.bpm, key: a.key, duration: a.duration,
+                              analysisMethod: a.analysisMethod,
+                              frequencyAnalysis: a.frequencyAnalysis, loudness: a.loudness,
+                              musicalIdentity: a.musicalIdentity, grooveAndRhythm: a.grooveAndRhythm,
+                              drumElements: a.drumElements, bassElements: a.bassElements,
+                              synthLayers: a.synthLayers, harmony: a.harmony,
+                              structure: a.structure, dynamics: a.dynamics,
+                              mixAnalysis: a.mixAnalysis, djAnalysis: a.djAnalysis,
+                              executiveSummary: a.executiveSummary,
+                              temporalArrangement: a.temporalArrangement
+                            });
+                          } else {
+                            setAnalysisError(data.error || 'Análise falhou');
+                          }
+                        })
+                        .catch(err => setAnalysisError(err.message))
+                        .finally(() => setIsAnalyzing(false));
+                    }
+                  }}
+                  className="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-lg transition-colors"
+                >
+                  Tentar novamente
+                </button>
               </div>
             )}
           </div>

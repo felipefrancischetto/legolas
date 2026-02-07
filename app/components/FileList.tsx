@@ -2245,7 +2245,7 @@ export default function FileList() {
 
   if ((files || []).length === 0) {
     return (
-      <div className="flex-1 flex flex-col justify-center items-center text-center text-gray-400 animate-fade-in">
+      <div className="h-full flex flex-col justify-center items-center text-center text-gray-400 animate-fade-in">
         <MusicIcon />
         <p className="mt-2">Nenhum arquivo baixado ainda.</p>
       </div>

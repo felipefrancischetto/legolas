@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
+import { invalidateDownloadsPathCache } from '../utils/common';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,11 +18,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Salvar o caminho EXATAMENTE como foi fornecido pelo usuário
-    // Não fazer nenhuma normalização ou modificação - usar o que o usuário selecionou
     const configPath = join(process.cwd(), 'downloads.config.json');
     await writeFile(configPath, JSON.stringify({ path }, null, 2), 'utf-8');
 
-    console.log(`✅ [set-downloads-path] Caminho salvo exatamente como fornecido: ${path}`);
+    // Invalidar cache para que próximas chamadas leiam o novo valor
+    invalidateDownloadsPathCache();
+
+    console.log(`✅ [set-downloads-path] Caminho salvo: ${path}`);
 
     return NextResponse.json({
       status: 'success',

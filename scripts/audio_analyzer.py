@@ -87,7 +87,7 @@ def format_time(seconds):
 # 1. IDENTIDADE MUSICAL
 # ──────────────────────────────────────────────────────────────────
 
-def analyze_musical_identity(y, sr, bpm, key, freq_bands, rms_curve):
+def analyze_musical_identity(y, sr, bpm, key, freq_bands, rms_curve, y_harm=None, y_perc=None):
     """
     Identifica gênero, subgêneros, energia, mood e contexto de uso.
     """
@@ -98,8 +98,9 @@ def analyze_musical_identity(y, sr, bpm, key, freq_bands, rms_curve):
         spectral_flatness = np.mean(librosa.feature.spectral_flatness(y=y))
         zero_crossing = np.mean(librosa.feature.zero_crossing_rate(y=y))
 
-        # Separar harmônico e percussivo
-        y_harm, y_perc = librosa.effects.hpss(y)
+        # Usar HPSS pré-computado se disponível
+        if y_harm is None or y_perc is None:
+            y_harm, y_perc = librosa.effects.hpss(y)
         perc_ratio = np.mean(y_perc ** 2) / (np.mean(y ** 2) + 1e-10)
         harm_ratio = np.mean(y_harm ** 2) / (np.mean(y ** 2) + 1e-10)
 
@@ -298,13 +299,14 @@ def detect_bpm(y, sr):
         return None
 
 
-def analyze_groove_and_rhythm(y, sr, bpm):
+def analyze_groove_and_rhythm(y, sr, bpm, y_perc=None):
     """
     Analisa groove, swing e complexidade rítmica.
     """
     try:
-        # Separar percussivo
-        _, y_perc = librosa.effects.hpss(y)
+        # Usar HPSS pré-computado se disponível
+        if y_perc is None:
+            _, y_perc = librosa.effects.hpss(y)
 
         # Beat tracking
         tempo, beat_frames = librosa.beat.beat_track(y=y_perc, sr=sr)
@@ -385,12 +387,13 @@ def analyze_groove_and_rhythm(y, sr, bpm):
 # 3. ELEMENTOS DE BATERIA (detalhado)
 # ──────────────────────────────────────────────────────────────────
 
-def detect_drums_detailed(y, sr):
+def detect_drums_detailed(y, sr, y_harm=None, y_perc=None):
     """
     Detecta elementos de bateria com detalhes de papel, padrão e tipo.
     """
     try:
-        y_harm, y_perc = librosa.effects.hpss(y)
+        if y_harm is None or y_perc is None:
+            y_harm, y_perc = librosa.effects.hpss(y)
         D_perc = np.abs(librosa.stft(y_perc))
         freqs = librosa.fft_frequencies(sr=sr)
         avg_energy = np.mean(D_perc) + 1e-10
@@ -535,7 +538,7 @@ def detect_drums_detailed(y, sr):
 # 4. ELEMENTOS DE BASS
 # ──────────────────────────────────────────────────────────────────
 
-def analyze_bass_detailed(y, sr):
+def analyze_bass_detailed(y, sr, y_perc=None):
     """Analisa elementos de bass com detalhes."""
     try:
         D = np.abs(librosa.stft(y))
@@ -601,7 +604,8 @@ def analyze_bass_detailed(y, sr):
         }
 
         # ── RELAÇÃO KICK x BASS ──
-        _, y_perc = librosa.effects.hpss(y)
+        if y_perc is None:
+            _, y_perc = librosa.effects.hpss(y)
         D_perc = np.abs(librosa.stft(y_perc))
         kick_mask = (freqs >= 20) & (freqs <= 120)
         kick_energy = np.mean(D_perc[kick_mask, :]) if np.any(kick_mask) else 0
@@ -641,10 +645,11 @@ def analyze_bass_detailed(y, sr):
 # 5. SYNTHS E CAMADAS SONORAS
 # ──────────────────────────────────────────────────────────────────
 
-def analyze_synths_and_layers(y, sr):
+def analyze_synths_and_layers(y, sr, y_harm=None):
     """Analisa synths e camadas sonoras em detalhe."""
     try:
-        y_harm, y_perc = librosa.effects.hpss(y)
+        if y_harm is None:
+            y_harm, _ = librosa.effects.hpss(y)
         D = np.abs(librosa.stft(y_harm))
         freqs = librosa.fft_frequencies(sr=sr)
         avg_energy = np.mean(D) + 1e-10
@@ -1795,6 +1800,673 @@ def analyze_loudness(y, sr):
 
 
 # ──────────────────────────────────────────────────────────────────
+# 13. DETECÇÃO ADAPTATIVA DE ESTRUTURA (v2)
+# Substitui segmentação fixa por detecção baseada em features reais
+# ──────────────────────────────────────────────────────────────────
+
+def classify_sections_contextual(section_data, duration, rms_smooth, frame_duration):
+    """
+    Classifica todas as seções de uma vez, usando contexto entre seções vizinhas.
+    Funciona corretamente para tracks de qualquer duração (3 a 15+ minutos),
+    incluindo múltiplos ciclos de build-up → drop → breakdown.
+
+    section_data: lista de dicts com {start, end, energy}
+    Retorna: lista de (name, description) para cada seção
+    """
+    total = len(section_data)
+    if total == 0:
+        return []
+
+    results = [None] * total
+    energies = [s['energy'] for s in section_data]
+
+    # Caso especial: apenas 1 seção
+    if total == 1:
+        return [("Desenvolvimento", "Seção única abrangendo toda a música")]
+
+    # Caso especial: apenas 2 seções
+    if total == 2:
+        return [
+            ("Intro", "Primeira metade da música com apresentação dos elementos"),
+            ("Outro", "Segunda metade com resolução dos elementos")
+        ]
+
+    # Calcular tendência interna de cada seção
+    trends = []
+    for s in section_data:
+        start_frame = int(s['start'] / frame_duration)
+        end_frame = min(int(s['end'] / frame_duration), len(rms_smooth))
+        sec_rms = rms_smooth[start_frame:end_frame]
+        is_rising = False
+        is_falling = False
+        if len(sec_rms) > 10:
+            n = len(sec_rms)
+            first_third = np.mean(sec_rms[:n // 3]) if n > 3 else np.mean(sec_rms)
+            last_third = np.mean(sec_rms[2 * n // 3:]) if n > 3 else np.mean(sec_rms)
+            is_rising = last_third > first_third * 1.15
+            is_falling = last_third < first_third * 0.80
+        trends.append({'rising': is_rising, 'falling': is_falling})
+
+    # Energia mediana global para referência relativa
+    median_energy = float(np.median(energies))
+
+    # Primeiro segmento = Intro
+    if trends[0]['rising']:
+        results[0] = ("Intro", "Apresentação gradual dos elementos com construção de atmosfera")
+    else:
+        results[0] = ("Intro", "Apresentação dos elementos iniciais, estabelecendo groove e atmosfera")
+
+    # Último segmento = Outro
+    results[total - 1] = ("Outro", "Encerramento gradual com remoção de elementos para mixagem DJ-friendly")
+
+    # Classificar seções intermediárias usando contexto de vizinhos
+    drop_count = 0
+
+    for i in range(1, total - 1):
+        energy = energies[i]
+        prev_energy = energies[i - 1]
+        next_energy = energies[i + 1] if i + 1 < total else energy
+        is_rising = trends[i]['rising']
+        is_falling = trends[i]['falling']
+        position_ratio = section_data[i]['start'] / (duration + 1e-10)
+
+        # Contraste com vizinhos
+        energy_jump_from_prev = energy - prev_energy  # positivo = subiu
+        energy_drop_to_next = energy - next_energy  # positivo = vai cair
+
+        # É pico local? (maior que ambos vizinhos)
+        is_local_peak = energy > prev_energy + 5 and energy > next_energy + 5
+        # É vale local? (menor que ambos vizinhos)
+        is_local_valley = energy < prev_energy - 5 and energy < next_energy - 5
+
+        # ── Alta energia (> 60%) ──
+        if energy > 60:
+            if is_rising and energy_jump_from_prev > 10:
+                results[i] = ("Build-up", "Construção de tensão com adição progressiva de camadas e energia")
+            elif is_local_peak or (not is_rising and energy > median_energy * 1.2):
+                drop_count += 1
+                if drop_count == 1:
+                    results[i] = ("Drop / Peak", "Momento de máxima energia e impacto com todos os elementos ativos")
+                else:
+                    results[i] = (f"Drop {drop_count}", f"Retorno ao pico de energia (variação {drop_count}) com novos elementos")
+            elif is_rising:
+                results[i] = ("Build-up", "Construção progressiva de energia e tensão")
+            else:
+                drop_count += 1
+                if drop_count == 1:
+                    results[i] = ("Drop / Peak", "Momento de máxima energia e impacto")
+                else:
+                    results[i] = (f"Drop {drop_count}", f"Pico de energia (variação {drop_count})")
+
+        # ── Energia baixa (< 30%) ──
+        elif energy < 30:
+            if position_ratio < 0.15 and i <= 1:
+                results[i] = ("Intro", "Atmosfera inicial com elementos sutis")
+            elif position_ratio > 0.85 and i >= total - 2:
+                results[i] = ("Outro", "Dissolução gradual dos elementos")
+            elif is_rising:
+                results[i] = ("Build-up", "Crescimento gradual a partir de momento de respiro")
+            else:
+                results[i] = ("Breakdown", "Alívio de tensão, momento de respiração e reconexão emocional")
+
+        # ── Energia média (30-60%) ──
+        else:
+            if is_rising and (next_energy > energy + 10):
+                results[i] = ("Build-up", "Crescimento progressivo de energia e tensão")
+            elif is_falling and (prev_energy > energy + 10):
+                results[i] = ("Breakdown", "Redução de elementos criando espaço e expectativa")
+            elif is_local_valley:
+                results[i] = ("Breakdown", "Transição com redução momentânea de energia")
+            elif is_local_peak:
+                results[i] = ("Desenvolvimento", "Progressão energética com evolução dos elementos")
+            elif is_rising:
+                results[i] = ("Build-up", "Crescimento gradual de energia preparando o próximo pico")
+            elif is_falling:
+                results[i] = ("Breakdown", "Redução gradual de energia")
+            elif position_ratio < 0.35:
+                results[i] = ("Desenvolvimento", "Evolução contínua do groove com adição de camadas")
+            elif energy > median_energy:
+                results[i] = ("Desenvolvimento", "Manutenção do groove com variações sutis")
+            else:
+                results[i] = ("Breakdown", "Momento de menor intensidade entre seções")
+
+    # Fallback para seções não classificadas
+    for i in range(total):
+        if results[i] is None:
+            results[i] = ("Desenvolvimento", "Progressão musical")
+
+    return results
+
+
+def determine_element_function(role, sections, intensity):
+    """
+    Determina a função de um elemento no arranjo baseado no seu papel,
+    nas seções que ocupa e na intensidade.
+    Possíveis funções: groove, tensão, transição, energia, textura.
+    """
+    sec_lower = [s.lower() for s in sections]
+
+    if role == 'impacto':
+        return 'transição'
+
+    has_drop = any('drop' in s or 'peak' in s for s in sec_lower)
+    has_breakdown = any('breakdown' in s for s in sec_lower)
+    has_buildup = any('build' in s for s in sec_lower)
+    has_intro = any('intro' in s for s in sec_lower)
+    has_outro = any('outro' in s for s in sec_lower)
+
+    if role == 'base':
+        if has_drop:
+            return 'energia'
+        if has_buildup:
+            return 'tensão'
+        return 'groove'
+
+    if role == 'groove':
+        if has_drop and intensity > 60:
+            return 'energia'
+        if has_buildup:
+            return 'tensão'
+        return 'groove'
+
+    if role == 'textura':
+        if has_breakdown or has_intro or has_outro:
+            return 'textura'
+        if has_buildup:
+            return 'tensão'
+        return 'textura'
+
+    return 'groove'
+
+
+def _fill_section_elements(structure, temporal_arrangement):
+    """
+    Preenche os campos elements_entering e elements_exiting nas seções
+    da estrutura, baseado nos dados reais do arranjo temporal.
+    """
+    sections = structure.get("sections", [])
+    if not sections or not temporal_arrangement:
+        return
+
+    for sec in sections:
+        sec_start = sec.get("start", 0)
+        sec_end = sec.get("end", 0)
+        entering = []
+        exiting = []
+
+        for item in temporal_arrangement:
+            el_start = item.get("start", 0)
+            el_end = item.get("end", 0)
+            el_name = item.get("element", "")
+
+            # Elemento começa dentro desta seção
+            if sec_start <= el_start < sec_end:
+                entering.append(el_name)
+            # Elemento termina dentro desta seção (mas começou antes)
+            if sec_start < el_end <= sec_end and el_start < sec_start:
+                exiting.append(el_name)
+
+        sec["elements_entering"] = entering[:8]
+        sec["elements_exiting"] = exiting[:8]
+
+
+def detect_structure_adaptive(y, sr, duration, bpm=None):
+    """
+    Detecta a estrutura da música de forma adaptativa usando features reais.
+
+    Não assume modelo fixo (intro → build → drop → breakdown → outro).
+    Funciona fielmente para tracks de 3 a 15+ minutos.
+
+    Usa:
+    - Curva de energia (RMS) fortemente suavizada
+    - Delta de MFCCs para detectar mudanças timbrais significativas
+    - Peak-picking na novelty combinada para encontrar limites reais
+    - Classificação por energia e tendência interna de cada seção
+    """
+    try:
+        hop_length = 512
+        frame_dur = hop_length / sr
+
+        # 1. Curva de energia
+        rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
+        rms_norm = rms / (np.max(rms) + 1e-10)
+
+        # 2. Suavização forte para análise estrutural (~6 segundos)
+        smooth_sec = 6
+        sm_frames = max(1, int(smooth_sec / frame_dur))
+        kernel = np.ones(sm_frames) / sm_frames
+        rms_smooth = np.convolve(rms_norm, kernel, mode='same')
+
+        # 3. MFCCs para detectar mudanças timbrais (mais robusto que spectral centroid)
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=hop_length)
+        mfcc_delta = np.sqrt(np.sum(np.diff(mfcc, axis=1) ** 2, axis=0))
+        mfcc_delta = np.append(mfcc_delta, 0)
+        mfcc_smooth = np.convolve(mfcc_delta, kernel, mode='same')
+        mfcc_smooth = mfcc_smooth / (np.max(mfcc_smooth) + 1e-10)
+
+        # 4. Novelty combinada: mudança de energia + mudança timbral
+        energy_diff = np.abs(np.diff(np.append(rms_smooth, rms_smooth[-1])))
+        energy_diff = energy_diff / (np.max(energy_diff) + 1e-10)
+        novelty = energy_diff * 0.5 + mfcc_smooth * 0.5
+
+        # 5. Peak-picking com distância mínima adaptativa entre seções
+        if bpm and bpm > 0:
+            min_sec = max(12, (60.0 / bpm) * 4 * 4)  # Pelo menos 4 compassos (16 beats)
+        else:
+            min_sec = 16
+        min_frames = max(1, int(min_sec / frame_dur))
+
+        # Threshold adaptativo — mais sensível para tracks longos (detectar mais transições)
+        if duration > 480:       # > 8 min
+            threshold = np.percentile(novelty, 70)
+        elif duration > 300:     # > 5 min
+            threshold = np.percentile(novelty, 75)
+        else:
+            threshold = np.percentile(novelty, 80)
+
+        peaks = []
+        i = min_frames
+        while i < len(novelty) - min_frames:
+            if novelty[i] > threshold:
+                # Encontrar máximo local numa janela de ±2 segundos
+                win_start = max(0, i - int(2 / frame_dur))
+                win_end = min(len(novelty), i + int(2 / frame_dur))
+                local_max = win_start + int(np.argmax(novelty[win_start:win_end]))
+
+                if not peaks or (local_max - peaks[-1]) >= min_frames:
+                    peaks.append(local_max)
+                    i = local_max + min_frames
+                    continue
+            i += 1
+
+        # 6. Construir limites de seção
+        boundaries = [0.0] + [p * frame_dur for p in peaks] + [duration]
+
+        # Fundir seções muito curtas (< 10s)
+        merged = [boundaries[0]]
+        for t in boundaries[1:]:
+            if t - merged[-1] >= 10:
+                merged.append(t)
+        if merged[-1] < duration - 3:
+            merged.append(duration)
+        else:
+            merged[-1] = duration
+
+        # Garantir número mínimo de seções proporcional à duração
+        # 3 seções para < 3 min, ~5 para 5-8 min, ~7 para 8-12 min, etc.
+        min_sections = max(3, int(duration / 120) + 2)
+        while len(merged) < min_sections + 1:
+            longest_idx = 0
+            longest_dur = 0
+            for j in range(len(merged) - 1):
+                d = merged[j + 1] - merged[j]
+                if d > longest_dur:
+                    longest_dur = d
+                    longest_idx = j
+            mid = (merged[longest_idx] + merged[longest_idx + 1]) / 2
+            merged.insert(longest_idx + 1, mid)
+
+        # 7. Calcular energia de cada seção e classificar com contexto
+        total = len(merged) - 1
+        section_data = []
+        for i in range(total):
+            start_t = merged[i]
+            end_t = merged[i + 1]
+            sf = int(start_t / frame_dur)
+            ef = min(int(end_t / frame_dur), len(rms_smooth))
+            sec_energy = clamp(int(np.mean(rms_smooth[sf:ef]) * 100)) if sf < ef else 50
+            section_data.append({
+                "start": round(start_t, 1),
+                "end": round(end_t, 1),
+                "energy": sec_energy
+            })
+
+        # Classificação contextual: considera vizinhos para nomear corretamente
+        classifications = classify_sections_contextual(
+            section_data, duration, rms_smooth, frame_dur
+        )
+
+        sections = []
+        for i in range(total):
+            name, func = classifications[i]
+            sections.append({
+                "name": name,
+                "start": section_data[i]["start"],
+                "end": section_data[i]["end"],
+                "start_formatted": format_time(section_data[i]["start"]),
+                "end_formatted": format_time(section_data[i]["end"]),
+                "function": func,
+                "energy": section_data[i]["energy"],
+                "elements_entering": [],
+                "elements_exiting": []
+            })
+
+        # 8. Curva de energia detalhada (mais pontos para tracks longos)
+        num_points = min(100, max(20, int(duration / 2)))
+        energy_curve = []
+        for i in range(num_points):
+            t = (i / num_points) * duration
+            fi = int(t / frame_dur)
+            if fi < len(rms_smooth):
+                energy_curve.append({
+                    "time": round(t, 1),
+                    "energy": clamp(int(rms_smooth[fi] * 100))
+                })
+
+        sys.stderr.write(f"[Structure] Detectadas {len(sections)} seções para {duration:.0f}s:\n")
+        for s in sections:
+            sys.stderr.write(f"  [{s['start_formatted']} → {s['end_formatted']}] {s['name']} (energia: {s['energy']}%)\n")
+
+        return {
+            "sections": sections,
+            "energy_curve": energy_curve,
+            "total_duration": round(duration, 1)
+        }
+    except Exception as e:
+        sys.stderr.write(f"[Warning] detect_structure_adaptive falhou ({e}), usando fallback\n")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return analyze_structure_detailed(y, sr, duration)
+
+
+# ──────────────────────────────────────────────────────────────────
+# 14. ARRANJO TEMPORAL BASEADO EM DETECÇÃO REAL (v2)
+# Substitui posicionamento por regras com análise espectral por janelas
+# ──────────────────────────────────────────────────────────────────
+
+def generate_temporal_arrangement_v2(y, sr, duration, bpm, y_harm, y_perc,
+                                      drums, bass, synth_layers, structure):
+    """
+    Gera arranjo temporal baseado em detecção real de elementos no áudio.
+
+    Usa análise espectral por janelas temporais para encontrar quando cada
+    elemento está realmente presente, em vez de assumir posições fixas.
+
+    Melhorias sobre a versão v1:
+    - Detecta presença real de cada elemento via análise espectral por janelas
+    - Suporta múltiplas aparições (fragmentação) do mesmo elemento
+    - Detecta comportamento: contínuo, intermitente, pontual
+    - Mapeia função no arranjo: groove, tensão, transição, energia, textura
+    - Timestamps precisos com formato mm:ss
+    - Adapta-se fielmente a qualquer duração (8, 10, 12+ minutos)
+    """
+    try:
+        hop_length = 512
+        frame_rate = sr / hop_length
+
+        # Janela temporal: ~2 compassos (boa estabilidade sem perder resolução)
+        if bpm and bpm > 0:
+            bar_sec = (60.0 / bpm) * 4
+            window_sec = max(2.0, bar_sec * 2)
+        else:
+            window_sec = 4.0
+
+        # Espectrogramas
+        D_perc = np.abs(librosa.stft(y_perc, hop_length=hop_length))
+        D_harm = np.abs(librosa.stft(y_harm, hop_length=hop_length))
+        D_full = np.abs(librosa.stft(y, hop_length=hop_length))
+        freqs = librosa.fft_frequencies(sr=sr)
+
+        n_frames = D_full.shape[1]
+        frames_per_window = max(1, int(window_sec * frame_rate))
+        n_windows = max(1, n_frames // frames_per_window)
+
+        sections = structure.get("sections", [])
+
+        # ── Construir lista de elementos a rastrear ──
+        # Usa os resultados das análises anteriores para saber QUAIS elementos
+        # existem e seus tipos, depois usa análise por janelas para saber QUANDO
+        track_elements = []
+
+        # BATERIA (componente percussivo)
+        if drums.get("kick", {}).get("present", False):
+            kick_type = drums["kick"].get("type", "seco")
+            track_elements.append({
+                'name': f'Kick ({kick_type})',
+                'category': 'Drums',
+                'source': 'perc',
+                'bands': [(20, 120)],
+                'threshold_pct': 45,
+                'role': 'base'
+            })
+
+        if drums.get("snare_clap", {}).get("present", False):
+            sc_type = drums["snare_clap"].get("type", "snare")
+            track_elements.append({
+                'name': f'Snare / Clap ({sc_type})',
+                'category': 'Drums',
+                'source': 'perc',
+                'bands': [(200, 500), (2000, 5000)],
+                'threshold_pct': 42,
+                'role': 'groove'
+            })
+
+        if drums.get("hihats", {}).get("present", False):
+            hh_type = drums["hihats"].get("type", "fechados")
+            track_elements.append({
+                'name': f'Hi-Hat ({hh_type})',
+                'category': 'Drums',
+                'source': 'perc',
+                'bands': [(5000, 12000)],
+                'threshold_pct': 35,
+                'role': 'groove'
+            })
+
+        if drums.get("cymbals_rides", {}).get("present", False):
+            cym_type = drums["cymbals_rides"].get("type", "ride")
+            track_elements.append({
+                'name': f'Cymbal ({cym_type})',
+                'category': 'Drums',
+                'source': 'perc',
+                'bands': [(8000, 18000)],
+                'threshold_pct': 50,
+                'role': 'textura'
+            })
+
+        if drums.get("percussion", {}).get("present", False):
+            perc_type = drums["percussion"].get("type", "eletrônicas")
+            track_elements.append({
+                'name': f'Percussão ({perc_type})',
+                'category': 'Drums',
+                'source': 'perc',
+                'bands': [(300, 3000)],
+                'threshold_pct': 42,
+                'role': 'textura'
+            })
+
+        # BASS (componente harmônico + sinal completo)
+        if bass.get("sub_bass", {}).get("present", False):
+            sb_type = bass["sub_bass"].get("type", "sustentado")
+            track_elements.append({
+                'name': f'Sub Bass ({sb_type})',
+                'category': 'Bass',
+                'source': 'harm',
+                'bands': [(20, 65)],
+                'threshold_pct': 40,
+                'role': 'base'
+            })
+
+        if bass.get("mid_bass", {}).get("present", False):
+            mb_texture = bass["mid_bass"].get("texture", "limpo")
+            track_elements.append({
+                'name': f'Mid Bass ({mb_texture})',
+                'category': 'Bass',
+                'source': 'full',
+                'bands': [(60, 250)],
+                'threshold_pct': 45,
+                'role': 'groove'
+            })
+
+        if bass.get("bassline", {}).get("present", False):
+            bl_type = bass["bassline"].get("type", "repetitiva")
+            track_elements.append({
+                'name': f'Bassline ({bl_type})',
+                'category': 'Bass',
+                'source': 'full',
+                'bands': [(30, 200)],
+                'threshold_pct': 43,
+                'role': 'groove'
+            })
+
+        # SYNTHS (baseado nas camadas detectadas pela análise de synths)
+        for layer in synth_layers:
+            cat = layer.get("category", "leads")
+            name = layer.get("name", "Synth")
+
+            if cat == "pads" or "pad" in name.lower() or "drone" in name.lower():
+                track_elements.append({
+                    'name': name, 'category': 'Synths', 'source': 'harm',
+                    'bands': [(150, 800)], 'threshold_pct': 35, 'role': 'textura'
+                })
+            elif cat == "leads" or "lead" in name.lower():
+                track_elements.append({
+                    'name': name, 'category': 'Synths', 'source': 'harm',
+                    'bands': [(800, 6000)], 'threshold_pct': 48, 'role': 'groove'
+                })
+            elif cat == "arps" or "arp" in name.lower() or "seq" in name.lower():
+                track_elements.append({
+                    'name': name, 'category': 'Synths', 'source': 'harm',
+                    'bands': [(1500, 8000)], 'threshold_pct': 50, 'role': 'groove'
+                })
+            elif cat == "fx" or "fx" in name.lower() or "riser" in name.lower():
+                track_elements.append({
+                    'name': name, 'category': 'Synths', 'source': 'full',
+                    'bands': [(3000, 20000)], 'threshold_pct': 85, 'role': 'impacto'
+                })
+            elif cat == "textures" or "textura" in name.lower():
+                track_elements.append({
+                    'name': name, 'category': 'Synths', 'source': 'full',
+                    'bands': [(200, 8000)], 'threshold_pct': 30, 'role': 'textura'
+                })
+            else:
+                track_elements.append({
+                    'name': name, 'category': 'Synths', 'source': 'harm',
+                    'bands': [(500, 5000)], 'threshold_pct': 45, 'role': 'groove'
+                })
+
+        # Fallback: se nenhum elemento detectado, usar lista mínima
+        if not track_elements:
+            track_elements = [
+                {'name': 'Kick', 'category': 'Drums', 'source': 'perc',
+                 'bands': [(20, 120)], 'threshold_pct': 45, 'role': 'base'},
+                {'name': 'Hi-Hat', 'category': 'Drums', 'source': 'perc',
+                 'bands': [(5000, 12000)], 'threshold_pct': 40, 'role': 'groove'},
+                {'name': 'Bass', 'category': 'Bass', 'source': 'full',
+                 'bands': [(20, 250)], 'threshold_pct': 40, 'role': 'base'},
+                {'name': 'Synth', 'category': 'Synths', 'source': 'harm',
+                 'bands': [(300, 6000)], 'threshold_pct': 40, 'role': 'groove'},
+            ]
+
+        # ── Análise por janelas para cada elemento ──
+        source_map = {'perc': D_perc, 'harm': D_harm, 'full': D_full}
+        timeline = []
+
+        for elem in track_elements:
+            source = source_map[elem['source']]
+
+            # Computar energia por janela
+            window_energies = np.zeros(n_windows)
+            for w in range(n_windows):
+                sf = w * frames_per_window
+                ef = min((w + 1) * frames_per_window, n_frames)
+                e = 0.0
+                for (low, high) in elem['bands']:
+                    mask = (freqs >= low) & (freqs <= high)
+                    if np.any(mask):
+                        e += float(np.mean(source[mask, sf:ef]))
+                window_energies[w] = e
+
+            # Threshold adaptativo por percentil
+            if np.max(window_energies) < 1e-10:
+                continue
+
+            threshold = np.percentile(window_energies, elem['threshold_pct'])
+            presence = window_energies > threshold
+            max_e = np.max(window_energies) + 1e-10
+
+            # Encontrar blocos contíguos de presença
+            blocks = []
+            in_block = False
+            bstart = 0
+            for w in range(len(presence)):
+                if presence[w] and not in_block:
+                    in_block = True
+                    bstart = w
+                elif not presence[w] and in_block:
+                    in_block = False
+                    blocks.append((bstart, w))
+            if in_block:
+                blocks.append((bstart, len(presence)))
+
+            # Fundir gaps de 1 janela (evita fragmentação excessiva)
+            merged_blocks = []
+            for b in blocks:
+                if merged_blocks and (b[0] - merged_blocks[-1][1]) <= 1:
+                    merged_blocks[-1] = (merged_blocks[-1][0], b[1])
+                else:
+                    merged_blocks.append(b)
+
+            # Filtrar blocos muito curtos (exceto FX/impacto que pode ser pontual)
+            min_win = 1 if elem['role'] == 'impacto' else 2
+            merged_blocks = [b for b in merged_blocks if (b[1] - b[0]) >= min_win]
+
+            # Converter blocos em items do timeline
+            for bs, be in merged_blocks:
+                start_sec = round(bs * window_sec, 1)
+                end_sec = round(min(be * window_sec, duration), 1)
+                block_e = window_energies[bs:be]
+                intensity = clamp(int((np.mean(block_e) / max_e) * 100))
+
+                # Comportamento do elemento neste bloco
+                dur_sec = end_sec - start_sec
+                evar = float(np.std(block_e) / (np.mean(block_e) + 1e-10))
+
+                if dur_sec < window_sec * 3:
+                    behavior = "pontual"
+                elif evar > 0.5:
+                    behavior = "intermitente"
+                else:
+                    behavior = "contínuo"
+
+                # Seções que este bloco abrange
+                covered = []
+                for sec in sections:
+                    if start_sec < sec.get("end", duration) and end_sec > sec.get("start", 0):
+                        sname = sec.get("name", "")
+                        if sname and sname not in covered:
+                            covered.append(sname)
+
+                # Função no arranjo
+                func = determine_element_function(elem['role'], covered, intensity)
+
+                timeline.append({
+                    "category": elem['category'],
+                    "element": elem['name'],
+                    "start": start_sec,
+                    "end": end_sec,
+                    "start_formatted": format_time(start_sec),
+                    "end_formatted": format_time(end_sec),
+                    "sections": covered,
+                    "intensity": intensity,
+                    "role": elem['role'],
+                    "behavior": behavior,
+                    "function": func
+                })
+
+        # Ordenar: Synths primeiro, depois Drums, depois Bass;
+        # dentro de cada categoria, agrupar por nome e ordenar por início
+        cat_order = {'Synths': 0, 'Drums': 1, 'Bass': 2}
+        timeline.sort(key=lambda x: (
+            cat_order.get(x['category'], 99), x['element'], x['start']
+        ))
+
+        return timeline
+    except Exception as e:
+        sys.stderr.write(f"[Warning] generate_temporal_arrangement_v2 falhou ({e}), usando fallback\n")
+        return generate_temporal_arrangement(duration, structure, drums, bass, synth_layers)
+
+
+# ──────────────────────────────────────────────────────────────────
 # FUNÇÃO PRINCIPAL
 # ──────────────────────────────────────────────────────────────────
 
@@ -1804,20 +2476,47 @@ def analyze_audio(file_path):
         if not os.path.exists(file_path):
             return {"success": False, "error": f"Arquivo não encontrado: {file_path}"}
 
-        # Carregar áudio (mono, sr padrão) - máximo 5 minutos
-        y, sr = librosa.load(file_path, sr=22050, mono=True, duration=300)
+        import time as _time
+        t0 = _time.time()
+
+        # Obter duração real do arquivo ANTES de carregar (sem limite)
+        real_duration = librosa.get_duration(path=file_path)
+        sys.stderr.write(f"[Info] Duração real do arquivo: {real_duration:.1f}s ({real_duration/60:.1f} min)\n")
+
+        # Carregar áudio (mono) - ajustar sr baseado no tamanho/duração
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        # Para arquivos muito longos (>10min) ou grandes (>50MB), usar sr menor para economia de memória
+        if real_duration > 600 or file_size_mb > 50:
+            target_sr = 11025
+        elif real_duration > 300 or file_size_mb > 25:
+            target_sr = 16000
+        else:
+            target_sr = 22050
+        y, sr = librosa.load(file_path, sr=target_sr, mono=True)
         duration = librosa.get_duration(y=y, sr=sr)
 
-        # Tentar carregar em estéreo para análise de mix
+        t_load = _time.time()
+        sys.stderr.write(f"[Perf] Carregamento mono: {t_load - t0:.1f}s (sr={sr}, size={file_size_mb:.0f}MB)\n")
+
+        # Pré-computar HPSS uma única vez (operação cara)
+        y_harm, y_perc = librosa.effects.hpss(y)
+
+        t_hpss = _time.time()
+        sys.stderr.write(f"[Perf] HPSS: {t_hpss - t_load:.1f}s\n")
+
+        # Tentar carregar em estéreo para análise de mix (usar sr menor)
         try:
-            y_stereo, sr_stereo = librosa.load(file_path, sr=22050, mono=False, duration=300)
+            y_stereo, sr_stereo = librosa.load(file_path, sr=target_sr, mono=False)
         except Exception:
             y_stereo = None
+
+        t_stereo = _time.time()
+        sys.stderr.write(f"[Perf] Carregamento stereo: {t_stereo - t_hpss:.1f}s\n")
 
         # RMS curve para uso em múltiplas análises
         rms_curve = librosa.feature.rms(y=y)[0]
 
-        # ── Executar todas as análises ──
+        # ── Executar todas as análises (passando y_harm, y_perc pré-computados) ──
 
         # 1. Dados básicos
         bpm = detect_bpm(y, sr)
@@ -1825,14 +2524,18 @@ def analyze_audio(file_path):
         frequency_analysis = analyze_frequency_bands(y, sr)
         loudness = analyze_loudness(y, sr)
 
-        # 2. Análises principais
-        identity = analyze_musical_identity(y, sr, bpm, key, frequency_analysis, rms_curve)
-        groove = analyze_groove_and_rhythm(y, sr, bpm)
-        drums = detect_drums_detailed(y, sr)
-        bass = analyze_bass_detailed(y, sr)
-        synth_layers = analyze_synths_and_layers(y, sr)
+        t_basic = _time.time()
+        sys.stderr.write(f"[Perf] Dados básicos: {t_basic - t_stereo:.1f}s\n")
+
+        # 2. Análises principais (reutilizando HPSS)
+        identity = analyze_musical_identity(y, sr, bpm, key, frequency_analysis, rms_curve,
+                                            y_harm=y_harm, y_perc=y_perc)
+        groove = analyze_groove_and_rhythm(y, sr, bpm, y_perc=y_perc)
+        drums = detect_drums_detailed(y, sr, y_harm=y_harm, y_perc=y_perc)
+        bass = analyze_bass_detailed(y, sr, y_perc=y_perc)
+        synth_layers = analyze_synths_and_layers(y, sr, y_harm=y_harm)
         harmony = analyze_harmony(y, sr, key)
-        structure = analyze_structure_detailed(y, sr, duration)
+        structure = detect_structure_adaptive(y, sr, duration, bpm=bpm)
         dynamics = analyze_dynamics(y, sr, duration)
         mix_analysis = analyze_mix(y, y_stereo, sr)
         dj_analysis = analyze_for_dj(
@@ -1845,10 +2548,20 @@ def analyze_audio(file_path):
             identity, groove, harmony, dynamics, dj_analysis, synth_layers
         )
 
-        # 3. Arranjo temporal
-        temporal_arrangement = generate_temporal_arrangement(
-            duration, structure, drums, bass, synth_layers
+        t_analysis = _time.time()
+        sys.stderr.write(f"[Perf] Análises principais: {t_analysis - t_basic:.1f}s\n")
+
+        # 3. Arranjo temporal (v2: detecção real por janelas)
+        temporal_arrangement = generate_temporal_arrangement_v2(
+            y, sr, duration, bpm, y_harm, y_perc,
+            drums, bass, synth_layers, structure
         )
+
+        # 4. Post-processar: preencher elements_entering/exiting nas seções
+        _fill_section_elements(structure, temporal_arrangement)
+
+        t_total = _time.time()
+        sys.stderr.write(f"[Perf] TOTAL: {t_total - t0:.1f}s\n")
 
         # Montar resultado completo
         result = {
@@ -1856,7 +2569,7 @@ def analyze_audio(file_path):
             "filename": os.path.basename(file_path),
             "duration": round(float(duration), 2),
             "sample_rate": int(sr),
-            "analysis_method": "python_librosa_v2",
+            "analysis_method": "python_librosa_v3",
 
             # Dados básicos
             "bpm": float(bpm) if bpm is not None else None,

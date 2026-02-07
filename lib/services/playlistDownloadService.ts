@@ -9,7 +9,7 @@ import { metadataAggregator } from './metadataService';
 import { logger } from '../utils/logger';
 import { scrapeTracklist } from '../tracklistScraper';
 import { sendProgressEvent } from '../utils/progressEventService';
-import { getDownloadsPath } from '@/app/api/utils/common';
+import { getDownloadsPath, ensureValidCookies, hasValidCookiesFile } from '@/app/api/utils/common';
 
 const execAsync = promisify(exec);
 
@@ -162,6 +162,30 @@ export class PlaylistDownloadService {
       logger.error(`❌ [Playlist] Erro ao criar/verificar pasta de downloads: ${downloadsFolder}`);
       logger.error(`   Erro: ${errorMsg}`);
       throw new Error(`Não foi possível criar ou acessar a pasta de downloads: ${downloadsFolder}. Erro: ${errorMsg}`);
+    }
+
+    // Verificar e garantir cookies válidos antes de iniciar downloads
+    logger.info(`🍪 [Playlist] Verificando cookies do YouTube...`);
+    const hasValidCookies = await hasValidCookiesFile();
+    if (!hasValidCookies) {
+      logger.warn(`⚠️ [Playlist] Cookies não encontrados - tentando extrair automaticamente do browser...`);
+      if (downloadId) {
+        sendProgressEvent(downloadId, {
+          type: 'info',
+          step: 'Extraindo cookies do browser...',
+          progress: 5,
+          substep: 'Isso pode levar alguns segundos'
+        });
+      }
+      const cookiesExtracted = await ensureValidCookies();
+      if (cookiesExtracted) {
+        logger.info(`✅ [Playlist] Cookies extraídos com sucesso!`);
+      } else {
+        logger.warn(`⚠️ [Playlist] Não foi possível extrair cookies automaticamente. Downloads podem falhar.`);
+        logger.warn(`💡 [Playlist] Dica: Execute manualmente: yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/watch?v=dQw4w9WgXcQ"`);
+      }
+    } else {
+      logger.info(`✅ [Playlist] Cookies válidos encontrados`);
     }
 
     const result: PlaylistDownloadResult = {
@@ -551,7 +575,7 @@ export class PlaylistDownloadService {
         logger.info(`   📝 Título sanitizado: "${baseTitle}"`);
         logger.info(`   📝 Nome do arquivo temporário: ${tempFilename}.${format}`);
         logger.info(`   📝 Caminho de saída: ${outputPath}`);
-        logger.info(`   📝 Caminho de saída (raw): ${downloadsFolder}\\${tempFilename}.%(ext)s`);
+        logger.info(`   📝 Caminho de saída (raw): ${downloadsFolder}/${tempFilename}.%(ext)s`);
 
         logger.info(`   ⬇️ Downloading track ${trackNumber}...`);
         
@@ -560,14 +584,22 @@ export class PlaylistDownloadService {
         let downloadSuccess = false;
         let hadYouTubeIssues = false;
         
-        // Lista de estratégias de download SEM cookies (foco no que funciona)
+        // Verificar se há cookies disponíveis
+        const { hasValidCookiesFile } = await import('@/app/api/utils/common');
+        const hasValidCookies = await hasValidCookiesFile();
+        const cookiesFlag = hasValidCookies ? '--cookies "cookies.txt" ' : '';
+        
+        logger.info(`   🍪 Cookies disponíveis: ${hasValidCookies ? 'Sim' : 'Não'}`);
+        
+        // Lista de estratégias de download (com cookies se disponíveis)
         // Escapar o outputPath para uso seguro em comandos (escapar aspas duplas)
         const escapedOutputPath = outputPath.replace(/"/g, '\\"');
         const downloadStrategies = [
-          // Estratégia 1: Cliente Android (menos detectável)
+          // Estratégia 1: Cliente Android (menos detectável) - COM cookies se disponíveis
           {
             name: 'Android Client',
             command: `yt-dlp -x --audio-format ${format} --audio-quality ${quality} ` +
+              `${cookiesFlag}` +
               `--embed-thumbnail --convert-thumbnails jpg ` +
               `--add-metadata ` +
               `--extractor-args "youtube:player_client=android" ` +
@@ -576,10 +608,11 @@ export class PlaylistDownloadService {
               `-o "${escapedOutputPath}" ` +
               `--no-part --force-overwrites "${trackUrl}"`
           },
-          // Estratégia 2: Cliente iOS
+          // Estratégia 2: Cliente iOS - COM cookies se disponíveis
           {
             name: 'iOS Client',
             command: `yt-dlp -x --audio-format ${format} --audio-quality ${quality} ` +
+              `${cookiesFlag}` +
               `--embed-thumbnail --convert-thumbnails jpg ` +
               `--add-metadata ` +
               `--extractor-args "youtube:player_client=ios" ` +
@@ -588,10 +621,11 @@ export class PlaylistDownloadService {
               `-o "${escapedOutputPath}" ` +
               `--no-part --force-overwrites "${trackUrl}"`
           },
-          // Estratégia 3: Cliente Web (padrão)
+          // Estratégia 3: Cliente Web (padrão) - COM cookies se disponíveis
           {
             name: 'Web Client',
             command: `yt-dlp -x --audio-format ${format} --audio-quality ${quality} ` +
+              `${cookiesFlag}` +
               `--embed-thumbnail --convert-thumbnails jpg ` +
               `--add-metadata ` +
               `--extractor-args "youtube:player_client=web" ` +
@@ -667,13 +701,18 @@ export class PlaylistDownloadService {
               logger.error(`   ❌ Todas as estratégias falharam para track ${trackNumber}`);
               logger.error(`   ❌ Último erro: ${errorMessage.substring(0, 200)}`);
               
-              // Verificar se é erro de bot detection
+              // Verificar se é erro relacionado a cookies ou bloqueio
               if (errorMessage.includes('Sign in to confirm') || 
                   errorMessage.includes('not a bot') || 
                   errorMessage.includes('bot') ||
-                  errorMessage.includes('blocked')) {
+                  errorMessage.includes('blocked') ||
+                  errorMessage.includes('403') ||
+                  errorMessage.includes('Forbidden') ||
+                  errorMessage.includes('PO Token')) {
                 hadYouTubeIssues = true;
-                logger.warn(`   ⚠️ YouTube bot detection pode estar bloqueando downloads`);
+                logger.warn(`   ⚠️ YouTube está bloqueando downloads - provavelmente falta de cookies válidos`);
+                logger.warn(`   💡 Solução: Execute: yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/watch?v=dQw4w9WgXcQ"`);
+                logger.warn(`   💡 Ou faça login no YouTube no seu browser e tente novamente`);
               }
               
               throw error; // Re-throw o erro

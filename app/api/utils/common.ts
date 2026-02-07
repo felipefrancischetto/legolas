@@ -9,6 +9,11 @@ const execAsync = promisify(exec);
  * Utilitários comuns para as APIs
  */
 
+// ── Cache para getDownloadsPath (evita leitura de disco e logging excessivo) ──
+let _cachedDownloadsPath: string | null = null;
+let _cachedDownloadsPathTime = 0;
+const DOWNLOADS_PATH_CACHE_TTL = 30000; // 30 segundos
+
 /**
  * Tenta resolver um caminho relativo de pasta procurando em locais comuns
  */
@@ -88,107 +93,93 @@ async function resolveFolderPath(folderName: string): Promise<string | null> {
 }
 
 export async function getDownloadsPath(): Promise<string> {
+  // Retornar do cache se ainda for válido (evita leitura de disco e logging repetitivo)
+  if (_cachedDownloadsPath && (Date.now() - _cachedDownloadsPathTime) < DOWNLOADS_PATH_CACHE_TTL) {
+    return _cachedDownloadsPath;
+  }
+
   try {
     const configPath = join(process.cwd(), 'downloads.config.json');
-    // Sempre ler do disco sem cache - garantir que pegamos o valor mais recente
     const config = await readFile(configPath, 'utf-8');
     const { path } = JSON.parse(config);
     
-    console.log(`📂 [getDownloadsPath] Caminho lido do arquivo de configuração: ${path}`);
-    
     // Normalizar apenas barras duplicadas e espaços nas extremidades
-    // Manter o caminho exatamente como foi salvo pelo usuário
     const normalizedPath = path.trim().replace(/[\\/]+/g, process.platform === 'win32' ? '\\' : '/');
-    
-    console.log(`📂 [getDownloadsPath] Caminho normalizado: ${normalizedPath}`);
-    
-    // Verificar se o caminho é absoluto usando a função do Node.js (mais confiável)
     const isAbsolutePath = isAbsolute(normalizedPath);
-    
-    console.log(`📂 [getDownloadsPath] É caminho absoluto: ${isAbsolutePath}`);
     
     let finalPath: string;
     
     if (isAbsolutePath) {
-      // Caminho absoluto - NUNCA fazer join com process.cwd()
       finalPath = normalizedPath;
       
-      // Verificar se existe
       try {
         await access(finalPath, constants.F_OK);
-        // Verificar se é realmente uma pasta (tentando listar)
         await readdir(finalPath);
-        console.log(`✅ [getDownloadsPath] Caminho absoluto encontrado e válido: ${finalPath}`);
+        _cachedDownloadsPath = finalPath;
+        _cachedDownloadsPathTime = Date.now();
         return finalPath;
       } catch (accessError) {
-        console.warn(`⚠️ [getDownloadsPath] Caminho absoluto não encontrado ou inacessível: ${finalPath}`);
-        console.warn(`   Erro: ${accessError instanceof Error ? accessError.message : String(accessError)}`);
+        console.warn(`⚠️ [getDownloadsPath] Caminho não encontrado: ${finalPath} - tentando criar...`);
         
-        // Tentar criar o caminho completo
         try {
           await mkdir(finalPath, { recursive: true });
-          // Verificar se foi criado com sucesso
           await access(finalPath, constants.F_OK);
           await readdir(finalPath);
-          console.log(`✅ [getDownloadsPath] Caminho absoluto criado com sucesso: ${finalPath}`);
+          console.log(`✅ [getDownloadsPath] Caminho criado: ${finalPath}`);
+          _cachedDownloadsPath = finalPath;
+          _cachedDownloadsPathTime = Date.now();
           return finalPath;
         } catch (mkdirError) {
-          const errorMsg = mkdirError instanceof Error ? mkdirError.message : String(mkdirError);
-          console.error(`❌ [getDownloadsPath] Erro ao criar caminho absoluto: ${finalPath}`);
-          console.error(`   Erro: ${errorMsg}`);
-          
-          // Se não conseguir criar, retornar o caminho original mesmo que não exista
-          // O código que chama esta função tentará criar novamente
-          // NÃO tentar resolver usando resolveFolderPath pois pode retornar caminho incorreto
-          console.warn(`⚠️ [getDownloadsPath] Retornando caminho absoluto original (será criado pelo chamador): ${finalPath}`);
+          console.error(`❌ [getDownloadsPath] Erro ao criar caminho: ${finalPath}`, mkdirError instanceof Error ? mkdirError.message : mkdirError);
           return finalPath;
         }
       }
     } else {
-      // Caminho relativo - tentar resolver primeiro
       const resolved = await resolveFolderPath(normalizedPath);
       if (resolved) {
-        console.log(`✅ [getDownloadsPath] Caminho relativo resolvido: ${normalizedPath} -> ${resolved}`);
+        _cachedDownloadsPath = resolved;
+        _cachedDownloadsPathTime = Date.now();
         return resolved;
       }
       
-      // Se não conseguir resolver, fazer join com process.cwd() como fallback
-      // Mas garantir que não estamos fazendo join de um caminho absoluto
       finalPath = join(process.cwd(), normalizedPath);
-      console.warn(`⚠️ [getDownloadsPath] Não foi possível resolver caminho relativo: ${normalizedPath}, usando fallback: ${finalPath}`);
+      console.warn(`⚠️ [getDownloadsPath] Caminho relativo não resolvido: ${normalizedPath}, fallback: ${finalPath}`);
       
-      // Tentar criar o caminho de fallback
       try {
         await mkdir(finalPath, { recursive: true });
         await access(finalPath, constants.F_OK);
         await readdir(finalPath);
-        console.log(`✅ [getDownloadsPath] Caminho de fallback criado: ${finalPath}`);
+        _cachedDownloadsPath = finalPath;
+        _cachedDownloadsPathTime = Date.now();
         return finalPath;
       } catch (mkdirError) {
-        console.error(`❌ [getDownloadsPath] Erro ao criar caminho de fallback: ${finalPath}`);
-        console.error(`   Erro: ${mkdirError instanceof Error ? mkdirError.message : String(mkdirError)}`);
-        // Retornar mesmo assim, o código que chama tentará criar
+        console.error(`❌ [getDownloadsPath] Erro ao criar fallback: ${finalPath}`, mkdirError instanceof Error ? mkdirError.message : mkdirError);
         return finalPath;
       }
     }
   } catch (error) {
-    // Se não houver configuração, use o caminho padrão
     const defaultPath = join(process.cwd(), 'downloads');
-    console.warn(`⚠️ [getDownloadsPath] Erro ao ler configuração, usando padrão:`, error);
-    console.warn(`   Caminho padrão: ${defaultPath}`);
+    console.warn(`⚠️ [getDownloadsPath] Erro ao ler configuração, usando padrão: ${defaultPath}`);
     
-    // Tentar criar o caminho padrão
     try {
       await mkdir(defaultPath, { recursive: true });
       await access(defaultPath, constants.F_OK);
-      console.log(`✅ [getDownloadsPath] Caminho padrão criado: ${defaultPath}`);
     } catch (mkdirError) {
-      console.error(`❌ [getDownloadsPath] Erro ao criar caminho padrão: ${defaultPath}`);
-      console.error(`   Erro: ${mkdirError instanceof Error ? mkdirError.message : String(mkdirError)}`);
+      console.error(`❌ [getDownloadsPath] Erro ao criar padrão: ${defaultPath}`, mkdirError instanceof Error ? mkdirError.message : mkdirError);
     }
     
+    _cachedDownloadsPath = defaultPath;
+    _cachedDownloadsPathTime = Date.now();
     return defaultPath;
   }
+}
+
+/**
+ * Invalida o cache de getDownloadsPath (chamar quando o caminho for alterado)
+ */
+export function invalidateDownloadsPathCache(): void {
+  _cachedDownloadsPath = null;
+  _cachedDownloadsPathTime = 0;
 }
 
 export async function fileExists(path: string): Promise<boolean> {
@@ -377,15 +368,22 @@ export async function extractCookiesFromBrowser(): Promise<boolean> {
       // Usar yt-dlp para extrair cookies do browser
       // Não vamos falhar se o comando der erro, vamos verificar se o arquivo foi criado
       try {
+        // Usar caminho absoluto para garantir que funciona em Linux
+        const absoluteTempPath = join(process.cwd(), `cookies_${browser}_temp.txt`);
         await execAsync(
-          `yt-dlp --cookies-from-browser ${browser} --cookies "${tempCookiesPath}" --skip-download "${testUrl}"`,
+          `yt-dlp --cookies-from-browser ${browser} --cookies "${absoluteTempPath}" --skip-download "${testUrl}"`,
           { 
             maxBuffer: 1024 * 1024 * 10,
-            timeout: 30000
+            timeout: 30000,
+            cwd: process.cwd() // Garantir que estamos no diretório correto
           }
         );
       } catch (execError) {
         // Ignorar erros de execução, vamos verificar se o arquivo foi criado mesmo assim
+        const errorMsg = execError instanceof Error ? execError.message : String(execError);
+        if (!errorMsg.includes('could not find') && !errorMsg.includes('not found')) {
+          console.log(`   ⚠️ Erro ao executar yt-dlp para ${browser}: ${errorMsg.substring(0, 150)}`);
+        }
       }
       
       // Verificar se o arquivo foi criado e tem conteúdo

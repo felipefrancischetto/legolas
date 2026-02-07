@@ -62,6 +62,24 @@ const nextConfig = {
       '@': __dirname,
     };
     
+    // Ignorar pastas que não são código-fonte para evitar rebuilds desnecessários
+    if (dev) {
+      config.watchOptions = {
+        ...config.watchOptions,
+        ignored: [
+          '**/node_modules/**',
+          '**/downloads/**',
+          '**/__pycache__/**',
+          '**/scripts/__pycache__/**',
+          '**/*.flac',
+          '**/*.mp3',
+          '**/*.wav',
+          '**/cookies.txt',
+          '**/cookies_*_temp.txt',
+        ],
+      };
+    }
+    
     // Otimizações para desenvolvimento - reduzir tamanho de mensagens durante Fast Refresh
     if (dev && !isServer) {
       // Limitar o tamanho máximo de chunks durante desenvolvimento
