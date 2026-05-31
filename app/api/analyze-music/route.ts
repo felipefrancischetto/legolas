@@ -205,6 +205,12 @@ interface MidiExtractedEvent {
   velocity: number;
 }
 
+/** Fidelidade da transcrição por stem */
+interface StemMeta {
+  confidence: number; // 0–1
+  method: 'detected' | 'estimated';
+}
+
 interface MidiExtractionResult {
   source: string;
   coverage?: string;
@@ -213,6 +219,7 @@ interface MidiExtractionResult {
   duration_sec?: number;
   segment_start_sec?: number;
   stems: Record<string, MidiExtractedEvent[]>;
+  stem_meta?: Record<string, StemMeta>;
 }
 
 // ── Análise completa ──
@@ -437,6 +444,7 @@ interface PythonAnalysisResult {
       midi: number;
       velocity: number;
     }>>;
+    stem_meta?: Record<string, { confidence: number; method: 'detected' | 'estimated' }>;
   };
   error?: string;
 }
@@ -754,6 +762,7 @@ function convertPythonResult(pythonResult: PythonAnalysisResult, filePath: strin
           duration_sec: pythonResult.midi_extraction.duration_sec,
           segment_start_sec: pythonResult.midi_extraction.segment_start_sec ?? 0,
           stems: pythonResult.midi_extraction.stems ?? {},
+          stem_meta: pythonResult.midi_extraction.stem_meta ?? {},
         }
       : undefined,
     // Arranjo temporal (v2: com behavior, function, timestamps formatados)

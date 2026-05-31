@@ -1,4 +1,4 @@
-import type { MidiClip, MidiElementInfo, MidiGenerationContext, MidiNote } from './midiGenerator';
+import type { MidiClip, MidiElementInfo, MidiGenerationContext, MidiMarker, MidiNote } from './midiGenerator';
 import { generateMidiClip } from './midiGenerator';
 
 export interface MidiExtractedEvent {
@@ -6,6 +6,12 @@ export interface MidiExtractedEvent {
   duration_beats: number;
   midi: number;
   velocity: number;
+}
+
+/** Fidelidade da transcrição de um stem */
+export interface StemFidelity {
+  confidence: number; // 0–1
+  method: 'detected' | 'estimated';
 }
 
 export interface MidiExtractionData {
@@ -16,6 +22,7 @@ export interface MidiExtractionData {
   duration_sec?: number;
   segment_start_sec?: number;
   stems?: Record<string, MidiExtractedEvent[]>;
+  stem_meta?: Record<string, StemFidelity>;
 }
 
 /** Subconjunto da análise usado para gerar MIDIs */
@@ -55,6 +62,10 @@ export interface MusicAnalysisForMidi {
     start?: number;
     end?: number;
   }>;
+  /** Seções do arranjo (intro/build/drop...) com tempos em segundos */
+  structure?: {
+    sections?: Array<{ name: string; start: number; end: number }>;
+  };
   midiExtraction?: MidiExtractionData;
 }
 
@@ -141,14 +152,15 @@ export function elementToMidiStemKey(element: string, category: string): string 
   return null;
 }
 
-function resolveStemEvents(
+/** Resolve a chave do stem extraído que corresponde a um elemento da UI. */
+function resolveStemKey(
   stems: Record<string, MidiExtractedEvent[]>,
   element: string,
   category: string
-): MidiExtractedEvent[] | undefined {
+): string | undefined {
   const primaryKey = elementToMidiStemKey(element, category);
   if (primaryKey && stems[primaryKey]?.length) {
-    return stems[primaryKey];
+    return primaryKey;
   }
 
   const el = element.toLowerCase();
@@ -160,10 +172,44 @@ function resolveStemEvents(
       (key === 'synth_arp' && (el.includes('arp') || el.includes('sequ'))) ||
       (key === 'synth_fx' && el.includes('fx')) ||
       (key === 'synth_texture' && el.includes('textur'));
-    if (match && stems[key]?.length) return stems[key];
+    if (match && stems[key]?.length) return key;
   }
 
   return undefined;
+}
+
+function resolveStemEvents(
+  stems: Record<string, MidiExtractedEvent[]>,
+  element: string,
+  category: string
+): MidiExtractedEvent[] | undefined {
+  const key = resolveStemKey(stems, element, category);
+  return key ? stems[key] : undefined;
+}
+
+/**
+ * Fidelidade da transcrição de um elemento: confiança (0–1) + método.
+ * Quando o stem veio de áudio, usa stem_meta do Python; senão, marca como
+ * template (gerado por padrão de gênero, não transcrito).
+ */
+export function getStemFidelityForElement(
+  analysis: MusicAnalysisForMidi,
+  element: string,
+  category: string
+): { confidence: number; method: 'detected' | 'estimated' | 'template' } {
+  const extraction = analysis.midiExtraction;
+  const stems = extraction?.stems;
+  if (stems) {
+    const key = resolveStemKey(stems, element, category);
+    if (key) {
+      const meta = extraction?.stem_meta?.[key];
+      if (meta) return { confidence: meta.confidence, method: meta.method };
+      // Stem extraído sem metadados (cache antigo): assume detecção média
+      return { confidence: 0.5, method: 'detected' };
+    }
+  }
+  // Sem stem extraído → será gerado por template de gênero
+  return { confidence: 0, method: 'template' };
 }
 
 function stemEventsToMidiNotes(events: MidiExtractedEvent[]): MidiNote[] {
@@ -213,11 +259,20 @@ function getDrumPatternForStem(
   return analysis.drumElements[field]?.pattern;
 }
 
+/** Override opcional passado ao montar o contexto de geração */
+export interface MidiBuildOverrides {
+  bpm?: number;
+  key?: string;
+  genre?: string;
+  /** 'swing' (default) preserva microtiming; 'grid' alinha tudo à grade */
+  quantize?: 'swing' | 'grid';
+}
+
 /** Monta contexto de geração com dados reais da análise + eventos extraídos do áudio */
 export function buildMidiGenerationContext(
   analysis: MusicAnalysisForMidi,
   el: MidiElementInfo,
-  overrides?: { bpm?: number; key?: string; genre?: string }
+  overrides?: MidiBuildOverrides
 ): MidiGenerationContext {
   const bpm = overrides?.bpm ?? analysis.bpm ?? 128;
   const key = overrides?.key ?? analysis.key ?? analysis.harmony?.key ?? undefined;
@@ -238,6 +293,7 @@ export function buildMidiGenerationContext(
     swing: analysis.groove?.swing,
     drumPattern: getDrumPatternForStem(analysis, stemKey),
     extractedNotes: getExtractedNotesForElement(analysis, el.element, el.category),
+    quantize: overrides?.quantize ?? 'swing',
   };
 }
 
@@ -265,6 +321,7 @@ export function mapAnalysisFromApi(a: Record<string, unknown>): MusicAnalysisFor
     bassElements: a.bassElements as MusicAnalysisForMidi['bassElements'],
     synthLayers: a.synthLayers as MusicAnalysisForMidi['synthLayers'],
     temporalArrangement: a.temporalArrangement as MusicAnalysisForMidi['temporalArrangement'],
+    structure: a.structure as MusicAnalysisForMidi['structure'],
     midiExtraction: rawExtraction
       ? {
           source: rawExtraction.source,
@@ -274,6 +331,7 @@ export function mapAnalysisFromApi(a: Record<string, unknown>): MusicAnalysisFor
           duration_sec: rawExtraction.duration_sec,
           segment_start_sec: rawExtraction.segment_start_sec ?? 0,
           stems: rawExtraction.stems ?? {},
+          stem_meta: rawExtraction.stem_meta ?? {},
         }
       : undefined,
   };
@@ -412,15 +470,64 @@ export function alignClipToArrangement(
   };
 }
 
+/** Marcadores de seção (intro/build/drop...) em beats, para embutir no SMF. */
+export function getSectionMarkers(
+  analysis: MusicAnalysisForMidi,
+  bpm: number
+): MidiMarker[] {
+  const sections = analysis.structure?.sections;
+  if (!sections?.length) return [];
+  return sections
+    .filter((s) => Number.isFinite(s.start))
+    .map((s) => ({
+      beat: Math.max(0, secondsToBeats(s.start, bpm)),
+      label: s.name,
+    }))
+    .sort((a, b) => a.beat - b.beat);
+}
+
+/** Fatia um clip de faixa inteira em um clip por seção do arranjo. */
+export function sliceClipBySections(
+  clip: MidiClip,
+  markers: MidiMarker[]
+): Array<{ section: string; clip: MidiClip }> {
+  if (markers.length === 0) return [{ section: 'Full', clip }];
+  const beatsPerBar = parseInt(clip.time_signature.split('/')[0], 10) || 4;
+  const bounds = markers.map((m) => m.beat);
+  const maxBeat = Math.max(clip.bars * beatsPerBar, ...clip.notes.map((n) => n.start_beat + n.duration_beats));
+
+  const result: Array<{ section: string; clip: MidiClip }> = [];
+  for (let i = 0; i < markers.length; i++) {
+    const start = bounds[i];
+    const end = i + 1 < bounds.length ? bounds[i + 1] : maxBeat;
+    if (end <= start) continue;
+    const notes = clip.notes
+      .filter((n) => n.start_beat >= start - 1e-6 && n.start_beat < end - 1e-6)
+      .map((n) => ({ ...n, start_beat: n.start_beat - start }));
+    if (notes.length === 0) continue;
+    result.push({
+      section: markers[i].label,
+      clip: {
+        ...clip,
+        notes,
+        bars: Math.max(1, Math.ceil((end - start) / beatsPerBar)),
+        markers: undefined,
+      },
+    });
+  }
+  return result.length ? result : [{ section: 'Full', clip }];
+}
+
 /** Gera um MidiClip por stem, alinhado ao arranjo quando possível. */
 export function buildAllMidiClipsForExport(
   analysis: MusicAnalysisForMidi,
-  overrides?: { bpm?: number; key?: string; genre?: string }
+  overrides?: MidiBuildOverrides
 ): MidiClip[] {
   const bpm = overrides?.bpm ?? analysis.bpm ?? 128;
   const key = overrides?.key ?? analysis.key ?? analysis.harmony?.key ?? undefined;
   const genre = overrides?.genre ?? analysis.musicalIdentity?.genre;
   const elements = collectMidiElementsFromAnalysis(analysis);
+  const markers = getSectionMarkers(analysis, bpm);
   const clips: MidiClip[] = [];
 
   for (const el of elements) {
@@ -428,6 +535,7 @@ export function buildAllMidiClipsForExport(
       bpm,
       key: key ?? undefined,
       genre,
+      quantize: overrides?.quantize,
     });
     const fromAudio = !!getExtractedNotesForElement(analysis, el.element, el.category);
     const clip = alignClipToArrangement(
@@ -437,6 +545,8 @@ export function buildAllMidiClipsForExport(
       el.category,
       fromAudio
     );
+    // Marcadores de seção só fazem sentido na cobertura de faixa inteira (eventos do áudio)
+    if (fromAudio && markers.length) clip.markers = markers;
     clips.push(clip);
   }
 

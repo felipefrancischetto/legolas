@@ -2519,6 +2519,24 @@ def _bandpass_istft(y, sr, fmin, fmax):
     return y_out / peak
 
 
+def _stem_confidence_from_coverage(events, max_beats, grid_div=4, ceiling=0.9):
+    """Estima confiança (0–1) de um stem a partir da cobertura e densidade dos eventos.
+
+    Não inventa precisão: um stem que cobre a faixa inteira com densidade
+    coerente recebe confiança maior; eventos esparsos/concentrados, menor.
+    `ceiling` limita o teto por método (chroma é estimativa, não nota real).
+    """
+    if not events or not max_beats or max_beats <= 0:
+        return 0.0
+    beats = [e.get("beat", 0.0) for e in events]
+    span = (max(beats) - min(beats)) if len(beats) > 1 else 0.0
+    coverage = min(1.0, span / float(max_beats))
+    expected = max_beats * (grid_div / 4.0)
+    density = min(1.0, len(events) / (expected + 1e-9))
+    raw = 0.4 + 0.4 * coverage + 0.2 * density
+    return round(float(np.clip(raw, 0.0, ceiling)), 2)
+
+
 def _quantize_onsets_to_events(onset_times, onset_strengths, bpm, max_beats=32, grid_div=4):
     """
     Converte onsets (segundos) em eventos MIDI quantizados em compassos de 4/4.
@@ -2632,10 +2650,14 @@ def _hz_to_midi_note(hz):
 
 
 def _extract_bass_pitch_events(y_harm, sr, bpm, key, max_beats=32):
-    """Extrai contorno de pitch do baixo com pyin."""
+    """Extrai contorno de pitch do baixo com pyin.
+
+    Retorna (events, confidence). A confiança vem da própria pyin
+    (voiced_prob média nos frames usados) — não inventada.
+    """
     try:
         y_bass = _bandpass_istft(y_harm, sr, 35, 280)
-        f0, voiced_flag, _ = librosa.pyin(
+        f0, voiced_flag, voiced_prob = librosa.pyin(
             y_bass, fmin=librosa.note_to_hz('C1'), fmax=librosa.note_to_hz('C3'),
             sr=sr, fill_na=np.nan
         )
@@ -2645,10 +2667,11 @@ def _extract_bass_pitch_events(y_harm, sr, bpm, key, max_beats=32):
         step = beat_dur / 4  # semicolcheias
 
         events = []
+        used_probs = []
         last_beat = -1.0
         last_midi = None
 
-        for t, hz, voiced in zip(times, f0, voiced_flag):
+        for i, (t, hz, voiced) in enumerate(zip(times, f0, voiced_flag)):
             if not voiced or np.isnan(hz):
                 continue
             beat = t / beat_dur
@@ -2665,6 +2688,8 @@ def _extract_bass_pitch_events(y_harm, sr, bpm, key, max_beats=32):
                 continue
             last_beat = q_beat
             last_midi = midi
+            if voiced_prob is not None and i < len(voiced_prob) and not np.isnan(voiced_prob[i]):
+                used_probs.append(float(voiced_prob[i]))
             events.append({
                 "beat": round(float(q_beat), 4),
                 "duration_beats": 0.5,
@@ -2672,10 +2697,11 @@ def _extract_bass_pitch_events(y_harm, sr, bpm, key, max_beats=32):
                 "velocity": 88,
             })
 
-        return events
+        confidence = round(float(np.mean(used_probs)), 2) if used_probs else 0.0
+        return events, confidence
     except Exception as e:
         sys.stderr.write(f"[Warning] extração de baixo falhou: {e}\n")
-        return []
+        return [], 0.0
 
 
 # Escalas para snap de pitch classes do cromagrama
@@ -2994,6 +3020,8 @@ def extract_midi_from_audio(y, sr, duration, bpm, key, drums, bass, synth_layers
         }
 
         stems = {}
+        # Metadados de fidelidade por stem: {"confidence": 0–1, "method": "detected"|"estimated"}
+        stem_meta = {}
 
         drum_bands = {
             "kick": (20, 120, 4),
@@ -3012,11 +3040,14 @@ def extract_midi_from_audio(y, sr, duration, bpm, key, drums, bass, synth_layers
             y_band = _bandpass_istft(y_perc, sr, fmin, fmax)
             if not flagged and not _band_has_signal(y_band):
                 continue
+            method = "detected"
             raw_events = _extract_drum_stem_events(y_band, sr, bpm, max_beats, grid_div=grid)
             if len(raw_events) < 2 and stem_key == "kick":
                 raw_events = _extract_kick_from_beats(y_perc, sr, bpm, max_beats)
+                method = "estimated"  # alinhado à grade de beats, não a onsets do kick
             elif len(raw_events) < 2 and stem_key == "snare_clap":
                 raw_events = _extract_backbeat_snare(y_perc, sr, bpm, max_beats)
+                method = "estimated"  # backbeat assumido nos tempos 2 e 4
             elif len(raw_events) < 2 and stem_key == "hihats":
                 y_wide = _bandpass_istft(y_perc, sr, 2000, 16000)
                 raw_events = _extract_drum_stem_events(y_wide, sr, bpm, max_beats, grid_div=grid)
@@ -3026,15 +3057,23 @@ def extract_midi_from_audio(y, sr, duration, bpm, key, drums, bass, synth_layers
             for ev in raw_events:
                 ev["midi"] = midi_num
             stems[stem_key] = raw_events
+            if method == "estimated":
+                conf = 0.4
+            else:
+                conf = _stem_confidence_from_coverage(raw_events, max_beats, grid, ceiling=0.9)
+            stem_meta[stem_key] = {"confidence": conf, "method": method}
 
         # Baixo: sempre tentar extrair pitch; usar flags só para variantes sub/mid
-        bass_events = _extract_bass_pitch_events(y_harm, sr, bpm, key, max_beats)
+        bass_events, bass_conf = _extract_bass_pitch_events(y_harm, sr, bpm, key, max_beats)
         if len(bass_events) >= 2:
             stems["bassline"] = bass_events
+            stem_meta["bassline"] = {"confidence": bass_conf, "method": "detected"}
             if bass.get("mid_bass", {}).get("present", True):
                 stems["mid_bass"] = [
                     {**ev, "midi": min(127, ev["midi"] + 12)} for ev in bass_events
                 ]
+                # Derivado da bassline (oitava acima): confiança levemente menor
+                stem_meta["mid_bass"] = {"confidence": round(bass_conf * 0.9, 2), "method": "detected"}
             if bass.get("sub_bass", {}).get("present", True):
                 root_midi = bass_events[0]["midi"]
                 stems["sub_bass"] = [
@@ -3046,12 +3085,25 @@ def extract_midi_from_audio(y, sr, duration, bpm, key, drums, bass, synth_layers
                     }
                     for ev in bass_events
                 ]
+                stem_meta["sub_bass"] = {"confidence": round(bass_conf * 0.85, 2), "method": "detected"}
 
         # Synths: pads, leads, arps, texturas via cromagrama harmônico
         synth_stems = _extract_synth_layers_chroma(
             y_harm, sr, bpm, key, max_beats, synth_layers
         )
         stems.update(synth_stems)
+        # Synths vêm do cromagrama (classe de altura, não nota real) → método "estimated",
+        # com teto de confiança menor por stem conforme a dificuldade.
+        synth_ceiling = {
+            "synth_pad": 0.6, "synth_arp": 0.5, "synth_texture": 0.5,
+            "synth_fx": 0.45, "synth_lead": 0.4,  # lead polifônico é o mais incerto
+        }
+        for stem_key, events in synth_stems.items():
+            ceiling = synth_ceiling.get(stem_key, 0.5)
+            stem_meta[stem_key] = {
+                "confidence": _stem_confidence_from_coverage(events, max_beats, 4, ceiling=ceiling),
+                "method": "estimated",
+            }
 
         bars = max(1, int(np.ceil(max_beats / 4)))
 
@@ -3063,10 +3115,11 @@ def extract_midi_from_audio(y, sr, duration, bpm, key, drums, bass, synth_layers
             "duration_sec": round(float(duration), 2) if duration else round(len(y) / float(sr), 2),
             "segment_start_sec": 0,
             "stems": stems,
+            "stem_meta": stem_meta,
         }
     except Exception as e:
         sys.stderr.write(f"[Warning] extract_midi_from_audio falhou: {e}\n")
-        return {"source": "none", "bars": 0, "max_beats": 0, "stems": {}}
+        return {"source": "none", "bars": 0, "max_beats": 0, "stems": {}, "stem_meta": {}}
 
 
 # ──────────────────────────────────────────────────────────────────

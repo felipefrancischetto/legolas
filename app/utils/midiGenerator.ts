@@ -16,6 +16,12 @@ export interface MidiNote {
   velocity: number;       // 0-127
 }
 
+/** Marcador de seção do arranjo (intro/build/drop...) embutido no SMF */
+export interface MidiMarker {
+  beat: number;
+  label: string;
+}
+
 export interface MidiClip {
   stem: string;
   bpm: number;
@@ -24,6 +30,8 @@ export interface MidiClip {
   notes: MidiNote[];
   /** Canal MIDI 0–15; bateria usa 9 (canal 10 no Ableton) */
   midiChannel?: number;
+  /** Marcadores de seção (Ableton mostra como locators no Arrangement) */
+  markers?: MidiMarker[];
 }
 
 export interface MidiGenerationContext {
@@ -41,6 +49,12 @@ export interface MidiGenerationContext {
   drumPattern?: string;   // "shuffle", "constante", etc.
   /** Eventos extraídos do áudio (prioridade sobre templates) */
   extractedNotes?: MidiNote[];
+  /**
+   * Modo de quantização do clip final:
+   * - 'swing' (default): preserva microtiming aplicando o swing detectado às colcheias off.
+   * - 'grid': alinha tudo à grade (limpo, "produção").
+   */
+  quantize?: 'swing' | 'grid';
 }
 
 type StemType =
@@ -176,6 +190,37 @@ function identifyStemType(element: string, category: string): StemType {
   if (category === 'Drums') return 'percussion';
   if (category === 'Bass') return 'bassline';
   return 'pad';
+}
+
+/**
+ * Aplica swing às colcheias "off" (posições x.5 dentro do beat), atrasando-as
+ * proporcionalmente ao swing detectado. Derivado do dado real do groove — não inventado.
+ * Quando o modo é 'grid' ou não há swing, retorna as notas inalteradas (alinhadas).
+ *
+ * @param swingPct Swing detectado pelo analyzer (0–100, tipicamente 0–50).
+ */
+function applyQuantization(
+  notes: MidiNote[],
+  mode: 'swing' | 'grid' | undefined,
+  swingPct: number | undefined
+): MidiNote[] {
+  if (mode === 'grid' || !swingPct || swingPct <= 5) return notes;
+  // Mapeia swing% para um atraso fracionário do beat (máx ~1/6 de beat = swing pesado).
+  const shift = Math.min(0.6, swingPct / 100) * (1 / 6);
+  if (shift <= 0) return notes;
+
+  return notes.map((note) => {
+    const posInBeat = note.start_beat - Math.floor(note.start_beat);
+    // Atrasa apenas a colcheia off (≈ 0.5 dentro do beat); demais posições ficam no grid.
+    const isOffEighth = Math.abs(posInBeat - 0.5) < 0.01;
+    if (!isOffEighth) return note;
+    return {
+      ...note,
+      start_beat: note.start_beat + shift,
+      // Encurta levemente para não invadir a próxima nota.
+      duration_beats: Math.max(0.0625, note.duration_beats - shift),
+    };
+  });
 }
 
 function isDrumStemType(stemType: StemType): boolean {
@@ -655,8 +700,9 @@ export function generateMidiClip(ctx: MidiGenerationContext): MidiClip {
 
   // Prioridade: eventos extraídos do áudio (onsets/pitch reais da música)
   if (ctx.extractedNotes && ctx.extractedNotes.length >= 2) {
+    const notes = applyQuantization(ctx.extractedNotes, ctx.quantize ?? 'swing', ctx.swing);
     const maxEnd = Math.max(
-      ...ctx.extractedNotes.map((note) => note.start_beat + note.duration_beats)
+      ...notes.map((note) => note.start_beat + note.duration_beats)
     );
     const bars = Math.max(1, Math.ceil(maxEnd / 4));
     return {
@@ -664,7 +710,7 @@ export function generateMidiClip(ctx: MidiGenerationContext): MidiClip {
       bpm,
       time_signature: timeSignature,
       bars,
-      notes: ctx.extractedNotes,
+      notes,
       midiChannel: isDrumStemType(stemType) ? 9 : 0,
     };
   }
@@ -739,7 +785,7 @@ export function generateMidiClip(ctx: MidiGenerationContext): MidiClip {
     bpm,
     time_signature: timeSignature,
     bars,
-    notes: midiNotes,
+    notes: applyQuantization(midiNotes, ctx.quantize ?? 'swing', ctx.swing),
     midiChannel: isDrumStemType(stemType) ? 9 : 0,
   };
 }
@@ -774,6 +820,18 @@ export function midiClipToBytes(clip: MidiClip): Uint8Array {
     priority: 1,
     data: [0xFF, 0x58, 0x04, num || 4, denPow, 24, 8],
   });
+
+  // Marcadores de seção (meta event 0xFF 0x06) — locators no Ableton Arrangement
+  if (clip.markers && clip.markers.length > 0) {
+    for (const marker of clip.markers) {
+      const textBytes = Array.from(new TextEncoder().encode(marker.label));
+      trackEvents.push({
+        tick: Math.max(0, Math.round(marker.beat * PPQ)),
+        priority: 2,
+        data: [0xFF, 0x06, ...writeVLQ(textBytes.length), ...textBytes],
+      });
+    }
+  }
 
   const channel = Math.max(0, Math.min(15, clip.midiChannel ?? 0));
   const noteOnStatus = 0x90 + channel;
@@ -1278,6 +1336,43 @@ export function downloadAllMidisAsZip(
     ? trackName.replace(/[^a-zA-Z0-9_\- ]/g, '').replace(/\s+/g, '_').substring(0, 50)
     : 'track';
   downloadZipArchive(zipBytes, `${safeName}_MIDIs_${bpm}bpm.zip`);
+  return files.length;
+}
+
+/**
+ * Empacota MidiClips já construídos (com marcadores/seções) em um .zip.
+ * Usado quando os clips vêm do pipeline de transcrição (faixa inteira ou por seção).
+ */
+export function downloadClipsAsZip(
+  clips: MidiClip[],
+  bpm: number,
+  trackName?: string,
+  zipLabel?: string
+): number {
+  if (clips.length === 0) return 0;
+
+  const files: { name: string; data: Uint8Array }[] = [];
+  const usedNames = new Set<string>();
+
+  for (const clip of clips) {
+    const bytes = midiClipToBytes(clip);
+    let safeName = clip.stem.replace(/[^a-zA-Z0-9_-]/g, '_');
+    let candidate = `${safeName}_${clip.bpm}bpm_${clip.bars}bar.mid`;
+    let n = 2;
+    while (usedNames.has(candidate.toLowerCase())) {
+      candidate = `${safeName}_${clip.bpm}bpm_${clip.bars}bar_${n}.mid`;
+      n++;
+    }
+    usedNames.add(candidate.toLowerCase());
+    files.push({ name: candidate, data: bytes });
+  }
+
+  const zipBytes = createZipArchive(files);
+  const safeTrack = trackName
+    ? trackName.replace(/[^a-zA-Z0-9_\- ]/g, '').replace(/\s+/g, '_').substring(0, 50)
+    : 'track';
+  const label = zipLabel ? `_${zipLabel}` : '';
+  downloadZipArchive(zipBytes, `${safeTrack}_MIDIs${label}_${bpm}bpm.zip`);
   return files.length;
 }
 

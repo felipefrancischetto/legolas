@@ -10,16 +10,18 @@ import { useSettings } from '../hooks/useSettings';
 import LoadingSpinner from './LoadingSpinner';
 import {
   generateAndDownloadMidi,
-  downloadAllMidisAsZip,
+  downloadClipsAsZip,
   setAllMidiDragTransfer,
+  type MidiClip,
 } from '../utils/midiGenerator';
 import {
   analysisCacheKey,
   buildAllMidiClipsForExport,
   buildMidiGenerationContext,
-  collectMidiElementsFromAnalysis,
+  getStemFidelityForElement,
   hasValidMidiExtraction,
   mapAnalysisFromApi,
+  sliceClipBySections,
   type MusicAnalysisForMidi,
 } from '../utils/midiFromAnalysis';
 import { safeSetItem, safeGetItem } from '../utils/localStorage';
@@ -251,7 +253,55 @@ function ProgressBar({ value, max = 100, themeColors }: { value: number; max?: n
   );
 }
 
-function DrumRow({ name, detail, themeColors, onMidiClick }: { name: string; detail: DrumElementDetail; themeColors: { primary: string; background: string; border: string }; onMidiClick?: () => void }) {
+// ──────────────────────────────────────────────────────────────────
+// FIDELIDADE DA TRANSCRIÇÃO (confiança + método por stem)
+// ──────────────────────────────────────────────────────────────────
+
+type StemFidelityInfo = { confidence: number; method: 'detected' | 'estimated' | 'template' };
+
+/** Badge honesto de fidelidade: detectado (do áudio), aproximado (estimado) ou template (gênero). */
+function FidelityBadge({ fidelity }: { fidelity: StemFidelityInfo | null }) {
+  if (!fidelity) return null;
+  const pct = Math.round(fidelity.confidence * 100);
+
+  let label: string;
+  let color: string;
+  let bg: string;
+  let title: string;
+  if (fidelity.method === 'template') {
+    label = 'Template';
+    color = 'rgb(148, 163, 184)';
+    bg = 'rgba(148, 163, 184, 0.15)';
+    title = 'Gerado por padrão do gênero — não transcrito do áudio';
+  } else if (fidelity.method === 'estimated') {
+    label = `Aprox. ${pct}%`;
+    color = 'rgb(251, 191, 36)';
+    bg = 'rgba(251, 191, 36, 0.15)';
+    title = `Estimado do áudio (${pct}% de confiança) — aproximação, pode conter imprecisões`;
+  } else if (fidelity.confidence >= 0.7) {
+    label = `Fiel ${pct}%`;
+    color = 'rgb(52, 211, 153)';
+    bg = 'rgba(52, 211, 153, 0.15)';
+    title = `Detectado do áudio (${pct}% de confiança)`;
+  } else {
+    label = `Detect. ${pct}%`;
+    color = 'rgb(251, 146, 60)';
+    bg = 'rgba(251, 146, 60, 0.15)';
+    title = `Detectado do áudio, confiança moderada (${pct}%)`;
+  }
+
+  return (
+    <span
+      className="text-[10px] font-medium px-1.5 py-0.5 rounded"
+      style={{ backgroundColor: bg, color }}
+      title={title}
+    >
+      {label}
+    </span>
+  );
+}
+
+function DrumRow({ name, detail, themeColors, onMidiClick, fidelity }: { name: string; detail: DrumElementDetail; themeColors: { primary: string; background: string; border: string }; onMidiClick?: () => void; fidelity?: StemFidelityInfo | null }) {
   return (
     <div
       className={`p-3 rounded-lg border ${detail.present ? 'opacity-100 cursor-pointer hover:brightness-110 transition-all' : 'opacity-40'}`}
@@ -262,9 +312,12 @@ function DrumRow({ name, detail, themeColors, onMidiClick }: { name: string; det
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-semibold text-white">{name}</span>
         {detail.present ? (
-          <svg className="w-4 h-4" style={{ color: themeColors.primary }} fill="currentColor" viewBox="0 0 20 20">
-            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-          </svg>
+          <div className="flex items-center gap-1.5">
+            {fidelity && <FidelityBadge fidelity={fidelity} />}
+            <svg className="w-4 h-4" style={{ color: themeColors.primary }} fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+            </svg>
+          </div>
         ) : (
           <span className="text-xs text-gray-500">ausente</span>
         )}
@@ -312,6 +365,10 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
   const [allMidiDownloaded, setAllMidiDownloaded] = useState(false);
   const [allMidiCount, setAllMidiCount] = useState(0);
   const [arrangementDragHint, setArrangementDragHint] = useState<string | null>(null);
+  // Quantização do MIDI exportado: 'swing' preserva groove (default), 'grid' alinha duro
+  const [quantizeMode, setQuantizeMode] = useState<'swing' | 'grid'>('swing');
+  // Escopo do export: faixa inteira (com marcadores de seção) ou um clip por seção
+  const [exportScope, setExportScope] = useState<'full' | 'section'>('full');
 
   const currentFile = playerState.currentFile;
   const hasAnalysisRef = useRef<boolean>(false);
@@ -321,35 +378,16 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
     [analysis]
   );
 
-  const collectAllMidiElements = useCallback(() => {
-    if (!midiAnalysis) return [];
-    return collectMidiElementsFromAnalysis(midiAnalysis);
-  }, [midiAnalysis]);
+  // Fidelidade da transcrição por stem (confiança + método)
+  const stemFidelity = useCallback(
+    (element: string, category: string): StemFidelityInfo | null => {
+      if (!midiAnalysis) return null;
+      return getStemFidelityForElement(midiAnalysis, element, category);
+    },
+    [midiAnalysis]
+  );
 
-  // ── Download All MIDIs as ZIP ──
-  const handleDownloadAllMidis = useCallback(() => {
-    if (!midiAnalysis) return;
-    const elements = collectAllMidiElements();
-    if (elements.length === 0) return;
-
-    const trackName = currentFile?.title || currentFile?.displayName || 'track';
-    const bpm = midiAnalysis.bpm || 128;
-    const key = midiAnalysis.key || midiAnalysis.harmony?.key || undefined;
-    const genre = midiAnalysis.musicalIdentity?.genre;
-    const count = downloadAllMidisAsZip(
-      elements,
-      bpm,
-      key ?? undefined,
-      genre,
-      trackName,
-      (el) => buildMidiGenerationContext(midiAnalysis, el, { bpm, key: key ?? undefined, genre })
-    );
-
-    setAllMidiCount(count);
-    setAllMidiDownloaded(true);
-    setTimeout(() => setAllMidiDownloaded(false), 3000);
-  }, [midiAnalysis, currentFile, collectAllMidiElements]);
-
+  // Clips de faixa inteira (com marcadores de seção quando vêm do áudio)
   const arrangementMidiClips = useMemo(() => {
     if (!midiAnalysis) return [];
     const bpm = midiAnalysis.bpm || analysis?.bpm || 128;
@@ -359,32 +397,59 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
       bpm,
       key: key ?? undefined,
       genre,
+      quantize: quantizeMode,
     });
-  }, [midiAnalysis, analysis?.bpm, analysis?.harmony?.key]);
+  }, [midiAnalysis, analysis?.bpm, analysis?.harmony?.key, quantizeMode]);
+
+  // Clips finais a exportar: faixa inteira ou fatiados por seção do arranjo
+  const exportClips = useMemo<MidiClip[]>(() => {
+    if (exportScope === 'full') return arrangementMidiClips;
+    return arrangementMidiClips.flatMap((clip) => {
+      const slices = sliceClipBySections(clip, clip.markers ?? []);
+      return slices.map(({ section, clip: c }) => ({ ...c, stem: `${clip.stem}_${section}` }));
+    });
+  }, [arrangementMidiClips, exportScope]);
+
+  // ── Download All MIDIs as ZIP ──
+  const handleDownloadAllMidis = useCallback(() => {
+    if (!midiAnalysis || exportClips.length === 0) return;
+    const trackName = currentFile?.title || currentFile?.displayName || 'track';
+    const bpm = midiAnalysis.bpm || 128;
+    const count = downloadClipsAsZip(
+      exportClips,
+      bpm,
+      trackName,
+      exportScope === 'section' ? 'por_secao' : undefined
+    );
+
+    setAllMidiCount(count);
+    setAllMidiDownloaded(true);
+    setTimeout(() => setAllMidiDownloaded(false), 3000);
+  }, [midiAnalysis, currentFile, exportClips, exportScope]);
 
   const handleDragAllToAbleton = useCallback(
     (e: React.DragEvent) => {
-      if (arrangementMidiClips.length === 0) return;
+      if (exportClips.length === 0) return;
       const trackName = currentFile?.title || currentFile?.displayName || currentFile?.name;
-      const ok = setAllMidiDragTransfer(e.nativeEvent, arrangementMidiClips, trackName);
+      const ok = setAllMidiDragTransfer(e.nativeEvent, exportClips, trackName);
       setArrangementDragHint(
         ok
-          ? `Arrastando ${arrangementMidiClips.length} MIDIs — solte no Arrangement do Ableton`
+          ? `Arrastando ${exportClips.length} MIDIs — solte no Arrangement do Ableton`
           : 'Use Chrome ou Edge para arrastar vários arquivos de uma vez'
       );
     },
-    [arrangementMidiClips, currentFile]
+    [exportClips, currentFile]
   );
 
   // ── MIDI Download Handler ──
   const handleStemMidiDownload = useCallback((element: string, category: string, role: string, intensity: number) => {
     if (!midiAnalysis) return;
     const trackName = currentFile?.title || currentFile?.displayName;
-    const ctx = buildMidiGenerationContext(midiAnalysis, { element, category, role, intensity });
+    const ctx = buildMidiGenerationContext(midiAnalysis, { element, category, role, intensity }, { quantize: quantizeMode });
     generateAndDownloadMidi(ctx, trackName);
     setMidiDownloaded(element);
     setTimeout(() => setMidiDownloaded(null), 2500);
-  }, [midiAnalysis, currentFile]);
+  }, [midiAnalysis, currentFile, quantizeMode]);
 
   // Extrair cor dominante
   useEffect(() => {
@@ -593,6 +658,34 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                 </div>
               )}
               {analysis && (
+                <div
+                  className="flex items-center rounded-lg border overflow-hidden text-xs"
+                  style={{ borderColor: themeColors.border }}
+                  title="Quantização do MIDI exportado: preservar o swing detectado ou alinhar tudo à grade"
+                >
+                  <button
+                    onClick={() => setQuantizeMode('swing')}
+                    className="px-2 py-1.5 font-medium transition-all"
+                    style={{
+                      backgroundColor: quantizeMode === 'swing' ? themeColors.primary : 'transparent',
+                      color: quantizeMode === 'swing' ? '#0b0b0d' : themeColors.primary,
+                    }}
+                  >
+                    Swing
+                  </button>
+                  <button
+                    onClick={() => setQuantizeMode('grid')}
+                    className="px-2 py-1.5 font-medium transition-all"
+                    style={{
+                      backgroundColor: quantizeMode === 'grid' ? themeColors.primary : 'transparent',
+                      color: quantizeMode === 'grid' ? '#0b0b0d' : themeColors.primary,
+                    }}
+                  >
+                    Grid
+                  </button>
+                </div>
+              )}
+              {analysis && (
                 <button
                   onClick={handleDownloadAllMidis}
                   disabled={allMidiDownloaded}
@@ -772,12 +865,12 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                       themeColors={themeColors}
                     />
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                      <DrumRow name="Kick" detail={analysis.drumElements.kick} themeColors={themeColors} onMidiClick={() => handleStemMidiDownload('Kick', 'Drums', analysis.drumElements!.kick.role, analysis.drumElements!.kick.energy)} />
-                      <DrumRow name="Snare / Clap" detail={analysis.drumElements.snareClap} themeColors={themeColors} onMidiClick={() => handleStemMidiDownload('Snare/Clap', 'Drums', analysis.drumElements!.snareClap.role, analysis.drumElements!.snareClap.energy)} />
-                      <DrumRow name="Hi-Hats" detail={analysis.drumElements.hihats} themeColors={themeColors} onMidiClick={() => handleStemMidiDownload('Hi-Hats', 'Drums', analysis.drumElements!.hihats.role, analysis.drumElements!.hihats.energy)} />
-                      <DrumRow name="Cymbals / Rides" detail={analysis.drumElements.cymbalsRides} themeColors={themeColors} onMidiClick={() => handleStemMidiDownload('Cymbals/Rides', 'Drums', analysis.drumElements!.cymbalsRides.role, analysis.drumElements!.cymbalsRides.energy)} />
-                      <DrumRow name="Percussões" detail={analysis.drumElements.percussion} themeColors={themeColors} onMidiClick={() => handleStemMidiDownload('Percussion', 'Drums', analysis.drumElements!.percussion.role, analysis.drumElements!.percussion.energy)} />
-                      <DrumRow name="Fills / Transições" detail={analysis.drumElements.fills} themeColors={themeColors} onMidiClick={() => handleStemMidiDownload('Fills', 'Drums', analysis.drumElements!.fills.role, analysis.drumElements!.fills.energy)} />
+                      <DrumRow name="Kick" detail={analysis.drumElements.kick} themeColors={themeColors} fidelity={stemFidelity('Kick', 'Drums')} onMidiClick={() => handleStemMidiDownload('Kick', 'Drums', analysis.drumElements!.kick.role, analysis.drumElements!.kick.energy)} />
+                      <DrumRow name="Snare / Clap" detail={analysis.drumElements.snareClap} themeColors={themeColors} fidelity={stemFidelity('Snare/Clap', 'Drums')} onMidiClick={() => handleStemMidiDownload('Snare/Clap', 'Drums', analysis.drumElements!.snareClap.role, analysis.drumElements!.snareClap.energy)} />
+                      <DrumRow name="Hi-Hats" detail={analysis.drumElements.hihats} themeColors={themeColors} fidelity={stemFidelity('Hi-Hats', 'Drums')} onMidiClick={() => handleStemMidiDownload('Hi-Hats', 'Drums', analysis.drumElements!.hihats.role, analysis.drumElements!.hihats.energy)} />
+                      <DrumRow name="Cymbals / Rides" detail={analysis.drumElements.cymbalsRides} themeColors={themeColors} fidelity={stemFidelity('Cymbals/Rides', 'Drums')} onMidiClick={() => handleStemMidiDownload('Cymbals/Rides', 'Drums', analysis.drumElements!.cymbalsRides.role, analysis.drumElements!.cymbalsRides.energy)} />
+                      <DrumRow name="Percussões" detail={analysis.drumElements.percussion} themeColors={themeColors} fidelity={stemFidelity('Percussion', 'Drums')} onMidiClick={() => handleStemMidiDownload('Percussion', 'Drums', analysis.drumElements!.percussion.role, analysis.drumElements!.percussion.energy)} />
+                      <DrumRow name="Fills / Transições" detail={analysis.drumElements.fills} themeColors={themeColors} fidelity={stemFidelity('Fills', 'Drums')} onMidiClick={() => handleStemMidiDownload('Fills', 'Drums', analysis.drumElements!.fills.role, analysis.drumElements!.fills.energy)} />
                     </div>
                   </div>
                 )}
@@ -800,9 +893,12 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm font-semibold text-white">Sub Bass (20-60Hz)</span>
                         {analysis.bassElements.subBass.present && (
-                          <svg className="w-4 h-4" style={{ color: themeColors.primary }} fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                          </svg>
+                          <div className="flex items-center gap-1.5">
+                            <FidelityBadge fidelity={stemFidelity('Sub Bass', 'Bass')} />
+                            <svg className="w-4 h-4" style={{ color: themeColors.primary }} fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                            </svg>
+                          </div>
                         )}
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-xs text-gray-400">
@@ -822,9 +918,12 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm font-semibold text-white">Mid Bass (60-250Hz)</span>
                         {analysis.bassElements.midBass.present && (
-                          <svg className="w-4 h-4" style={{ color: themeColors.primary }} fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                          </svg>
+                          <div className="flex items-center gap-1.5">
+                            <FidelityBadge fidelity={stemFidelity('Mid Bass', 'Bass')} />
+                            <svg className="w-4 h-4" style={{ color: themeColors.primary }} fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                            </svg>
+                          </div>
                         )}
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-xs text-gray-400">
@@ -843,9 +942,12 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm font-semibold text-white">Bassline</span>
                         {analysis.bassElements.bassline.present && (
-                          <svg className="w-4 h-4" style={{ color: themeColors.primary }} fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                          </svg>
+                          <div className="flex items-center gap-1.5">
+                            <FidelityBadge fidelity={stemFidelity('Bassline', 'Bass')} />
+                            <svg className="w-4 h-4" style={{ color: themeColors.primary }} fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                            </svg>
+                          </div>
                         )}
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-xs text-gray-400">
@@ -876,9 +978,12 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                       >
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-sm font-semibold text-white">{layer.name}</span>
-                          <span className="text-xs px-2 py-0.5 rounded-full capitalize" style={{ backgroundColor: themeColors.border, color: themeColors.primary }}>
-                            {layer.category}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <FidelityBadge fidelity={stemFidelity(layer.name, 'Synths')} />
+                            <span className="text-xs px-2 py-0.5 rounded-full capitalize" style={{ backgroundColor: themeColors.border, color: themeColors.primary }}>
+                              {layer.category}
+                            </span>
+                          </div>
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-xs text-gray-400">
                           <div>Função: <span className="text-white capitalize">{layer.function}</span></div>
@@ -1153,9 +1258,30 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                         </p>
                         <p className="text-xs text-gray-500 mt-1 max-w-lg mx-auto">
                           Segure e arraste aqui para o <strong className="text-gray-400">Arrangement View</strong>.
-                          O Live cria uma faixa MIDI por stem ({arrangementMidiClips.length} arquivos).
+                          O Live cria uma faixa MIDI por {exportScope === 'section' ? 'stem/seção' : 'stem'} ({exportClips.length} arquivos).
                           Use Chrome ou Edge no Windows.
                         </p>
+                        <div
+                          className="flex items-center justify-center gap-1 mt-3"
+                          onDragStart={(e) => e.stopPropagation()}
+                          draggable={false}
+                        >
+                          {(['full', 'section'] as const).map((scope) => (
+                            <button
+                              key={scope}
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setExportScope(scope); }}
+                              className="text-[11px] px-2.5 py-1 rounded-md border font-medium transition-all"
+                              style={{
+                                backgroundColor: exportScope === scope ? themeColors.primary : 'transparent',
+                                borderColor: themeColors.border,
+                                color: exportScope === scope ? '#0b0b0d' : themeColors.primary,
+                              }}
+                            >
+                              {scope === 'full' ? 'Faixa inteira' : 'Por seção'}
+                            </button>
+                          ))}
+                        </div>
                         {arrangementDragHint && (
                           <p className="text-[10px] mt-2" style={{ color: themeColors.primary }}>
                             {arrangementDragHint}
