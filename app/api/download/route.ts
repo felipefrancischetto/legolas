@@ -6,7 +6,15 @@ import { join } from 'path';
 import { constants, existsSync } from 'fs';
 import NodeID3 from 'node-id3';
 import { sendProgressEvent } from '@/lib/utils/progressEventService';
-import { hasValidCookiesFile, getDownloadsPath, moveFile } from '@/app/api/utils/common';
+import {
+  getDownloadsPath,
+  moveFile,
+  getDownloadUserFacingError,
+  getCookiesFlag,
+  runFfmpegCopyWithMetadata,
+  type FfmpegMetadataEntry,
+} from '@/app/api/utils/common';
+import { buildYtDlpDownloadInput, runYtDlpDumpJson } from '@/app/api/utils/ytdlp';
 
 const execAsync = promisify(exec);
 
@@ -167,41 +175,8 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Obter informações do vídeo
-    const hasValidCookies = await hasValidCookiesFile();
-    let infoJson: string;
-    
-    try {
-      const cookiesFlag = hasValidCookies ? '--cookies "cookies.txt" ' : '';
-      const { stdout } = await execAsync(
-        `yt-dlp --dump-json ` +
-        `${cookiesFlag}` +
-        `--default-search "ytsearch" ` +
-        `"${url}"`,
-        {
-          maxBuffer: 1024 * 1024 * 10 // 10MB buffer
-        }
-      );
-      infoJson = stdout;
-    } catch (error) {
-      // Se falhar com cookies, tentar sem cookies
-      if (hasValidCookies && error instanceof Error && error.message.includes('does not look like a Netscape format')) {
-        console.log('Cookies inválidos, tentando sem cookies...');
-        const { stdout } = await execAsync(
-          `yt-dlp --dump-json ` +
-          `--default-search "ytsearch" ` +
-          `"${url}"`,
-          {
-            maxBuffer: 1024 * 1024 * 10 // 10MB buffer
-          }
-        );
-        infoJson = stdout;
-      } else {
-        throw error;
-      }
-    }
-    
-    const videoInfo = JSON.parse(infoJson);
+    const ytdlpInput = buildYtDlpDownloadInput(url);
+    const videoInfo = await runYtDlpDumpJson(ytdlpInput);
 
     // Evento: Informações extraídas
     if (downloadId) {
@@ -241,48 +216,32 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const cookiesFlag = hasValidCookies ? '--cookies "cookies.txt" ' : '';
-    let stdout: string;
-    
-    try {
-      // Normalizar caminho para o comando yt-dlp (Windows precisa de barras duplas ou barras normais escapadas)
-      const normalizedDownloadsFolder = downloadsFolder.replace(/\\/g, '/');
-      
-      const result = await execAsync(
-        `yt-dlp -x --audio-format ${format} --audio-quality 10 ` +
-        `--embed-thumbnail --convert-thumbnails jpg ` +
-        `--add-metadata ` +
-        `${cookiesFlag}` +
-        `--default-search "ytsearch" ` +
-        `-o "${normalizedDownloadsFolder}/%(title)s.%(ext)s" ` +
-        `--no-part --force-overwrites "${url}"`,
-        {
-          maxBuffer: 1024 * 1024 * 10 // 10MB buffer
-        }
-      );
-      stdout = result.stdout;
-    } catch (error) {
-      // Se falhar com cookies, tentar sem cookies
-      if (hasValidCookies && error instanceof Error && error.message.includes('does not look like a Netscape format')) {
-        console.log('Cookies inválidos no download, tentando sem cookies...');
-        // Normalizar caminho para o comando yt-dlp (Windows precisa de barras duplas ou barras normais escapadas)
-        const normalizedDownloadsFolder = downloadsFolder.replace(/\\/g, '/');
-        
-        const result = await execAsync(
-          `yt-dlp -x --audio-format ${format} --audio-quality 10 ` +
-          `--embed-thumbnail --convert-thumbnails jpg ` +
-          `--add-metadata ` +
-          `--default-search "ytsearch" ` +
-          `-o "${normalizedDownloadsFolder}/%(title)s.%(ext)s" ` +
-          `--no-part --force-overwrites "${url}"`,
-          {
-            maxBuffer: 1024 * 1024 * 10 // 10MB buffer
-          }
-        );
+    const cookiesFlag = await getCookiesFlag();
+    const normalizedDownloadsFolder = downloadsFolder.replace(/\\/g, '/');
+    const downloadTarget = buildYtDlpDownloadInput(url);
+    const quotedTarget = `"${downloadTarget.replace(/"/g, '\\"')}"`;
+
+    const downloadCommands = [
+      `yt-dlp -x --audio-format ${format} --audio-quality 10 --embed-thumbnail --convert-thumbnails jpg --add-metadata ${cookiesFlag}--extractor-args "youtube:player_client=android" -o "${normalizedDownloadsFolder}/%(title)s.%(ext)s" --no-part --force-overwrites ${quotedTarget}`,
+      `yt-dlp -x --audio-format ${format} --audio-quality 10 --embed-thumbnail --convert-thumbnails jpg --add-metadata ${cookiesFlag}--extractor-args "youtube:player_client=ios" -o "${normalizedDownloadsFolder}/%(title)s.%(ext)s" --no-part --force-overwrites ${quotedTarget}`,
+      `yt-dlp -x --audio-format ${format} --audio-quality 10 --embed-thumbnail --convert-thumbnails jpg --add-metadata ${cookiesFlag}-o "${normalizedDownloadsFolder}/%(title)s.%(ext)s" --no-part --force-overwrites ${quotedTarget}`,
+    ];
+
+    let stdout = '';
+    let lastDownloadError: unknown;
+    for (const command of downloadCommands) {
+      try {
+        const result = await execAsync(command, { maxBuffer: 1024 * 1024 * 10 });
         stdout = result.stdout;
-      } else {
-        throw error;
+        lastDownloadError = undefined;
+        break;
+      } catch (error) {
+        lastDownloadError = error;
       }
+    }
+
+    if (lastDownloadError) {
+      throw lastDownloadError;
     }
     
     console.log('Download concluído:', stdout);
@@ -475,56 +434,30 @@ export async function GET(request: NextRequest) {
               throw new Error('Arquivo de áudio não encontrado após download');
             }
             
-            // Usar nome temporário com extensão .flac válida
             const tempFile = audioFile.replace('.flac', '_temp.flac');
-            
-            // Helper function to escape metadata values
-            const escapeValue = (value: string): string => {
-              if (!value) return '';
-              // PowerShell-safe escaping - melhorado para Windows
-              return value
-                .replace(/"/g, '\\"')        // Escapar aspas duplas
-                .replace(/\$/g, '\\$')       // Escapar $ (PowerShell variables)
-                .replace(/`/g, '\\`')        // Escapar backticks (PowerShell escape char)
-                .replace(/&/g, '\\&')        // Escapar & (PowerShell command separator)
-                .replace(/\|/g, '\\|')       // Escapar | (PowerShell pipe)
-                .replace(/;/g, '\\;')        // Escapar ; (PowerShell command separator)
-                .replace(/</g, '\\<')        // Escapar < (PowerShell redirect)
-                .replace(/>/g, '\\>')        // Escapar > (PowerShell redirect)
-                .replace(/:/g, '\\:')        // Escapar : (PowerShell drive separator)
-                .replace(/\*/g, '\\*')       // Escapar * (PowerShell wildcard)
-                .replace(/\?/g, '\\?')       // Escapar ? (PowerShell wildcard)
-                .replace(/\[/g, '\\[')       // Escapar [ (PowerShell wildcard)
-                .replace(/\]/g, '\\]')       // Escapar ] (PowerShell wildcard)
-                .trim();
-            };
-            
-            // Construir comando FFmpeg com Vorbis comments e especificar formato explicitamente
-            let ffmpegCmd = `ffmpeg -y -i "${audioFile}" -c copy`;
-            
-            // Adicionar metadados como Vorbis comments - SEMPRE incluir title e artist
-            ffmpegCmd += ` -metadata "title=${escapeValue(tags.title)}"`;
-            ffmpegCmd += ` -metadata "artist=${escapeValue(tags.artist)}"`;
-            
-            // Adicionar metadados opcionais apenas se existirem
-            if (tags.album) ffmpegCmd += ` -metadata "album=${escapeValue(tags.album)}"`;
-            if (tags.year) ffmpegCmd += ` -metadata "date=${tags.year}"`;
-            if (metadata.publishedDate) ffmpegCmd += ` -metadata "publisher_date=${escapeValue(metadata.publishedDate)}"`;
-            if (tags.genre) ffmpegCmd += ` -metadata "genre=${escapeValue(tags.genre)}"`;
-            if (tags.label) {
-              ffmpegCmd += ` -metadata "publisher=${escapeValue(tags.label)}"`;
-              ffmpegCmd += ` -metadata "label=${escapeValue(tags.label)}"`;
+
+            const flacMetadata: FfmpegMetadataEntry[] = [
+              { key: 'title', value: tags.title },
+              { key: 'artist', value: tags.artist },
+            ];
+            if (tags.album) flacMetadata.push({ key: 'album', value: tags.album });
+            if (tags.year) flacMetadata.push({ key: 'date', value: tags.year });
+            if (metadata.publishedDate) {
+              flacMetadata.push({ key: 'publisher_date', value: metadata.publishedDate });
             }
-            if (tags.bpm) ffmpegCmd += ` -metadata "bpm=${tags.bpm}"`;
-            if (tags.key) ffmpegCmd += ` -metadata "initialkey=${escapeValue(tags.key)}"`;
-            if (tags.comment) ffmpegCmd += ` -metadata "comment=${escapeValue(tags.comment)}"`;
-            
-            // Especificar formato FLAC explicitamente
-            ffmpegCmd += ` -f flac "${tempFile}"`;
-            
-            console.log(`   🔧 Comando FFmpeg: ${ffmpegCmd.substring(0, 150)}...`);
-            
-            await execAsync(ffmpegCmd, { maxBuffer: 1024 * 1024 * 50 });
+            if (tags.genre) flacMetadata.push({ key: 'genre', value: tags.genre });
+            if (tags.label) {
+              flacMetadata.push({ key: 'publisher', value: tags.label });
+              flacMetadata.push({ key: 'label', value: tags.label });
+            }
+            if (tags.bpm) flacMetadata.push({ key: 'bpm', value: tags.bpm });
+            if (tags.key) flacMetadata.push({ key: 'initialkey', value: tags.key });
+            if (tags.comment) flacMetadata.push({ key: 'comment', value: tags.comment });
+
+            await runFfmpegCopyWithMetadata(audioFile, tempFile, flacMetadata, {
+              format: 'flac',
+              timeoutMs: 120000,
+            });
             
             // Verificar se arquivo temporário foi criado
             const tempExists = await fileExists(tempFile);
@@ -753,7 +686,7 @@ export async function GET(request: NextRequest) {
     console.error('Erro detalhado ao processar vídeo:', error);
     
     // 🔧 Enviar evento de erro via SSE se downloadId estiver disponível
-    const errorMessage = error instanceof Error ? error.message : 'Erro ao processar o vídeo';
+    const errorMessage = getDownloadUserFacingError(error, 'Erro ao processar o vídeo');
     
     if (downloadId) {
       console.log(`❌ Enviando evento ERROR para downloadId: ${downloadId}`);
@@ -868,7 +801,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Erro detalhado ao processar download via POST:', error);
     
-    const errorMessage = error instanceof Error ? error.message : 'Erro ao processar o download';
+    const errorMessage = getDownloadUserFacingError(error);
     
     if (downloadId) {
       console.log(`❌ Enviando evento ERROR para downloadId: ${downloadId}`);

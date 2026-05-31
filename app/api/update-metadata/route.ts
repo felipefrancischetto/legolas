@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { readFile } from 'fs/promises';
 import { constants } from 'fs';
 import { access } from 'fs/promises';
@@ -7,7 +7,7 @@ import NodeID3 from 'node-id3';
 import { spawn } from 'child_process';
 import { mkdtempSync, existsSync } from 'fs';
 import os from 'os';
-import { getDownloadsPath, moveFile } from '@/app/api/utils/common';
+import { getDownloadsPath, moveFile, resolveAudioFileUnderDownloads } from '@/app/api/utils/common';
 
 function deduplicateLabel(label: string): string {
   if (!label) return '';
@@ -80,14 +80,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Nome do arquivo é obrigatório.' }, { status: 400 });
     }
     const downloadsFolder = await getDownloadsPath();
-    let filePath = join(downloadsFolder, fileName);
-    if (!(await fileExists(filePath))) {
+    const resolvedPath = resolveAudioFileUnderDownloads(downloadsFolder, fileName);
+    if (!resolvedPath) {
       return NextResponse.json({ error: 'Arquivo não encontrado.' }, { status: 404 });
     }
 
+    let filePath = resolvedPath;
+
     // Renomear arquivo se necessário
     if (newFileName && newFileName !== fileName) {
-      const newFilePath = join(downloadsFolder, newFileName);
+      const newFilePath = join(dirname(filePath), newFileName);
       if (await fileExists(newFilePath)) {
         return NextResponse.json({ error: 'Já existe um arquivo com o novo nome.' }, { status: 400 });
       }

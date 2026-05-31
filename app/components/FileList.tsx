@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState, useRef, memo, useCallback, useMemo } from 'react';
-import Image from 'next/image';
 import { useSearchParams } from 'next/navigation';
+import LazyThumbnail from './LazyThumbnail';
 import DownloadQueue from './DownloadQueue';
 import { useDownload } from '../contexts/DownloadContext';
 import { useFile } from '../contexts/FileContext';
@@ -17,12 +17,16 @@ import LoadingSpinner from './LoadingSpinner';
 import { SkeletonMusicList } from './SkeletonComponents';
 import { safeGetItem, safeSetItem } from '../utils/localStorage';
 import StarButton from './StarButton';
+import MidiExportModal from './MidiExportModal';
+import MidiPackExportModal from './MidiPackExportModal';
+import { pickBestTracksForMidiPack, type MidiPackTrackInput } from '../utils/midiPackExport';
 
 interface FileInfo {
   name: string;
   displayName: string;
   path: string;
   size: number;
+  folder?: string;
   title?: string;
   artist?: string;
   duration?: string;
@@ -70,19 +74,15 @@ const ThumbnailImage = memo(({ file, fileExists }: { file: FileInfo, fileExists:
 
   const thumbnailUrl = getThumbnailUrl(file.name);
   return (
-    <div className="w-full h-full relative">
-      <Image
+    <div className="w-full h-full relative rounded overflow-hidden">
+      <LazyThumbnail
         src={thumbnailUrl}
         alt={file.title || file.displayName}
-        width={36}
-        height={36}
-        className="object-cover w-full h-full rounded"
+        className="rounded"
         onError={() => {
           console.warn('Erro ao carregar thumbnail:', file.name);
           setError(true);
         }}
-        loading="lazy"
-        unoptimized
       />
     </div>
   );
@@ -105,19 +105,17 @@ const CompactThumbnailImage = memo(({ file }: { file: FileInfo }) => {
   }
 
   return (
-    <Image
-      src={getThumbnailUrl(file.name)}
-      alt={file.title || file.displayName}
-      width={36}
-      height={36}
-      className="object-cover w-9 h-9 bg-zinc-800 rounded border border-zinc-700/50"
-      onError={() => {
-        console.warn('Erro ao carregar imagem compacta:', file.name);
-        setError(true);
-      }}
-      loading="lazy"
-      unoptimized
-    />
+    <div className="w-9 h-9 rounded border border-zinc-700/50 overflow-hidden">
+      <LazyThumbnail
+        src={getThumbnailUrl(file.name)}
+        alt={file.title || file.displayName}
+        className="w-9 h-9"
+        onError={() => {
+          console.warn('Erro ao carregar imagem compacta:', file.name);
+          setError(true);
+        }}
+      />
+    </div>
   );
 });
 
@@ -273,7 +271,8 @@ const DynamicFileItem = memo(({
   isLoading,
   isAdding,
   isRemoving,
-  addToast
+  addToast,
+  onExtractMidi
 }: {
   fileIndex: number; 
   file: FileInfo; 
@@ -293,15 +292,21 @@ const DynamicFileItem = memo(({
   isAdding?: boolean;
   isRemoving?: boolean;
   addToast?: (toast: { title: string }) => void;
+  onExtractMidi?: (file: FileInfo) => void;
 }) => {
   const [itemColor, setItemColor] = useState<{ rgb: string; rgba: (opacity: number) => string }>({
     rgb: '16, 185, 129',
     rgba: (opacity: number) => `rgba(16, 185, 129, ${opacity})`
   });
   const [imageError, setImageError] = useState(false);
+  const [isNearViewport, setIsNearViewport] = useState(false);
 
   // Memoizar thumbnail URL para evitar recálculos e recarregamentos
   const thumbnailUrl = useMemo(() => getThumbnailUrl(file.name), [file.name]);
+
+  const handleThumbnailVisible = useCallback(() => {
+    setIsNearViewport(true);
+  }, []);
 
   // Sincronizar cor quando dominantColors mudar (apenas para este arquivo)
   useEffect(() => {
@@ -311,50 +316,33 @@ const DynamicFileItem = memo(({
     }
   }, [dominantColors[file.name], file.name]); // Apenas reage quando a cor específica deste arquivo mudar
 
-  // Otimizar carregamento de cor com throttling
+  // Extrair cor só quando o card estiver perto da viewport (evita dezenas de requests no scroll)
   useEffect(() => {
+    if (!isNearViewport) return;
+
     let isCancelled = false;
-    
+
     const loadColor = async () => {
-      // Verificar se já temos a cor em cache
       const cachedColor = dominantColors[file.name];
       if (cachedColor) {
-        if (!isCancelled) {
-          setItemColor(cachedColor);
-        }
+        if (!isCancelled) setItemColor(cachedColor);
         return;
       }
-      
-      // Throttle para evitar chamadas excessivas
-      await new Promise(resolve => setTimeout(resolve, 200));
-      
-      if (isCancelled) return;
-      
-      // Verificar novamente após o throttle (pode ter sido adicionado por outro componente)
-      const cachedColorAfterDelay = dominantColors[file.name];
-      if (cachedColorAfterDelay) {
-        if (!isCancelled) {
-          setItemColor(cachedColorAfterDelay);
-        }
-        return;
-      }
-      
+
       try {
         const color = await extractDominantColor(file.name, thumbnailUrl);
-        if (!isCancelled) {
-          setItemColor(color);
-        }
+        if (!isCancelled) setItemColor(color);
       } catch (error) {
         console.error('Erro ao carregar cor:', error);
       }
     };
-    
+
     loadColor();
-    
+
     return () => {
       isCancelled = true;
     };
-  }, [file.name, thumbnailUrl, extractDominantColor]); // Removido dominantColors da dependência para evitar loops
+  }, [file.name, thumbnailUrl, extractDominantColor, isNearViewport]);
 
   // Memoizar verificação de metadados completos
   const isComplete = useMemo(() => Boolean(
@@ -438,24 +426,14 @@ const DynamicFileItem = memo(({
                   </svg>
                 </div>
               ) : (
-                <Image
+                <LazyThumbnail
                   src={thumbnailUrl}
                   alt={file.title || file.displayName}
-                  width={130}
-                  height={130}
-                  className="object-cover w-full h-full"
-                  style={{ 
-                    width: '100%', 
-                    height: '100%',
-                    minHeight: '100%',
-                    objectFit: 'cover'
-                  }}
+                  onVisible={handleThumbnailVisible}
                   onError={() => {
                     console.warn('Erro ao carregar imagem:', file.name);
                     setImageError(true);
                   }}
-                  loading="lazy"
-                  unoptimized
                 />
               )}
               
@@ -493,6 +471,37 @@ const DynamicFileItem = memo(({
               {/* Botões de ação - Canto superior direito */}
               <div className="flex items-center gap-1.5 absolute top-3 right-3 z-10">
                 <StarButton file={file} size="sm" />
+
+                {onExtractMidi && (
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onExtractMidi(file);
+                    }}
+                    className="w-7 h-7 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center"
+                    style={{
+                      background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%)',
+                      color: 'rgb(16, 185, 129)',
+                      border: '1px solid rgba(16, 185, 129, 0.4)',
+                      boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                      e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+                    }}
+                    title="Extrair MIDIs (bateria, bass, leads, synths...) para Ableton"
+                    type="button"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                    </svg>
+                  </button>
+                )}
                 
                 <button
                   onClick={(e) => {
@@ -673,6 +682,44 @@ const DynamicFileItem = memo(({
 });
 
 DynamicFileItem.displayName = 'DynamicFileItem';
+
+function getDownloadTimestamp(file: { downloadedAt?: string; fileCreatedAt?: string }): number {
+  if (file.downloadedAt) return new Date(file.downloadedAt).getTime();
+  if (file.fileCreatedAt) return new Date(file.fileCreatedAt).getTime();
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function buildAlbumLatestMap(files: FileInfo[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const file of files) {
+    const album = (file.album || '').trim();
+    if (!album) continue;
+    if (!file.downloadedAt && !file.fileCreatedAt) continue;
+    const ts = getDownloadTimestamp(file);
+    const prev = map.get(album);
+    if (prev === undefined || ts > prev) map.set(album, ts);
+  }
+  return map;
+}
+
+function compareByAlbumThenDownload(
+  a: FileInfo,
+  b: FileInfo,
+  albumLatest: Map<string, number>
+): number {
+  const albumA = (a.album || '').trim();
+  const albumB = (b.album || '').trim();
+  if (!albumA && !albumB) return getDownloadTimestamp(b) - getDownloadTimestamp(a);
+  if (!albumA) return 1;
+  if (!albumB) return -1;
+  if (albumA !== albumB) {
+    const latestA = albumLatest.get(albumA) ?? 0;
+    const latestB = albumLatest.get(albumB) ?? 0;
+    if (latestB !== latestA) return latestB - latestA;
+    return albumA.localeCompare(albumB, undefined, { sensitivity: 'base' });
+  }
+  return getDownloadTimestamp(a) - getDownloadTimestamp(b);
+}
 
 export default function FileList() {
   
@@ -1157,7 +1204,6 @@ export default function FileList() {
       );
     });
 
-    // Aplicar ordenação apenas se o usuário selecionou uma coluna específica
     if (sortBy) {
       filtered.sort((a, b) => {
         let valA, valB;
@@ -1219,12 +1265,27 @@ export default function FileList() {
         const cmp = compare(valA, valB);
         return sortOrder === 'asc' ? cmp : -cmp;
       });
+    } else {
+      const albumLatest = buildAlbumLatestMap(filtered);
+      filtered.sort((a, b) => compareByAlbumThenDownload(a, b, albumLatest));
     }
 
     return filtered;
   }, [files, search, sortBy, sortOrder]);
 
-  const [groupByField, setGroupByField] = useState<string>('');
+  const [groupByField, setGroupByField] = useState<string>('album');
+
+  useEffect(() => {
+    const saved = safeGetItem<string>('uiGroupByField');
+    if (saved !== null) {
+      setGroupByField(saved);
+    }
+  }, []);
+
+  useEffect(() => {
+    safeSetItem('uiGroupByField', groupByField, { maxSize: 1024 });
+    setGroupByAlbum(groupByField === 'album');
+  }, [groupByField, setGroupByAlbum]);
 
   // Lista de campos possíveis para agrupar
   const groupableFields = [
@@ -1238,24 +1299,36 @@ export default function FileList() {
     { value: 'bpm', label: 'BPM' },
   ];
 
-  // Memoizando o agrupamento
   const groupedFiles = useMemo(() => {
     const sorted = sortedFiles();
     if (!groupByField) return { '': sorted };
-    return sorted.reduce((groups, file) => {
-      // Acessar campo de forma segura
+    const groups = sorted.reduce((acc, file) => {
       let groupValue: string = '';
       if (groupByField in file) {
         // @ts-ignore
         groupValue = file[groupByField] ?? '';
       }
       if (!groupValue) groupValue = 'Sem valor';
-      if (!groups[groupValue]) {
-        groups[groupValue] = [];
+      if (!acc[groupValue]) {
+        acc[groupValue] = [];
       }
-      groups[groupValue].push(file);
-      return groups;
+      acc[groupValue].push(file);
+      return acc;
     }, {} as Record<string, FileInfo[]>);
+
+    const entries = Object.entries(groups);
+    if (groupByField === 'album') {
+      entries.sort(([nameA, filesA], [nameB, filesB]) => {
+        if (nameA === 'Sem valor') return 1;
+        if (nameB === 'Sem valor') return -1;
+        const maxA = Math.max(...filesA.map(getDownloadTimestamp));
+        const maxB = Math.max(...filesB.map(getDownloadTimestamp));
+        return maxB - maxA;
+      });
+    } else {
+      entries.sort(([a], [b]) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }
+    return Object.fromEntries(entries);
   }, [sortedFiles, groupByField]);
 
   const openDownloadsFolder = () => {
@@ -2034,6 +2107,32 @@ export default function FileList() {
   }, [setColWidths]);
 
   const [editModalFile, setEditModalFile] = useState<FileInfo | null>(null);
+  const [midiExportFile, setMidiExportFile] = useState<FileInfo | null>(null);
+  const [showMidiPackModal, setShowMidiPackModal] = useState(false);
+
+  const toMidiPackTrack = useCallback(
+    (f: FileInfo): MidiPackTrackInput => ({
+      name: f.name,
+      title: f.title,
+      displayName: f.displayName,
+      artist: f.artist,
+      bpm: f.bpm,
+      key: f.key,
+      genre: f.genre,
+      folder: f.folder,
+    }),
+    []
+  );
+
+  const midiPackAllTracks = useMemo(
+    () => pickBestTracksForMidiPack(files.map(toMidiPackTrack)),
+    [files, toMidiPackTrack]
+  );
+
+  const midiPackFilteredTracks = useMemo(
+    () => pickBestTracksForMidiPack(sortedFiles().map(toMidiPackTrack)),
+    [sortedFiles, toMidiPackTrack]
+  );
 
   const handleEditFileSave = async (data: Partial<FileInfo>) => {
     if (!editModalFile) return;
@@ -2322,6 +2421,19 @@ export default function FileList() {
                </span>
              </div>
 
+            <button
+              type="button"
+              onClick={() => setShowMidiPackModal(true)}
+              disabled={files.length === 0}
+              className="flex items-center gap-2 rounded-xl text-xs font-medium px-3 py-2 backdrop-blur-sm border transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25 hover:border-emerald-500/50"
+              title="Pack MIDI em segundo plano (FLAC + extração do áudio)"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              <span>Pack MIDI</span>
+            </button>
+
             {/* Botão para atualizar arquivos fora do padrão Beatport */}
             {(() => {
               // Considerar fora do padrão Beatport se faltar metadados essenciais
@@ -2521,6 +2633,34 @@ export default function FileList() {
 
                     <div className="flex-shrink-0 ml-2 flex items-center gap-2">
                       <StarButton file={file} size="sm" />
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setMidiExportFile(file);
+                        }}
+                        className="w-7 h-7 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%)',
+                          color: 'rgb(16, 185, 129)',
+                          border: '1px solid rgba(16, 185, 129, 0.4)',
+                          boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
+                          e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                          e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
+                        }}
+                        title="Extrair MIDIs para Ableton"
+                        type="button"
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                        </svg>
+                      </button>
                       {/* Botão YouTube Music */}
                       <button
                         onClick={(e) => {
@@ -2660,6 +2800,7 @@ export default function FileList() {
                   isAdding={isAdding}
                   isRemoving={isRemoving}
                   addToast={addToast}
+                  onExtractMidi={setMidiExportFile}
                 />
                 );
               })}
@@ -2696,6 +2837,19 @@ export default function FileList() {
           files={files}
         />
       )}
+
+      <MidiExportModal
+        isOpen={!!midiExportFile}
+        onClose={() => setMidiExportFile(null)}
+        file={midiExportFile}
+      />
+
+      <MidiPackExportModal
+        isOpen={showMidiPackModal}
+        onClose={() => setShowMidiPackModal(false)}
+        allTracks={midiPackAllTracks}
+        filteredTracks={midiPackFilteredTracks}
+      />
     </div>
   );
 }

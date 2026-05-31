@@ -1,6 +1,7 @@
 import { readFile, writeFile, access, constants, stat, unlink, readdir, rename, copyFile, mkdir } from 'fs/promises';
+import { existsSync, readdirSync } from 'fs';
 import { join, isAbsolute, dirname } from 'path';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
@@ -191,6 +192,143 @@ export async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+/** Pasta onde ficam faixas “fora do padrão Beatport” (mesmo nome na API é só o basename). */
+export const NAO_NORMALIZADAS_DIR = 'nao-normalizadas';
+
+/**
+ * Segmentos relativos seguros (sem path traversal).
+ */
+export function safeRelativePathSegments(decodedFilename: string): string[] | null {
+  const segments = decodedFilename.replace(/\\/g, '/').split('/').filter(Boolean);
+  if (segments.some((s) => s === '..' || s === '.')) return null;
+  return segments;
+}
+
+/**
+ * Compara nomes de arquivo como o player os vê (case-insensitive, colapsa espaços).
+ * Evita falha quando a URL tem " -  " e no disco está " - ".
+ */
+export function filenamesMatchForPlayback(a: string, b: string): boolean {
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (norm(a) === norm(b)) return true;
+  const base = (s: string) => s.replace(/\.[^/.]+$/, '');
+  return norm(base(a)) === norm(base(b));
+}
+
+function tryFindByLooseBasenameSync(dir: string, targetBasename: string): string | null {
+  if (!existsSync(dir)) return null;
+  let files: string[];
+  try {
+    files = readdirSync(dir);
+  } catch {
+    return null;
+  }
+  const hit = files.find((f) => filenamesMatchForPlayback(f, targetBasename));
+  return hit ? join(dir, hit) : null;
+}
+
+/**
+ * Resolve arquivo em downloads: caminho relativo explícito, ou basename na raiz, ou basename em nao-normalizadas.
+ */
+export function resolveAudioFileUnderDownloads(
+  downloadsRoot: string,
+  decodedFilename: string
+): string | null {
+  const segments = safeRelativePathSegments(decodedFilename);
+  if (!segments?.length) return null;
+  const direct = join(downloadsRoot, ...segments);
+  if (existsSync(direct)) return direct;
+  if (segments.length === 1) {
+    const basename = segments[0];
+    const underNao = join(downloadsRoot, NAO_NORMALIZADAS_DIR, basename);
+    if (existsSync(underNao)) return underNao;
+    const looseRoot = tryFindByLooseBasenameSync(downloadsRoot, basename);
+    if (looseRoot) return looseRoot;
+    const looseNao = tryFindByLooseBasenameSync(join(downloadsRoot, NAO_NORMALIZADAS_DIR), basename);
+    if (looseNao) return looseNao;
+  }
+  return null;
+}
+
+const AUDIO_FORMAT_PRIORITY = ['flac', 'wav', 'm4a', 'mp3'] as const;
+
+function audioFormatRank(filename: string): number {
+  const ext = filename.split('.').pop()?.toLowerCase() || '';
+  const idx = AUDIO_FORMAT_PRIORITY.indexOf(ext as (typeof AUDIO_FORMAT_PRIORITY)[number]);
+  return idx >= 0 ? AUDIO_FORMAT_PRIORITY.length - idx : 0;
+}
+
+/**
+ * Mesmo basename, melhor extensão disponível (FLAC > WAV > M4A > MP3).
+ */
+export function resolveBestAudioFileUnderDownloads(
+  downloadsRoot: string,
+  decodedFilename: string
+): string | null {
+  const segments = safeRelativePathSegments(decodedFilename);
+  if (!segments?.length) return null;
+
+  const basename = segments[segments.length - 1];
+  const baseNoExt = basename.replace(/\.[^.]+$/i, '');
+  const prefix = segments.length > 1 ? segments.slice(0, -1) : [];
+
+  let bestPath: string | null = null;
+  let bestRank = -1;
+
+  for (const ext of AUDIO_FORMAT_PRIORITY) {
+    const candidateName = [...prefix, `${baseNoExt}.${ext}`].join('/');
+    const resolved = resolveAudioFileUnderDownloads(downloadsRoot, candidateName);
+    if (!resolved) continue;
+    const rank = audioFormatRank(resolved);
+    if (rank > bestRank) {
+      bestRank = rank;
+      bestPath = resolved;
+    }
+  }
+
+  return bestPath;
+}
+
+const COVER_ART_VIDEO_CODECS = new Set([
+  'mjpeg',
+  'mjpegb',
+  'png',
+  'webp',
+  'bmp',
+  'gif',
+  'jpeg',
+  'ljpeg',
+  'ppm',
+]);
+
+export function streamLooksLikeEmbeddedCover(stream: {
+  codec_type?: string;
+  codec_name?: string;
+  disposition?: { attached_pic?: number };
+}): boolean {
+  if (stream.codec_type !== 'video') return false;
+  if (stream.disposition?.attached_pic === 1) return true;
+  const name = (stream.codec_name || '').toLowerCase();
+  return COVER_ART_VIDEO_CODECS.has(name);
+}
+
+/** Índice do stream ffprobe a mapear com -map 0:N para extrair capa; -1 se não houver. */
+export function pickEmbeddedCoverStreamIndex(streams: unknown[]): number {
+  if (!Array.isArray(streams)) return -1;
+  let firstCover = -1;
+  for (let i = 0; i < streams.length; i++) {
+    const s = streams[i] as {
+      codec_type?: string;
+      codec_name?: string;
+      disposition?: { attached_pic?: number };
+    };
+    if (!streamLooksLikeEmbeddedCover(s)) continue;
+    if (s.disposition?.attached_pic === 1) return i;
+    if (firstCover < 0) firstCover = i;
+  }
+  return firstCover;
+}
+
 export function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -207,6 +345,73 @@ export function formatDurationShort(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.floor(seconds % 60);
   return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Reverte escapes de shell que foram gravados por engano nos tags (ex.: `\&` → `&`).
+ */
+export function sanitizeMetadataForDisplay(value: string | null | undefined): string | null {
+  if (value == null || value === '') return value ?? null;
+  return value
+    .replace(/\\&/g, '&')
+    .replace(/\\\|/g, '|')
+    .replace(/\\;/g, ';')
+    .replace(/\\</g, '<')
+    .replace(/\\>/g, '>')
+    .replace(/\\:/g, ':')
+    .replace(/\\\*/g, '*')
+    .replace(/\\\?/g, '?')
+    .replace(/\\\[/g, '[')
+    .replace(/\\\]/g, ']')
+    .replace(/\\"/g, '"')
+    .replace(/\\\$/g, '$')
+    .replace(/\\`/g, '`')
+    .trim();
+}
+
+export type FfmpegMetadataEntry = { key: string; value: string };
+
+/** Grava metadados em FLAC via ffmpeg sem passar pelo shell (evita `\&` nos tags). */
+export async function runFfmpegCopyWithMetadata(
+  inputPath: string,
+  outputPath: string,
+  metadata: FfmpegMetadataEntry[],
+  options?: { format?: string; timeoutMs?: number }
+): Promise<void> {
+  const args = ['-y', '-i', inputPath, '-c', 'copy'];
+  for (const { key, value } of metadata) {
+    if (value) {
+      args.push('-metadata', `${key}=${value}`);
+    }
+  }
+  if (options?.format) {
+    args.push('-f', options.format);
+  }
+  args.push(outputPath);
+
+  const timeoutMs = options?.timeoutMs ?? 60000;
+
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn('ffmpeg', args, { windowsHide: true });
+    let stderr = '';
+    const timer = setTimeout(() => {
+      proc.kill();
+      reject(new Error('ffmpeg timeout'));
+    }, timeoutMs);
+
+    proc.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg failed (${code}): ${stderr.slice(-500)}`));
+    });
+  });
 }
 
 export function sanitizeYear(year: string | number): string {
@@ -322,6 +527,48 @@ export function extractArtistTitle(
   }
 
   return { artist: artist || '', title: title };
+}
+
+type ExecLikeError = Error & { stderr?: string; stdout?: string };
+
+/**
+ * Mensagem amigável para erros de yt-dlp/exec (ex.: disco cheio).
+ * O log completo continua sendo feito pelo caller com console.error.
+ */
+export function getDownloadUserFacingError(
+  error: unknown,
+  fallbackMessage = 'Erro ao processar o download'
+): string {
+  if (!(error instanceof Error)) {
+    return fallbackMessage;
+  }
+
+  const execErr = error as ExecLikeError;
+  const stderr = typeof execErr.stderr === 'string' ? execErr.stderr : '';
+  const stdout = typeof execErr.stdout === 'string' ? execErr.stdout : '';
+  const blob = `${error.message}\n${stderr}\n${stdout}`.toLowerCase();
+  const errno = (error as NodeJS.ErrnoException).code;
+
+  if (
+    errno === 'ENOSPC' ||
+    blob.includes('errno 28') ||
+    blob.includes('no space left on device')
+  ) {
+    return (
+      'Sem espaço em disco: o download não pôde gravar arquivos. Libere espaço na pasta de músicas ' +
+      '(e na unidade onde ela está) e no disco usado pelo diretório temporário do sistema (%TEMP%), ' +
+      'pois yt-dlp e a conversão de áudio também precisam de espaço livre ali.'
+    );
+  }
+
+  if (blob.includes('sign in to confirm') || blob.includes("you're not a bot")) {
+    return (
+      'O YouTube bloqueou a requisição (detecção de bot). ' +
+      'Atualize o yt-dlp, exporte cookies do navegador para cookies.txt na raiz do projeto, ou tente novamente em alguns minutos.'
+    );
+  }
+
+  return error.message;
 }
 
 /**

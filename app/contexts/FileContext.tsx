@@ -57,6 +57,9 @@ interface FileContextType {
 
 const FileContext = createContext<FileContextType | undefined>(undefined);
 
+/** /api/files pode rodar ffprobe em cada faixa — precisa de margem generosa */
+const FILES_FETCH_TIMEOUT_MS = 90_000;
+
 // Função otimizada para comparar arrays de arquivos
 const compareFileArrays = (arr1: FileInfo[], arr2: FileInfo[]): boolean => {
   if (arr1.length !== arr2.length) return false;
@@ -89,7 +92,8 @@ export function FileProvider({ children }: { children: ReactNode }) {
   const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   // Ref para controlar se é a inicialização (evitar fetch duplicado)
   const isInitializingRef = useRef(true);
-  
+  const filesFetchAbortRef = useRef<AbortController | null>(null);
+
   const fetchFiles = useCallback(async (force = false, skipLoading = false) => {
     // Se está fazendo fetch e não é forçado, agendar para depois (mas não bloquear completamente)
     if (isFetchingRef.current && !force) {
@@ -113,21 +117,27 @@ export function FileProvider({ children }: { children: ReactNode }) {
         clearTimeout(loadingTimeoutRef.current);
       }
       loadingTimeoutRef.current = setTimeout(() => {
-        console.warn('⚠️ [FileContext] Timeout de segurança: forçando loading = false após 30s');
+        console.warn(
+          `⚠️ [FileContext] Timeout de segurança: forçando loading = false após ${FILES_FETCH_TIMEOUT_MS / 1000}s`
+        );
         setLoading(false);
         isFetchingRef.current = false;
-      }, 30000);
+      }, FILES_FETCH_TIMEOUT_MS + 5_000);
     }
     
-    // Criar AbortController para timeout manual (compatibilidade)
+    filesFetchAbortRef.current?.abort('superseded');
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 25000);
-    
+    filesFetchAbortRef.current = controller;
+    const timeoutId = setTimeout(
+      () => controller.abort('timeout'),
+      FILES_FETCH_TIMEOUT_MS
+    );
+
     try {
       const response = await fetch('/api/files', {
         signal: controller.signal
       });
-      
+
       clearTimeout(timeoutId);
       
       if (!response.ok) {
@@ -262,17 +272,25 @@ export function FileProvider({ children }: { children: ReactNode }) {
         console.log(`📋 [FileContext] Lista atualizada: ${prevFiles.length} -> ${optimizedFiles.length} arquivos`);
         return optimizedFiles;
       });
-    } catch (error: any) {
-      clearTimeout(timeoutId); // Garantir limpeza em caso de erro
-      console.error('❌ [FileContext] Erro ao carregar arquivos:', error);
-      // Em caso de erro, ainda definir files como array vazio para não ficar em loading infinito
-      setFiles([]);
-      
-      // Se for erro de timeout ou abort, logar especificamente
-      if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
-        console.warn('⚠️ [FileContext] Requisição cancelada ou timeout');
+    } catch (error: unknown) {
+      clearTimeout(timeoutId);
+      const isAbort =
+        (error instanceof DOMException || error instanceof Error) &&
+        error.name === 'AbortError';
+      if (isAbort) {
+        if (controller.signal.reason === 'timeout') {
+          console.warn(
+            `⚠️ [FileContext] Lista de arquivos demorou mais de ${FILES_FETCH_TIMEOUT_MS / 1000}s — mantendo lista atual`
+          );
+        }
+        return;
       }
+      console.error('❌ [FileContext] Erro ao carregar arquivos:', error);
+      setFiles([]);
     } finally {
+      if (filesFetchAbortRef.current === controller) {
+        filesFetchAbortRef.current = null;
+      }
       // Limpar timeout de segurança
       if (loadingTimeoutRef.current) {
         clearTimeout(loadingTimeoutRef.current);

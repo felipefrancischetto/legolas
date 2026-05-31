@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Barrio } from "next/font/google";
 import "./globals.css";
 import { DownloadProvider } from './contexts/DownloadContext';
+import { MidiPackExportProvider } from './contexts/MidiPackExportContext';
 import { FileProvider } from './contexts/FileContext';
 import { UIProvider } from './contexts/UIContext';
 import { PlayerProvider } from './contexts/PlayerContext';
@@ -32,15 +33,17 @@ export default function RootLayout({
         <GlobalErrorHandler />
         <ErrorBoundary>
           <DownloadProvider>
-            <FileProvider>
-              <UIProvider>
-                <PlayerProvider>
-                  <QuickPlaylistProvider>
-                    {children}
-                  </QuickPlaylistProvider>
-                </PlayerProvider>
-              </UIProvider>
-            </FileProvider>
+            <MidiPackExportProvider>
+              <FileProvider>
+                <UIProvider>
+                  <PlayerProvider>
+                    <QuickPlaylistProvider>
+                      {children}
+                    </QuickPlaylistProvider>
+                  </PlayerProvider>
+                </UIProvider>
+              </FileProvider>
+            </MidiPackExportProvider>
           </DownloadProvider>
         </ErrorBoundary>
       </body>

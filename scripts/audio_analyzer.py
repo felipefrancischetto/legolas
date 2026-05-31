@@ -2467,6 +2467,609 @@ def generate_temporal_arrangement_v2(y, sr, duration, bpm, y_harm, y_perc,
 
 
 # ──────────────────────────────────────────────────────────────────
+# 15. EXTRAÇÃO DE EVENTOS MIDI (onsets + pitch do áudio)
+# ──────────────────────────────────────────────────────────────────
+
+def _select_extraction_segment(y, sr, bpm, target_beats=64):
+    """
+    Escolhe o trecho com mais energia (drop/chorus) em vez do início da faixa.
+    Retorna (y_segment, start_sec, beats_no_segmento).
+    """
+    if not bpm or bpm <= 0:
+        bpm = 128.0
+    beat_dur = 60.0 / float(bpm)
+    target_samples = int(target_beats * beat_dur * sr)
+
+    if len(y) <= target_samples:
+        beats = len(y) / float(sr) / beat_dur
+        return y, 0.0, beats
+
+    hop = 512
+    rms = librosa.feature.rms(y=y, hop_length=hop)[0]
+    frames_per_beat = max(1, int(round(beat_dur * sr / hop)))
+    beats_total = max(1, len(rms) // frames_per_beat)
+    window_beats = int(min(target_beats, beats_total))
+
+    if beats_total <= window_beats:
+        return y, 0.0, beats_total
+
+    beat_energies = []
+    for b in range(0, beats_total - window_beats + 1):
+        f0 = b * frames_per_beat
+        f1 = min(len(rms), (b + window_beats) * frames_per_beat)
+        beat_energies.append(float(np.mean(rms[f0:f1])))
+
+    best_b = int(np.argmax(beat_energies))
+    start_sample = int(best_b * beat_dur * sr)
+    end_sample = min(len(y), start_sample + target_samples)
+    y_seg = y[start_sample:end_sample]
+    actual_beats = len(y_seg) / float(sr) / beat_dur
+    return y_seg, start_sample / float(sr), actual_beats
+
+
+def _bandpass_istft(y, sr, fmin, fmax):
+    """Isola uma faixa de frequência via STFT para detecção de onsets/pitch."""
+    D = librosa.stft(y)
+    freqs = librosa.fft_frequencies(sr=sr)
+    mask = (freqs >= fmin) & (freqs <= fmax)
+    D_filt = np.zeros_like(D)
+    D_filt[mask] = D[mask]
+    y_out = librosa.istft(D_filt)
+    peak = float(np.max(np.abs(y_out)) + 1e-10)
+    return y_out / peak
+
+
+def _quantize_onsets_to_events(onset_times, onset_strengths, bpm, max_beats=32, grid_div=4):
+    """
+    Converte onsets (segundos) em eventos MIDI quantizados em compassos de 4/4.
+    grid_div=4 → semínimas; 8 → colcheias; 16 → semicolcheias.
+    """
+    if not onset_times or len(onset_times) == 0 or not bpm or bpm <= 0:
+        return []
+
+    beat_dur = 60.0 / float(bpm)
+    step = beat_dur / grid_div
+    events = []
+    last_q = -1.0
+
+    for i, t in enumerate(onset_times):
+        if t < 0:
+            continue
+        beat = t / beat_dur
+        if beat >= max_beats:
+            break
+        q_beat = round(beat * grid_div) / grid_div
+        if q_beat == last_q:
+            continue
+        last_q = q_beat
+
+        strength = float(onset_strengths[i]) if onset_strengths is not None and i < len(onset_strengths) else 0.5
+        vel = int(np.clip(55 + strength * 70, 40, 127))
+        events.append({
+            "beat": round(float(q_beat), 4),
+            "duration_beats": round(1.0 / grid_div, 4),
+            "velocity": vel,
+        })
+
+    return events
+
+
+def _extract_drum_stem_events(y_band, sr, bpm, max_beats, grid_div=4):
+    """Detecta onsets em um sinal já filtrado por banda."""
+    try:
+        onset_env = librosa.onset.onset_strength(y=y_band, sr=sr, aggregate=np.median)
+        onset_frames = librosa.onset.onset_detect(
+            onset_envelope=onset_env, sr=sr, units='frames', backtrack=True,
+            delta=0.04, wait=max(2, 4 - grid_div // 4),
+        )
+        onset_times = librosa.frames_to_time(onset_frames, sr=sr)
+        strengths = onset_env[onset_frames] if len(onset_frames) > 0 else []
+        strengths = strengths / (np.max(strengths) + 1e-10) if len(strengths) > 0 else strengths
+        events = _quantize_onsets_to_events(onset_times, strengths, bpm, max_beats, grid_div)
+        if len(events) >= 2:
+            return events
+
+        # Fallback: onsets no percussivo bruto com limiar mais baixo
+        onset_env2 = librosa.onset.onset_strength(y=y_band, sr=sr)
+        onset_frames2 = librosa.onset.onset_detect(
+            onset_envelope=onset_env2, sr=sr, units='time', backtrack=True, delta=0.02
+        )
+        if len(onset_frames2) >= 2:
+            strengths2 = np.ones(len(onset_frames2)) * 0.7
+            return _quantize_onsets_to_events(onset_frames2, strengths2, bpm, max_beats, grid_div)
+        return []
+    except Exception:
+        return []
+
+
+def _extract_kick_from_beats(y_perc, sr, bpm, max_beats):
+    """Fallback: kick alinhado à grade de beats quando onsets por banda falham."""
+    try:
+        _tempo, beat_frames = librosa.beat.beat_track(y=y_perc, sr=sr, bpm=float(bpm))
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+        beat_dur = 60.0 / float(bpm)
+        events = []
+        for t in beat_times:
+            beat = t / beat_dur
+            if beat >= max_beats:
+                break
+            q_beat = round(beat * 4) / 4
+            events.append({
+                "beat": round(float(q_beat), 4),
+                "duration_beats": 0.25,
+                "midi": 36,
+                "velocity": 100,
+            })
+        return events
+    except Exception:
+        return []
+
+
+def _extract_backbeat_snare(y_perc, sr, bpm, max_beats):
+    """Fallback: snare/clap nos tempos 2 e 4."""
+    try:
+        beat_dur = 60.0 / float(bpm)
+        events = []
+        beat = 1.0
+        while beat < max_beats:
+            events.append({
+                "beat": round(float(beat), 4),
+                "duration_beats": 0.25,
+                "midi": 38,
+                "velocity": 90,
+            })
+            beat += 2.0
+        return events if len(events) >= 2 else []
+    except Exception:
+        return []
+
+
+def _hz_to_midi_note(hz):
+    if hz is None or np.isnan(hz) or hz <= 0:
+        return None
+    midi = int(round(69 + 12 * np.log2(hz / 440.0)))
+    return int(np.clip(midi, 24, 84))
+
+
+def _extract_bass_pitch_events(y_harm, sr, bpm, key, max_beats=32):
+    """Extrai contorno de pitch do baixo com pyin."""
+    try:
+        y_bass = _bandpass_istft(y_harm, sr, 35, 280)
+        f0, voiced_flag, _ = librosa.pyin(
+            y_bass, fmin=librosa.note_to_hz('C1'), fmax=librosa.note_to_hz('C3'),
+            sr=sr, fill_na=np.nan
+        )
+        hop = 512
+        times = librosa.frames_to_time(np.arange(len(f0)), sr=sr, hop_length=hop)
+        beat_dur = 60.0 / float(bpm) if bpm and bpm > 0 else 0.5
+        step = beat_dur / 4  # semicolcheias
+
+        events = []
+        last_beat = -1.0
+        last_midi = None
+
+        for t, hz, voiced in zip(times, f0, voiced_flag):
+            if not voiced or np.isnan(hz):
+                continue
+            beat = t / beat_dur
+            if beat >= max_beats:
+                break
+            q_beat = round(beat * 4) / 4
+            if q_beat == last_beat:
+                continue
+            midi = _hz_to_midi_note(hz)
+            if midi is None:
+                continue
+            # Evita saltos enormes (artefatos)
+            if last_midi is not None and abs(midi - last_midi) > 12:
+                continue
+            last_beat = q_beat
+            last_midi = midi
+            events.append({
+                "beat": round(float(q_beat), 4),
+                "duration_beats": 0.5,
+                "midi": midi,
+                "velocity": 88,
+            })
+
+        return events
+    except Exception as e:
+        sys.stderr.write(f"[Warning] extração de baixo falhou: {e}\n")
+        return []
+
+
+# Escalas para snap de pitch classes do cromagrama
+_MAJOR_SCALE = [0, 2, 4, 5, 7, 9, 11]
+_MINOR_SCALE = [0, 2, 3, 5, 7, 8, 10]
+
+
+def _parse_key_root(key):
+    """Retorna (root_pc 0-11, is_minor)."""
+    if not key:
+        return 0, True
+    key = str(key).strip()
+    notes = {'C': 0, 'C#': 1, 'Db': 1, 'D': 2, 'D#': 3, 'Eb': 3, 'E': 4, 'F': 5,
+             'F#': 6, 'Gb': 6, 'G': 7, 'G#': 8, 'Ab': 8, 'A': 9, 'A#': 10, 'Bb': 10, 'B': 11}
+    is_minor = key.lower().endswith('m') and not key.lower().endswith('maj')
+    base = key.rstrip('mM').split()[0]
+    for token in (base, key.split()[0]):
+        if token in notes:
+            return notes[token], is_minor
+    return 0, True
+
+
+def _snap_pc_to_scale(pc, root, is_minor):
+    scale = _MINOR_SCALE if is_minor else _MAJOR_SCALE
+    scale_pcs = {(root + deg) % 12 for deg in scale}
+    if pc in scale_pcs:
+        return pc
+    best = pc
+    best_dist = 99
+    for sp in scale_pcs:
+        d = min((pc - sp) % 12, (sp - pc) % 12)
+        if d < best_dist:
+            best_dist = d
+            best = sp
+    return best
+
+
+def _pc_to_midi(pc, octave):
+    return int(np.clip((octave + 2) * 12 + (pc % 12), 36, 96))
+
+
+def _chroma_for_band(y_harm, sr, fmin, fmax, hop_length=512):
+    y_band = _bandpass_istft(y_harm, sr, fmin, fmax)
+    return librosa.feature.chroma_cqt(y=y_band, sr=sr, hop_length=hop_length)
+
+
+def _layer_to_synth_stem_key(layer):
+    cat = (layer.get("category") or "").lower()
+    name = (layer.get("name") or "").lower()
+    if cat == "pads" or "pad" in name:
+        return "synth_pad"
+    if cat == "leads" or "lead" in name:
+        return "synth_lead"
+    if cat == "arps" or "arp" in name or "sequ" in name:
+        return "synth_arp"
+    if cat == "fx" or "fx" in name or "riser" in name or "sweep" in name:
+        return "synth_fx"
+    if cat == "textures" or "textur" in name or "atmo" in name:
+        return "synth_texture"
+    return None
+
+
+def _extract_pad_chroma_events(y_harm, sr, bpm, key, max_beats):
+    """Pads: acordes por compasso a partir do cromagrama (grave-médio)."""
+    try:
+        chroma = _chroma_for_band(y_harm, sr, 180, 1400)
+        root, is_minor = _parse_key_root(key)
+        hop = 512
+        times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=hop)
+        beat_dur = 60.0 / float(bpm)
+        events = []
+
+        bar_start = 0.0
+        while bar_start < max_beats:
+            bar_end = min(bar_start + 4.0, max_beats)
+            mask = (times >= bar_start * beat_dur) & (times < bar_end * beat_dur)
+            if not np.any(mask):
+                break
+            bar_chroma = np.mean(chroma[:, mask], axis=1)
+            peak = float(np.max(bar_chroma) + 1e-10)
+            threshold = peak * 0.5
+
+            active_pcs = []
+            for pc in range(12):
+                if bar_chroma[pc] >= threshold:
+                    snapped = _snap_pc_to_scale(pc, root, is_minor)
+                    if snapped not in active_pcs:
+                        active_pcs.append(snapped)
+            active_pcs.sort(key=lambda p: bar_chroma[p], reverse=True)
+            active_pcs = active_pcs[:4]
+
+            if len(active_pcs) < 2:
+                bar_start += 4.0
+                continue
+
+            vel_base = int(np.clip(55 + peak * 120, 50, 100))
+            for i, pc in enumerate(active_pcs):
+                events.append({
+                    "beat": round(float(bar_start), 4),
+                    "duration_beats": round(min(3.9, bar_end - bar_start - 0.05), 4),
+                    "midi": _pc_to_midi(pc, 3 + (i // 2)),
+                    "velocity": vel_base - i * 4,
+                })
+            bar_start += 4.0
+
+        return events
+    except Exception as e:
+        sys.stderr.write(f"[Warning] extração pad/chroma falhou: {e}\n")
+        return []
+
+
+def _extract_lead_chroma_events(y_harm, sr, bpm, key, max_beats):
+    """Lead: melodia dominante por colcheia (cromagrama médio-agudo)."""
+    try:
+        chroma = _chroma_for_band(y_harm, sr, 700, 6000)
+        root, is_minor = _parse_key_root(key)
+        hop = 512
+        times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=hop)
+        beat_dur = 60.0 / float(bpm)
+        grid = 1.0 if max_beats > 768 else 0.5
+        events = []
+        last_pc = None
+        last_beat = -1.0
+
+        beat = 0.0
+        while beat < max_beats:
+            t0 = beat * beat_dur
+            t1 = (beat + grid) * beat_dur
+            mask = (times >= t0) & (times < t1)
+            if not np.any(mask):
+                beat += grid
+                continue
+
+            seg = np.mean(chroma[:, mask], axis=1)
+            peak = float(np.max(seg) + 1e-10)
+            if peak < 0.08:
+                beat += grid
+                continue
+
+            pc = int(np.argmax(seg))
+            pc = _snap_pc_to_scale(pc, root, is_minor)
+
+            if pc == last_pc and abs(beat - last_beat) < grid * 0.9:
+                beat += grid
+                continue
+
+            vel = int(np.clip(65 + (seg[pc] / peak) * 45, 55, 115))
+            octave = 4 if seg[pc] / peak > 0.65 else 5
+            events.append({
+                "beat": round(float(beat), 4),
+                "duration_beats": round(grid * 0.9, 4),
+                "midi": _pc_to_midi(pc, octave),
+                "velocity": vel,
+            })
+            last_pc = pc
+            last_beat = beat
+            beat += grid
+
+        return events
+    except Exception as e:
+        sys.stderr.write(f"[Warning] extração lead/chroma falhou: {e}\n")
+        return []
+
+
+def _extract_arp_chroma_events(y_harm, sr, bpm, key, max_beats):
+    """Arp: sequência de notas em semicolcheias (cromagrama agudo)."""
+    try:
+        chroma = _chroma_for_band(y_harm, sr, 1800, 9000)
+        root, is_minor = _parse_key_root(key)
+        hop = 512
+        times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=hop)
+        beat_dur = 60.0 / float(bpm)
+        # Faixas longas: colcheias em vez de semicolcheias (menos eventos, mesma cobertura)
+        grid = 0.5 if max_beats > 512 else 0.25
+        events = []
+
+        beat = 0.0
+        degree = 0
+        arp_degrees = [0, 3, 5, 7] if is_minor else [0, 2, 4, 7]
+
+        while beat < max_beats:
+            t0 = beat * beat_dur
+            t1 = (beat + grid) * beat_dur
+            mask = (times >= t0) & (times < t1)
+            if not np.any(mask):
+                beat += grid
+                continue
+
+            seg = np.mean(chroma[:, mask], axis=1)
+            peak = float(np.max(seg) + 1e-10)
+            if peak < 0.06:
+                beat += grid
+                degree += 1
+                continue
+
+            detected_pc = int(np.argmax(seg))
+            scale_pc = _snap_pc_to_scale(
+                (root + arp_degrees[degree % len(arp_degrees)]) % 12, root, is_minor
+            )
+            pc = scale_pc if seg[detected_pc] < peak * 0.35 else _snap_pc_to_scale(detected_pc, root, is_minor)
+
+            vel = int(np.clip(60 + (seg[pc] / peak) * 40, 50, 105))
+            events.append({
+                "beat": round(float(beat), 4),
+                "duration_beats": 0.2,
+                "midi": _pc_to_midi(pc, 4),
+                "velocity": vel,
+            })
+            degree += 1
+            beat += grid
+
+        return events
+    except Exception as e:
+        sys.stderr.write(f"[Warning] extração arp/chroma falhou: {e}\n")
+        return []
+
+
+def _extract_texture_chroma_events(y_harm, sr, bpm, key, max_beats):
+    """Textura/FX: notas sustentadas esparsas do cromagrama amplo."""
+    try:
+        chroma = _chroma_for_band(y_harm, sr, 400, 10000)
+        root, is_minor = _parse_key_root(key)
+        hop = 512
+        times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr, hop_length=hop)
+        beat_dur = 60.0 / float(bpm)
+        events = []
+
+        for bar_start in np.arange(0, max_beats, 8.0):
+            t0 = bar_start * beat_dur
+            t1 = min((bar_start + 8.0), max_beats) * beat_dur
+            mask = (times >= t0) & (times < t1)
+            if not np.any(mask):
+                continue
+            seg = np.mean(chroma[:, mask], axis=1)
+            pc = _snap_pc_to_scale(int(np.argmax(seg)), root, is_minor)
+            vel = int(np.clip(45 + float(np.max(seg)) * 80, 40, 85))
+            events.append({
+                "beat": round(float(bar_start), 4),
+                "duration_beats": round(min(7.5, max_beats - bar_start - 0.1), 4),
+                "midi": _pc_to_midi(pc, 4),
+                "velocity": vel,
+            })
+            fifth_pc = _snap_pc_to_scale((pc + 7) % 12, root, is_minor)
+            events.append({
+                "beat": round(float(bar_start), 4),
+                "duration_beats": round(min(7.5, max_beats - bar_start - 0.1), 4),
+                "midi": _pc_to_midi(fifth_pc, 4),
+                "velocity": vel - 12,
+            })
+
+        return events
+    except Exception as e:
+        sys.stderr.write(f"[Warning] extração textura/chroma falhou: {e}\n")
+        return []
+
+
+def _extract_synth_layers_chroma(y_harm, sr, bpm, key, max_beats, synth_layers):
+    """Extrai MIDI de pads/leads/arps/texturas via cromagrama por camada detectada."""
+    stems = {}
+    extractors = {
+        "synth_pad": _extract_pad_chroma_events,
+        "synth_lead": _extract_lead_chroma_events,
+        "synth_arp": _extract_arp_chroma_events,
+        "synth_texture": _extract_texture_chroma_events,
+        "synth_fx": _extract_texture_chroma_events,
+    }
+    min_events = {"synth_pad": 2, "synth_lead": 3, "synth_arp": 4, "synth_texture": 2, "synth_fx": 2}
+
+    layers = list(synth_layers or [])
+    if not layers:
+        layers = [
+            {"name": "Pad", "category": "pads"},
+            {"name": "Lead", "category": "leads"},
+        ]
+
+    for layer in layers:
+        stem_key = _layer_to_synth_stem_key(layer)
+        if not stem_key or stem_key in stems:
+            continue
+        fn = extractors.get(stem_key)
+        if not fn:
+            continue
+        raw = fn(y_harm, sr, bpm, key, max_beats)
+        if len(raw) >= min_events.get(stem_key, 2):
+            stems[stem_key] = raw
+
+    # Fallback: tentar tipos ainda ausentes (música com synths não rotulados)
+    for stem_key, fn in extractors.items():
+        if stem_key in stems:
+            continue
+        raw = fn(y_harm, sr, bpm, key, max_beats)
+        if len(raw) >= min_events.get(stem_key, 2):
+            stems[stem_key] = raw
+
+    return stems
+
+
+def extract_midi_from_audio(y, sr, duration, bpm, key, drums, bass, synth_layers=None):
+    """
+    Extrai eventos MIDI por stem a partir do áudio (faixa inteira, não templates).
+    """
+    try:
+        if not bpm or bpm <= 0:
+            bpm = 128.0
+        beat_dur = 60.0 / float(bpm)
+        total_beats = float(duration) / beat_dur if duration and duration > 0 else len(y) / float(sr) / beat_dur
+        # Teto de segurança (~32 min a 200 BPM)
+        max_beats = min(float(total_beats), 4096.0)
+
+        y_harm, y_perc = librosa.effects.hpss(y)
+
+        # GM drum note numbers
+        GM = {
+            "kick": 36, "snare_clap": 38, "hihats": 42,
+            "cymbals_rides": 49, "percussion": 62, "fills": 38,
+        }
+
+        stems = {}
+
+        drum_bands = {
+            "kick": (20, 120, 4),
+            "snare_clap": (150, 600, 4),
+            "hihats": (5000, 12000, 8),
+            "cymbals_rides": (8000, 18000, 4),
+            "percussion": (300, 3000, 4),
+            "fills": (200, 8000, 8),
+        }
+
+        def _band_has_signal(y_band, floor=0.025):
+            return float(np.max(np.abs(y_band))) > floor
+
+        for stem_key, (fmin, fmax, grid) in drum_bands.items():
+            flagged = drums.get(stem_key, {}).get("present", False)
+            y_band = _bandpass_istft(y_perc, sr, fmin, fmax)
+            if not flagged and not _band_has_signal(y_band):
+                continue
+            raw_events = _extract_drum_stem_events(y_band, sr, bpm, max_beats, grid_div=grid)
+            if len(raw_events) < 2 and stem_key == "kick":
+                raw_events = _extract_kick_from_beats(y_perc, sr, bpm, max_beats)
+            elif len(raw_events) < 2 and stem_key == "snare_clap":
+                raw_events = _extract_backbeat_snare(y_perc, sr, bpm, max_beats)
+            elif len(raw_events) < 2 and stem_key == "hihats":
+                y_wide = _bandpass_istft(y_perc, sr, 2000, 16000)
+                raw_events = _extract_drum_stem_events(y_wide, sr, bpm, max_beats, grid_div=grid)
+            if len(raw_events) < 2:
+                continue
+            midi_num = GM.get(stem_key, 36)
+            for ev in raw_events:
+                ev["midi"] = midi_num
+            stems[stem_key] = raw_events
+
+        # Baixo: sempre tentar extrair pitch; usar flags só para variantes sub/mid
+        bass_events = _extract_bass_pitch_events(y_harm, sr, bpm, key, max_beats)
+        if len(bass_events) >= 2:
+            stems["bassline"] = bass_events
+            if bass.get("mid_bass", {}).get("present", True):
+                stems["mid_bass"] = [
+                    {**ev, "midi": min(127, ev["midi"] + 12)} for ev in bass_events
+                ]
+            if bass.get("sub_bass", {}).get("present", True):
+                root_midi = bass_events[0]["midi"]
+                stems["sub_bass"] = [
+                    {
+                        "beat": ev["beat"],
+                        "duration_beats": min(2.0, ev["duration_beats"] * 2),
+                        "midi": max(24, root_midi - 12),
+                        "velocity": max(70, ev["velocity"] - 10),
+                    }
+                    for ev in bass_events
+                ]
+
+        # Synths: pads, leads, arps, texturas via cromagrama harmônico
+        synth_stems = _extract_synth_layers_chroma(
+            y_harm, sr, bpm, key, max_beats, synth_layers
+        )
+        stems.update(synth_stems)
+
+        bars = max(1, int(np.ceil(max_beats / 4)))
+
+        return {
+            "source": "audio_extraction" if stems else "none",
+            "coverage": "full",
+            "bars": bars,
+            "max_beats": round(float(max_beats), 2),
+            "duration_sec": round(float(duration), 2) if duration else round(len(y) / float(sr), 2),
+            "segment_start_sec": 0,
+            "stems": stems,
+        }
+    except Exception as e:
+        sys.stderr.write(f"[Warning] extract_midi_from_audio falhou: {e}\n")
+        return {"source": "none", "bars": 0, "max_beats": 0, "stems": {}}
+
+
+# ──────────────────────────────────────────────────────────────────
 # FUNÇÃO PRINCIPAL
 # ──────────────────────────────────────────────────────────────────
 
@@ -2560,6 +3163,11 @@ def analyze_audio(file_path):
         # 4. Post-processar: preencher elements_entering/exiting nas seções
         _fill_section_elements(structure, temporal_arrangement)
 
+        # 5. Extração de eventos MIDI reais (onsets + pitch)
+        midi_extraction = extract_midi_from_audio(
+            y, sr, duration, bpm, key, drums, bass, synth_layers
+        )
+
         t_total = _time.time()
         sys.stderr.write(f"[Perf] TOTAL: {t_total - t0:.1f}s\n")
 
@@ -2590,6 +3198,7 @@ def analyze_audio(file_path):
             "dj_analysis": convert_numpy(dj_analysis),
             "executive_summary": convert_numpy(executive_summary),
             "temporal_arrangement": convert_numpy(temporal_arrangement),
+            "midi_extraction": convert_numpy(midi_extraction),
 
             # Retrocompatibilidade com formato anterior
             "drum_detection": convert_numpy({

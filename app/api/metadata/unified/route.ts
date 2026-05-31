@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { metadataAggregator } from '@/lib/services/metadataService';
 import { individualMetadataAggregator } from '@/lib/services/individualMetadataService';
-import { getDownloadsPath, fileExists, sanitizeYear, moveFile } from '../../utils/common';
-import { join } from 'path';
+import { getDownloadsPath, fileExists, sanitizeYear, moveFile, resolveAudioFileUnderDownloads } from '../../utils/common';
+import { join, dirname } from 'path';
 import { readFile } from 'fs/promises';
 import NodeID3 from 'node-id3';
 import { spawn, exec } from 'child_process';
@@ -147,18 +147,20 @@ async function handleMetadataUpdate(params: MetadataRequest, request: NextReques
   console.log(`📝 [Metadata Update] File: ${fileName}`);
 
   const downloadsFolder = await getDownloadsPath();
-  let filePath = join(downloadsFolder, fileName);
-  
-  if (!(await fileExists(filePath))) {
+  const resolvedPath = resolveAudioFileUnderDownloads(downloadsFolder, fileName);
+
+  if (!resolvedPath) {
     return NextResponse.json({ 
       success: false, 
       error: 'File not found' 
     }, { status: 404 });
   }
 
+  let filePath = resolvedPath;
+
   // Renomear arquivo se necessário
   if (newFileName && newFileName !== fileName) {
-    const newFilePath = join(downloadsFolder, newFileName);
+    const newFilePath = join(dirname(filePath), newFileName);
     if (await fileExists(newFilePath)) {
       return NextResponse.json({ 
         success: false, 
@@ -557,8 +559,8 @@ async function handleMetadataEnhance(params: MetadataRequest) {
   }
 
   const downloadsFolder = await getDownloadsPath();
-  const filePath = join(downloadsFolder, fileName);
-  if (!(await fileExists(filePath))) {
+  const filePath = resolveAudioFileUnderDownloads(downloadsFolder, fileName);
+  if (!filePath) {
     return NextResponse.json({ 
       success: false, 
       error: 'File not found' 

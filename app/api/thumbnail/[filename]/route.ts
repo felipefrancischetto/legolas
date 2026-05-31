@@ -3,7 +3,16 @@ import { join } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { readFile, unlink } from 'fs/promises';
-import { getDownloadsPath, fileExists } from '@/app/api/utils/common';
+import {
+  getDownloadsPath,
+  fileExists,
+  resolveAudioFileUnderDownloads,
+  pickEmbeddedCoverStreamIndex,
+} from '@/app/api/utils/common';
+import {
+  readThumbnailFromDisk,
+  writeThumbnailToDisk,
+} from '@/app/api/utils/thumbnailDiskCache';
 
 const execAsync = promisify(exec);
 
@@ -18,8 +27,38 @@ const thumbnailCache = new Map<string, ThumbnailCache>();
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minutos
 const MAX_CACHE_SIZE = 200; // Aumentado para 200 thumbnails
 
-// Cache global em memória para evitar reprocessamento
+// Evita reprocessamento paralelo do mesmo arquivo
 const processingCache = new Set<string>();
+const processingWaiters = new Map<string, Array<(buffer: Buffer | null) => void>>();
+
+function notifyProcessingWaiters(cacheKey: string, buffer: Buffer | null) {
+  const waiters = processingWaiters.get(cacheKey);
+  if (!waiters) return;
+  waiters.forEach((resolve) => resolve(buffer));
+  processingWaiters.delete(cacheKey);
+}
+
+function waitForProcessing(cacheKey: string, timeoutMs: number): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    const waiters = processingWaiters.get(cacheKey) ?? [];
+    waiters.push(resolve);
+    processingWaiters.set(cacheKey, waiters);
+    setTimeout(() => resolve(null), timeoutMs);
+  });
+}
+
+async function tryFastArtworkExtract(filePath: string, tempImagePath: string): Promise<Buffer | null> {
+  try {
+    const fastCmd = `ffmpeg -hide_banner -loglevel error -y -i "${filePath}" -an -map 0:v? -frames:v 1 -q:v 6 "${tempImagePath}"`;
+    await execAsync(fastCmd, { maxBuffer: 1024 * 1024 * 10 });
+    if (await fileExists(tempImagePath)) {
+      return await readFile(tempImagePath);
+    }
+  } catch {
+    // fallback para fluxo detalhado
+  }
+  return null;
+}
 
 // Função para limpar cache antigo
 function cleanupCache() {
@@ -90,37 +129,36 @@ export async function GET(
       });
     }
     
-    // Verificar se já está sendo processado
     if (processingCache.has(cacheKey)) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      const waitedBuffer = await waitForProcessing(cacheKey, 15000);
+      if (waitedBuffer) {
+        return new NextResponse(waitedBuffer, {
+          headers: {
+            'Content-Type': 'image/jpeg',
+            'Cache-Control': 'public, max-age=31536000',
+            'X-Cache': 'WAIT-HIT',
+          },
+        });
+      }
       const retryCache = thumbnailCache.get(cacheKey);
       if (retryCache) {
         return new NextResponse(retryCache.buffer, {
           headers: {
             'Content-Type': retryCache.contentType,
             'Cache-Control': 'public, max-age=31536000',
-            'X-Cache': 'RETRY-HIT'
-          }
+            'X-Cache': 'RETRY-HIT',
+          },
         });
       }
-      // Se ainda não tem cache, retornar thumbnail padrão
-      const defaultBuffer = await generateDefaultThumbnail(decodedFilename);
-      return new NextResponse(defaultBuffer, {
-        headers: {
-          'Content-Type': 'image/svg+xml',
-          'Cache-Control': 'public, max-age=3600',
-          'X-Cache': 'DEFAULT'
-        }
-      });
     }
-    
+
     processingCache.add(cacheKey);
-    
+
     try {
       const downloadsFolder = await getDownloadsPath();
-      const filePath = join(downloadsFolder, decodedFilename);
+      const filePath = resolveAudioFileUnderDownloads(downloadsFolder, decodedFilename);
 
-      if (!await fileExists(filePath)) {
+      if (!filePath) {
         const defaultBuffer = await generateDefaultThumbnail(decodedFilename);
         return new NextResponse(defaultBuffer, {
           headers: {
@@ -131,46 +169,72 @@ export async function GET(
         });
       }
 
+      const diskCached = await readThumbnailFromDisk(
+        downloadsFolder,
+        cacheKey,
+        filePath
+      );
+      if (diskCached) {
+        const cacheEntry: ThumbnailCache = {
+          buffer: diskCached,
+          timestamp: Date.now(),
+          contentType: 'image/jpeg',
+        };
+        thumbnailCache.set(cacheKey, cacheEntry);
+        notifyProcessingWaiters(cacheKey, diskCached);
+        return new NextResponse(diskCached, {
+          headers: {
+            'Content-Type': 'image/jpeg',
+            'Cache-Control': 'public, max-age=31536000',
+            'X-Cache': 'DISK-HIT',
+          },
+        });
+      }
+
       const timestamp = Date.now();
       const randomSuffix = Math.random().toString(36).substring(7);
       tempImagePath = join(downloadsFolder, `thumb_${timestamp}_${randomSuffix}.jpg`);
 
-      let imageBuffer: Buffer | null = null;
+      let imageBuffer: Buffer | null = await tryFastArtworkExtract(filePath, tempImagePath);
 
       try {
-        // Primeiro, verificar se há streams de vídeo (artwork embutido)
+        if (imageBuffer) {
+          // extração rápida já obteve a capa
+        } else {
         const { stdout: probeOutput } = await execAsync(
           `ffprobe -v quiet -print_format json -show_streams "${filePath}"`,
           { maxBuffer: 1024 * 1024 * 10 }
         );
-        
+
         const probeInfo = JSON.parse(probeOutput);
-        const hasVideoStream = probeInfo.streams?.some((stream: any) => stream.codec_type === 'video');
-        
-        if (hasVideoStream) {
-          // Tentar extrair artwork embutido
+        const streams = probeInfo.streams || [];
+        const coverStreamIndex = pickEmbeddedCoverStreamIndex(streams);
+        const hasVideoStream = streams.some((stream: { codec_type?: string }) => stream.codec_type === 'video');
+
+        // Re-encode para JPEG: funciona com capa MJPEG, PNG, WebP embutida (evita -c:v copy + extensão errada)
+        if (coverStreamIndex >= 0) {
           try {
-            const artworkCommand = `ffmpeg -y -i "${filePath}" -an -c:v copy -f image2 "${tempImagePath}"`;
+            const artworkCommand = `ffmpeg -y -i "${filePath}" -map 0:${coverStreamIndex} -frames:v 1 -q:v 2 "${tempImagePath}"`;
             await execAsync(artworkCommand, { maxBuffer: 1024 * 1024 * 10 });
-            
             if (await fileExists(tempImagePath)) {
               imageBuffer = await readFile(tempImagePath);
-              console.log('✅ Artwork embutido extraído com sucesso');
+              console.log('✅ Artwork embutido extraído (stream index', coverStreamIndex, ')');
             }
-          } catch (artworkError) {
-            console.log('⚠️ Erro ao extrair artwork com -c:v copy, tentando -map 0:v');
-            
-            try {
-              const flacArtworkCommand = `ffmpeg -y -i "${filePath}" -map 0:v -c copy "${tempImagePath}"`;
-              await execAsync(flacArtworkCommand, { maxBuffer: 1024 * 1024 * 10 });
-              
-              if (await fileExists(tempImagePath)) {
-                imageBuffer = await readFile(tempImagePath);
-                console.log('✅ Artwork embutido extraído com -map 0:v');
-              }
-            } catch (flacError) {
-              console.log('⚠️ Falha ao extrair artwork embutido');
+          } catch {
+            console.log('⚠️ Falha ao extrair artwork pelo stream de capa; tentando 0:v:0');
+          }
+        }
+
+        if (!imageBuffer && hasVideoStream) {
+          try {
+            const fallbackCmd = `ffmpeg -y -i "${filePath}" -map 0:v:0 -frames:v 1 -q:v 2 "${tempImagePath}"`;
+            await execAsync(fallbackCmd, { maxBuffer: 1024 * 1024 * 10 });
+            if (await fileExists(tempImagePath)) {
+              imageBuffer = await readFile(tempImagePath);
+              console.log('✅ Artwork extraído do primeiro stream de vídeo');
             }
+          } catch {
+            console.log('⚠️ Falha ao extrair primeiro stream de vídeo como imagem');
           }
         }
 
@@ -226,6 +290,7 @@ export async function GET(
           }
         }
 
+        }
       } catch (error) {
         console.error('❌ Erro ao processar arquivo para thumbnail:', error);
       }
@@ -239,8 +304,13 @@ export async function GET(
         }
       }
 
-      // Se conseguiu extrair imagem, usar ela
       if (imageBuffer) {
+        try {
+          await writeThumbnailToDisk(downloadsFolder, cacheKey, imageBuffer);
+        } catch (diskError) {
+          console.warn('⚠️ Falha ao gravar thumbnail em disco:', diskError);
+        }
+
         const cacheEntry: ThumbnailCache = {
           buffer: imageBuffer,
           timestamp: Date.now(),
@@ -248,6 +318,7 @@ export async function GET(
         };
         thumbnailCache.set(cacheKey, cacheEntry);
         cleanupCache();
+        notifyProcessingWaiters(cacheKey, imageBuffer);
 
         return new NextResponse(imageBuffer, {
           headers: {
@@ -270,6 +341,7 @@ export async function GET(
       };
       thumbnailCache.set(cacheKey, cacheEntry);
       cleanupCache();
+      notifyProcessingWaiters(cacheKey, null);
 
       return new NextResponse(defaultBuffer, {
         headers: {
@@ -293,6 +365,7 @@ export async function GET(
       });
     } finally {
       processingCache.delete(cacheKey);
+      notifyProcessingWaiters(cacheKey, thumbnailCache.get(cacheKey)?.buffer ?? null);
       
       // Limpar arquivo temporário se ainda existir
       if (tempImagePath) {

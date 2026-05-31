@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Image from 'next/image';
 import BaseModal from './BaseModal';
 import { usePlayer } from '../contexts/PlayerContext';
@@ -8,7 +8,20 @@ import { getThumbnailUrl } from '../utils/thumbnailCache';
 import { getCachedDominantColor } from '../utils/colorExtractor';
 import { useSettings } from '../hooks/useSettings';
 import LoadingSpinner from './LoadingSpinner';
-import { generateAndDownloadMidi, downloadAllMidisAsZip, type MidiGenerationContext, type MidiElementInfo } from '../utils/midiGenerator';
+import {
+  generateAndDownloadMidi,
+  downloadAllMidisAsZip,
+  setAllMidiDragTransfer,
+} from '../utils/midiGenerator';
+import {
+  analysisCacheKey,
+  buildAllMidiClipsForExport,
+  buildMidiGenerationContext,
+  collectMidiElementsFromAnalysis,
+  hasValidMidiExtraction,
+  mapAnalysisFromApi,
+  type MusicAnalysisForMidi,
+} from '../utils/midiFromAnalysis';
 import { safeSetItem, safeGetItem } from '../utils/localStorage';
 
 // ──────────────────────────────────────────────────────────────────
@@ -164,6 +177,22 @@ interface FullAnalysis {
     worksBest: string;
   };
   temporalArrangement?: ArrangementTimelineItem[];
+  midiExtraction?: MusicAnalysisForMidi['midiExtraction'];
+}
+
+function toMidiAnalysis(analysis: FullAnalysis): MusicAnalysisForMidi {
+  return mapAnalysisFromApi({
+    bpm: analysis.bpm,
+    key: analysis.key,
+    musicalIdentity: analysis.musicalIdentity,
+    grooveAndRhythm: analysis.grooveAndRhythm,
+    harmony: analysis.harmony,
+    drumElements: analysis.drumElements,
+    bassElements: analysis.bassElements,
+    synthLayers: analysis.synthLayers,
+    temporalArrangement: analysis.temporalArrangement,
+    midiExtraction: analysis.midiExtraction,
+  });
 }
 
 interface MusicStudyModalProps {
@@ -227,7 +256,7 @@ function DrumRow({ name, detail, themeColors, onMidiClick }: { name: string; det
     <div
       className={`p-3 rounded-lg border ${detail.present ? 'opacity-100 cursor-pointer hover:brightness-110 transition-all' : 'opacity-40'}`}
       style={{ backgroundColor: detail.present ? themeColors.background : 'rgba(63, 63, 70, 0.3)', borderColor: themeColors.border }}
-      title={detail.present ? '🎹 Clique para baixar MIDI' : undefined}
+      title={detail.present ? '🎹 Clique para baixar .mid (arraste para o Ableton)' : undefined}
       onClick={detail.present ? onMidiClick : undefined}
     >
       <div className="flex items-center justify-between mb-2">
@@ -282,81 +311,80 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
   const [midiDownloaded, setMidiDownloaded] = useState<string | null>(null);
   const [allMidiDownloaded, setAllMidiDownloaded] = useState(false);
   const [allMidiCount, setAllMidiCount] = useState(0);
+  const [arrangementDragHint, setArrangementDragHint] = useState<string | null>(null);
 
   const currentFile = playerState.currentFile;
   const hasAnalysisRef = useRef<boolean>(false);
 
-  // ── Collect all MIDI-able elements from analysis ──
-  const collectAllMidiElements = useCallback((): MidiElementInfo[] => {
-    if (!analysis) return [];
-    const elements: MidiElementInfo[] = [];
+  const midiAnalysis = useMemo(
+    () => (analysis ? toMidiAnalysis(analysis) : null),
+    [analysis]
+  );
 
-    // Drums
-    if (analysis.drumElements) {
-      const drums = analysis.drumElements;
-      if (drums.kick?.present) elements.push({ element: 'Kick', category: 'Drums', role: drums.kick.role, intensity: drums.kick.energy });
-      if (drums.snareClap?.present) elements.push({ element: 'Snare/Clap', category: 'Drums', role: drums.snareClap.role, intensity: drums.snareClap.energy });
-      if (drums.hihats?.present) elements.push({ element: 'Hi-Hats', category: 'Drums', role: drums.hihats.role, intensity: drums.hihats.energy });
-      if (drums.cymbalsRides?.present) elements.push({ element: 'Cymbals/Rides', category: 'Drums', role: drums.cymbalsRides.role, intensity: drums.cymbalsRides.energy });
-      if (drums.percussion?.present) elements.push({ element: 'Percussion', category: 'Drums', role: drums.percussion.role, intensity: drums.percussion.energy });
-      if (drums.fills?.present) elements.push({ element: 'Fills', category: 'Drums', role: drums.fills.role, intensity: drums.fills.energy });
-    }
-
-    // Bass
-    if (analysis.bassElements) {
-      const bass = analysis.bassElements;
-      if (bass.subBass?.present) elements.push({ element: 'Sub Bass', category: 'Bass', role: 'base', intensity: bass.subBass.energy });
-      if (bass.midBass?.present) elements.push({ element: 'Mid Bass', category: 'Bass', role: 'groove', intensity: bass.midBass.energy });
-      if (bass.bassline?.present) elements.push({ element: 'Bassline', category: 'Bass', role: 'groove', intensity: bass.bassline.energy });
-    }
-
-    // Synths
-    if (analysis.synthLayers) {
-      for (const layer of analysis.synthLayers) {
-        elements.push({ element: layer.name, category: 'Synths', role: layer.function, intensity: layer.energy });
-      }
-    }
-
-    return elements;
-  }, [analysis]);
+  const collectAllMidiElements = useCallback(() => {
+    if (!midiAnalysis) return [];
+    return collectMidiElementsFromAnalysis(midiAnalysis);
+  }, [midiAnalysis]);
 
   // ── Download All MIDIs as ZIP ──
   const handleDownloadAllMidis = useCallback(() => {
-    if (!analysis) return;
+    if (!midiAnalysis) return;
     const elements = collectAllMidiElements();
     if (elements.length === 0) return;
 
     const trackName = currentFile?.title || currentFile?.displayName || 'track';
+    const bpm = midiAnalysis.bpm || 128;
+    const key = midiAnalysis.key || midiAnalysis.harmony?.key || undefined;
+    const genre = midiAnalysis.musicalIdentity?.genre;
     const count = downloadAllMidisAsZip(
       elements,
-      analysis.bpm || 128,
-      analysis.key || analysis.harmony?.key || undefined,
-      analysis.musicalIdentity?.genre,
-      trackName
+      bpm,
+      key ?? undefined,
+      genre,
+      trackName,
+      (el) => buildMidiGenerationContext(midiAnalysis, el, { bpm, key: key ?? undefined, genre })
     );
 
     setAllMidiCount(count);
     setAllMidiDownloaded(true);
     setTimeout(() => setAllMidiDownloaded(false), 3000);
-  }, [analysis, currentFile, collectAllMidiElements]);
+  }, [midiAnalysis, currentFile, collectAllMidiElements]);
+
+  const arrangementMidiClips = useMemo(() => {
+    if (!midiAnalysis) return [];
+    const bpm = midiAnalysis.bpm || analysis?.bpm || 128;
+    const key = midiAnalysis.key || analysis?.harmony?.key || undefined;
+    const genre = midiAnalysis.musicalIdentity?.genre;
+    return buildAllMidiClipsForExport(midiAnalysis, {
+      bpm,
+      key: key ?? undefined,
+      genre,
+    });
+  }, [midiAnalysis, analysis?.bpm, analysis?.harmony?.key]);
+
+  const handleDragAllToAbleton = useCallback(
+    (e: React.DragEvent) => {
+      if (arrangementMidiClips.length === 0) return;
+      const trackName = currentFile?.title || currentFile?.displayName || currentFile?.name;
+      const ok = setAllMidiDragTransfer(e.nativeEvent, arrangementMidiClips, trackName);
+      setArrangementDragHint(
+        ok
+          ? `Arrastando ${arrangementMidiClips.length} MIDIs — solte no Arrangement do Ableton`
+          : 'Use Chrome ou Edge para arrastar vários arquivos de uma vez'
+      );
+    },
+    [arrangementMidiClips, currentFile]
+  );
 
   // ── MIDI Download Handler ──
   const handleStemMidiDownload = useCallback((element: string, category: string, role: string, intensity: number) => {
-    if (!analysis) return;
-    const ctx: MidiGenerationContext = {
-      element,
-      category,
-      role,
-      intensity,
-      bpm: analysis.bpm || 128,
-      key: analysis.key || analysis.harmony?.key || undefined,
-      genre: analysis.musicalIdentity?.genre,
-      timeSignature: '4/4',
-    };
-    generateAndDownloadMidi(ctx);
+    if (!midiAnalysis) return;
+    const trackName = currentFile?.title || currentFile?.displayName;
+    const ctx = buildMidiGenerationContext(midiAnalysis, { element, category, role, intensity });
+    generateAndDownloadMidi(ctx, trackName);
     setMidiDownloaded(element);
-    setTimeout(() => setMidiDownloaded(null), 2000);
-  }, [analysis]);
+    setTimeout(() => setMidiDownloaded(null), 2500);
+  }, [midiAnalysis, currentFile]);
 
   // Extrair cor dominante
   useEffect(() => {
@@ -398,11 +426,11 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
       return;
     }
 
-    const cacheKey = `legolas-analysis:${currentFile.name}`;
+    const cacheKey = analysisCacheKey(currentFile.name);
 
-    // 1) Tentar recuperar do cache
+    // 1) Tentar recuperar do cache (somente se tiver extração MIDI real)
     const cached = safeGetItem<FullAnalysis>(cacheKey);
-    if (cached) {
+    if (cached && hasValidMidiExtraction(cached)) {
       setAnalysis(cached);
       hasAnalysisRef.current = true;
       setIsAnalyzing(false);
@@ -465,7 +493,8 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
             mixAnalysis: a.mixAnalysis,
             djAnalysis: a.djAnalysis,
             executiveSummary: a.executiveSummary,
-            temporalArrangement: a.temporalArrangement
+            temporalArrangement: a.temporalArrangement,
+            midiExtraction: a.midiExtraction,
           };
 
           setAnalysis(analysisData);
@@ -474,7 +503,7 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
 
           // 3) Salvar no cache para reutilizar depois
           safeSetItem(cacheKey, analysisData, {
-            maxSize: 512 * 1024,
+            maxSize: 6 * 1024 * 1024,
             onError: (err) => console.warn('[MusicStudyModal] Cache não salvo:', err.message)
           });
         } else {
@@ -1097,6 +1126,58 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                       themeColors={themeColors}
                     />
 
+                    {arrangementMidiClips.length > 0 && (
+                      <div
+                        draggable
+                        onDragStart={handleDragAllToAbleton}
+                        onDragEnd={() => setTimeout(() => setArrangementDragHint(null), 2000)}
+                        className="rounded-xl border-2 border-dashed px-4 py-5 text-center cursor-grab active:cursor-grabbing select-none transition-all hover:border-emerald-500/60 hover:bg-emerald-500/5"
+                        style={{ borderColor: themeColors.border, backgroundColor: 'rgba(16, 185, 129, 0.06)' }}
+                      >
+                        <svg
+                          className="w-9 h-9 mx-auto mb-2 opacity-80"
+                          style={{ color: themeColors.primary }}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.5}
+                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                          />
+                        </svg>
+                        <p className="text-sm font-semibold text-white">
+                          Arrastar música inteira para o Ableton
+                        </p>
+                        <p className="text-xs text-gray-500 mt-1 max-w-lg mx-auto">
+                          Segure e arraste aqui para o <strong className="text-gray-400">Arrangement View</strong>.
+                          O Live cria uma faixa MIDI por stem ({arrangementMidiClips.length} arquivos).
+                          Use Chrome ou Edge no Windows.
+                        </p>
+                        {arrangementDragHint && (
+                          <p className="text-[10px] mt-2" style={{ color: themeColors.primary }}>
+                            {arrangementDragHint}
+                          </p>
+                        )}
+                        <div className="flex flex-wrap justify-center gap-2 mt-3">
+                          <button
+                            type="button"
+                            onClick={handleDownloadAllMidis}
+                            className="text-xs px-3 py-1.5 rounded-lg border font-medium hover:brightness-110"
+                            style={{
+                              backgroundColor: themeColors.background,
+                              borderColor: themeColors.border,
+                              color: themeColors.primary,
+                            }}
+                          >
+                            ou baixar ZIP
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Timeline Container */}
                     <div
                       className="rounded-lg border p-4 overflow-x-auto"
@@ -1333,8 +1414,9 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                                 <span title="Aparição curta/pontual">&#9672; pontual</span>
                               </div>
                               <p className="text-[10px] text-gray-600 mt-2">
-                                Cada linha representa um stem único. Blocos múltiplos na mesma linha indicam aparições em diferentes momentos da música.
-                                Clique em qualquer bloco para baixar o padrão MIDI (.mid).
+                                Cada linha = um stem. Use a área verde acima para arrastar{' '}
+                                <strong className="text-gray-500">todos os MIDIs</strong> de uma vez para o Ableton,
+                                ou clique em um bloco para baixar só aquele stem.
                               </p>
                             </div>
                           </>
@@ -1356,8 +1438,12 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                   onClick={() => {
                     // Limpar cache e forçar nova análise
                     if (currentFile) {
-                      const cacheKey = `legolas-analysis:${currentFile.name}`;
-                      try { localStorage.removeItem(cacheKey); } catch {}
+                      const cacheKey = analysisCacheKey(currentFile.name);
+                      try {
+                        localStorage.removeItem(cacheKey);
+                        localStorage.removeItem(`legolas-analysis-v3:${currentFile.name}`);
+                        localStorage.removeItem(`legolas-analysis-v4:${currentFile.name}`);
+                      } catch {}
                     }
                     setAnalysis(null);
                     setAnalysisError(null);
@@ -1383,7 +1469,8 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                               structure: a.structure, dynamics: a.dynamics,
                               mixAnalysis: a.mixAnalysis, djAnalysis: a.djAnalysis,
                               executiveSummary: a.executiveSummary,
-                              temporalArrangement: a.temporalArrangement
+                              temporalArrangement: a.temporalArrangement,
+                              midiExtraction: a.midiExtraction,
                             });
                           } else {
                             setAnalysisError(data.error || 'Análise falhou');

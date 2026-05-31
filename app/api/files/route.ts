@@ -4,7 +4,12 @@ import { join } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
-import { getDownloadsPath, formatDurationShort } from '../utils/common';
+import {
+  getDownloadsPath,
+  formatDurationShort,
+  streamLooksLikeEmbeddedCover,
+  sanitizeMetadataForDisplay,
+} from '../utils/common';
 
 const execAsync = promisify(exec);
 
@@ -22,11 +27,10 @@ async function extractAudioMetadata(filePath: string) {
     const info = JSON.parse(stdout);
     const tags = info.format?.tags || {};
     
-    // Procurar por stream de imagem
-    const pictureStream = info.streams?.find((stream: { codec_type: string; codec_name: string; }) => 
-      stream.codec_type === 'video' && stream.codec_name === 'mjpeg'
+    // Capa embutida: MJPEG, PNG, WebP, etc. (FLAC/MP4 costumam usar PNG ou MJPEG)
+    const hasCoverArt = info.streams?.some((stream: { codec_type?: string; codec_name?: string; disposition?: { attached_pic?: number } }) =>
+      streamLooksLikeEmbeddedCover(stream)
     );
-    const hasCoverArt = pictureStream !== undefined;
 
     // Se tiver imagem embutida, criar uma URL para ela
     let thumbnailUrl = null;
@@ -91,21 +95,21 @@ async function extractAudioMetadata(filePath: string) {
     const isBeatportFormat = hasRequiredMetadata && hasBeatportSource;
 
     return {
-      title: tags.title || tags.TITLE || null,
-      artist: artist,
+      title: sanitizeMetadataForDisplay(tags.title || tags.TITLE || null),
+      artist: sanitizeMetadataForDisplay(artist),
       duration: formatDurationShort(parseFloat(info.format?.duration || '0')),
       bpm: bpm,
-      key: key,
-      genre: genre,
-      album: tags.album || tags.Album || tags.ALBUM || null,
-      label: label,
+      key: sanitizeMetadataForDisplay(key),
+      genre: sanitizeMetadataForDisplay(genre),
+      album: sanitizeMetadataForDisplay(tags.album || tags.Album || tags.ALBUM || null),
+      label: sanitizeMetadataForDisplay(label),
       catalogNumber: catalogNumber,
       catalog: catalogNumber, // Alias para compatibilidade
       thumbnail: thumbnailUrl,
       ano: tags.year || tags.date || tags.YEAR || tags.DATE || null,
       publishedDate: tags.publisher_date || tags.PUBLISHER_DATE || tags.publishedDate || tags.PUBLISHED_DATE || null,
       isBeatportFormat: isBeatportFormat,
-      remixer: remixer
+      remixer: sanitizeMetadataForDisplay(remixer)
     };
   } catch (error) {
     console.error('Erro ao extrair metadados:', error);
@@ -265,27 +269,36 @@ export async function GET(request: NextRequest) {
     // Combinar ambas as listas
     const allFileInfos = [...fileInfos, ...naoNormalizadasFileInfos];
     
-    // Ordenar por data/hora de forma mais estável
-    // Prioridade: downloadedAt > fileCreatedAt > ordem alfabética por título
+    const getDownloadTime = (file: typeof allFileInfos[0]) => {
+      if (file.downloadedAt) return new Date(file.downloadedAt).getTime();
+      if (file.fileCreatedAt) return new Date(file.fileCreatedAt).getTime();
+      return Number.MAX_SAFE_INTEGER;
+    };
+
+    const albumLatest = new Map<string, number>();
+    for (const file of allFileInfos) {
+      const album = (file.album || '').trim();
+      if (!album || (!file.downloadedAt && !file.fileCreatedAt)) continue;
+      const ts = getDownloadTime(file);
+      if (ts === Number.MAX_SAFE_INTEGER) continue;
+      const prev = albumLatest.get(album);
+      if (prev === undefined || ts > prev) albumLatest.set(album, ts);
+    }
+
+    // Álbuns com download mais recente primeiro; dentro do álbum, ordem da playlist
     allFileInfos.sort((a, b) => {
-      // Se ambos têm downloadedAt, usar essa data (mais antigo primeiro para manter ordem de playlist)
-      if (a.downloadedAt && b.downloadedAt) {
-        return new Date(a.downloadedAt).getTime() - new Date(b.downloadedAt).getTime();
+      const albumA = (a.album || '').trim();
+      const albumB = (b.album || '').trim();
+      if (!albumA && !albumB) return getDownloadTime(b) - getDownloadTime(a);
+      if (!albumA) return 1;
+      if (!albumB) return -1;
+      if (albumA !== albumB) {
+        const latestA = albumLatest.get(albumA) ?? 0;
+        const latestB = albumLatest.get(albumB) ?? 0;
+        if (latestB !== latestA) return latestB - latestA;
+        return albumA.localeCompare(albumB, undefined, { sensitivity: 'base' });
       }
-      
-      // Se apenas um tem downloadedAt, ele vem primeiro
-      if (a.downloadedAt && !b.downloadedAt) return -1;
-      if (!a.downloadedAt && b.downloadedAt) return 1;
-      
-      // Se nenhum tem downloadedAt, usar fileCreatedAt (mais antigo primeiro)
-      if (a.fileCreatedAt && b.fileCreatedAt) {
-        return new Date(a.fileCreatedAt).getTime() - new Date(b.fileCreatedAt).getTime();
-      }
-      
-      // Fallback para ordem alfabética por título
-      const titleA = a.title || a.displayName || '';
-      const titleB = b.title || b.displayName || '';
-      return titleA.localeCompare(titleB);
+      return getDownloadTime(a) - getDownloadTime(b);
     });
 
     // Otimizar resposta: remover campos null/undefined e limitar tamanho

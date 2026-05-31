@@ -15,6 +15,7 @@ import SettingsModal from './components/SettingsModal';
 import FloatingPlaylistButton from './components/FloatingPlaylistButton';
 import ScrollToPlayingButton from './components/ScrollToPlayingButton';
 import DownloadQueue from './components/DownloadQueue';
+import MidiPackExportIndicator from './components/MidiPackExportIndicator';
 import QuickPlaylistPanel from './components/QuickPlaylistPanel';
 import { useState, useEffect } from 'react';
 import { useUI } from './contexts/UIContext';
@@ -118,6 +119,7 @@ export default function Home() {
       {/* Fila de downloads */}
       {showQueue && <DownloadQueue onClose={() => setShowQueue(false)} />}
 
+      <MidiPackExportIndicator />
 
       <BeatportModal isOpen={beatportModalOpen} onClose={() => setBeatportModalOpen(false)} />
       <BeatportDownloaderModal isOpen={beatportDownloaderModalOpen} onClose={() => setBeatportDownloaderModalOpen(false)} />

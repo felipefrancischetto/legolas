@@ -3,7 +3,22 @@ import { join } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
-import { getDownloadsPath } from '../utils/common';
+import {
+  getDownloadsPath,
+  resolveAudioFileUnderDownloads,
+  resolveBestAudioFileUnderDownloads,
+} from '../utils/common';
+
+async function resolveAnalysisFilePath(
+  filename: string,
+  preferBestQuality = false
+): Promise<string | null> {
+  const downloadsPath = await getDownloadsPath();
+  if (preferBestQuality) {
+    return resolveBestAudioFileUnderDownloads(downloadsPath, filename);
+  }
+  return resolveAudioFileUnderDownloads(downloadsPath, filename);
+}
 
 const execAsync = promisify(exec);
 
@@ -183,6 +198,23 @@ interface ExecutiveSummary {
   worksBest: string;
 }
 
+interface MidiExtractedEvent {
+  beat: number;
+  duration_beats: number;
+  midi: number;
+  velocity: number;
+}
+
+interface MidiExtractionResult {
+  source: string;
+  coverage?: string;
+  bars: number;
+  max_beats: number;
+  duration_sec?: number;
+  segment_start_sec?: number;
+  stems: Record<string, MidiExtractedEvent[]>;
+}
+
 // ── Análise completa ──
 interface AudioAnalysis {
   filename: string;
@@ -229,6 +261,9 @@ interface AudioAnalysis {
     behavior?: string;
     function?: string;
   }>;
+
+  /** Eventos MIDI extraídos do áudio (onsets + pitch) por stem */
+  midiExtraction?: MidiExtractionResult;
 
   // Retrocompatibilidade
   detectedElements: {
@@ -389,6 +424,20 @@ interface PythonAnalysisResult {
   };
   detected_synths?: string[];
   detected_instruments?: string[];
+  midi_extraction?: {
+    source?: string;
+    coverage?: string;
+    bars?: number;
+    max_beats?: number;
+    duration_sec?: number;
+    segment_start_sec?: number;
+    stems?: Record<string, Array<{
+      beat: number;
+      duration_beats: number;
+      midi: number;
+      velocity: number;
+    }>>;
+  };
   error?: string;
 }
 
@@ -696,6 +745,17 @@ function convertPythonResult(pythonResult: PythonAnalysisResult, filePath: strin
     mixAnalysis,
     djAnalysis,
     executiveSummary,
+    midiExtraction: pythonResult.midi_extraction
+      ? {
+          source: pythonResult.midi_extraction.source ?? 'audio_extraction',
+          coverage: pythonResult.midi_extraction.coverage ?? 'full',
+          bars: pythonResult.midi_extraction.bars ?? 0,
+          max_beats: pythonResult.midi_extraction.max_beats ?? 0,
+          duration_sec: pythonResult.midi_extraction.duration_sec,
+          segment_start_sec: pythonResult.midi_extraction.segment_start_sec ?? 0,
+          stems: pythonResult.midi_extraction.stems ?? {},
+        }
+      : undefined,
     // Arranjo temporal (v2: com behavior, function, timestamps formatados)
     temporalArrangement: (pythonResult.temporal_arrangement || []).map(item => ({
       category: item.category,
@@ -834,7 +894,7 @@ async function analyzeAudioFile(filePath: string): Promise<AudioAnalysis> {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { filename } = body;
+    const { filename, preferBestQuality } = body;
 
     if (!filename) {
       return NextResponse.json(
@@ -843,17 +903,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const downloadsPath = await getDownloadsPath();
-    const filePath = join(downloadsPath, filename);
+    const filePath = await resolveAnalysisFilePath(filename, !!preferBestQuality);
 
-    if (!existsSync(filePath)) {
+    if (!filePath) {
       return NextResponse.json(
-        { success: false, error: 'Arquivo não encontrado' },
+        {
+          success: false,
+          error: 'Arquivo não encontrado',
+          hint: 'Verifique se o arquivo está na pasta de downloads ou em nao-normalizadas.',
+        },
         { status: 404 }
       );
     }
 
-    console.log(`🎵 [Analyze Music API] Analisando arquivo: ${filename}`);
+    console.log(`🎵 [Analyze Music API] Analisando arquivo: ${filename} → ${filePath}`);
 
     const startTime = Date.now();
 
@@ -896,6 +959,7 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const filename = searchParams.get('filename');
+    const preferBestQuality = searchParams.get('preferBestQuality') === 'true';
 
     if (!filename) {
       return NextResponse.json(
@@ -904,17 +968,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const downloadsPath = await getDownloadsPath();
-    const filePath = join(downloadsPath, filename);
+    const filePath = await resolveAnalysisFilePath(filename, preferBestQuality);
 
-    if (!existsSync(filePath)) {
+    if (!filePath) {
       return NextResponse.json(
-        { success: false, error: 'Arquivo não encontrado' },
+        {
+          success: false,
+          error: 'Arquivo não encontrado',
+          hint: 'Verifique se o arquivo está na pasta de downloads ou em nao-normalizadas.',
+        },
         { status: 404 }
       );
     }
 
-    console.log(`🎵 [Analyze Music API GET] Analisando arquivo: ${filename}`);
+    console.log(`🎵 [Analyze Music API GET] Analisando arquivo: ${filename} → ${filePath}`);
 
     const startTime = Date.now();
 

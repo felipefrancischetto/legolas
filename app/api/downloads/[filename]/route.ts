@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { join } from 'path';
 import { createReadStream, statSync, existsSync } from 'fs';
 import { readdir } from 'fs/promises';
-import { getDownloadsPath } from '../../utils/common';
+import {
+  getDownloadsPath,
+  resolveAudioFileUnderDownloads,
+  NAO_NORMALIZADAS_DIR,
+  filenamesMatchForPlayback,
+} from '../../utils/common';
 
 export const runtime = 'nodejs';
 
@@ -27,36 +32,36 @@ export async function GET(
       return new NextResponse('Nome do arquivo inválido', { status: 400 });
     }
     
-    let filePath = join(downloadsPath, decodedFilename);
-    
-    // Verificar se o arquivo existe antes de tentar acessá-lo
-    if (!existsSync(filePath)) {
-      // Tentar encontrar o arquivo com busca case-insensitive ou variações de encoding
+    let filePath = resolveAudioFileUnderDownloads(downloadsPath, decodedFilename);
+
+    if (!filePath) {
+      // Tentar encontrar o arquivo com busca case-insensitive ou variações de encoding (raiz e nao-normalizadas)
       try {
-        const files = await readdir(downloadsPath);
-        const matchingFile = files.find(file => {
-          // Comparação case-insensitive
-          if (file.toLowerCase() === decodedFilename.toLowerCase()) {
-            return true;
+        const tryDirs = [downloadsPath, join(downloadsPath, NAO_NORMALIZADAS_DIR)];
+        let matchingFile: string | null = null;
+        let matchedDir: string | null = null;
+
+        for (const dir of tryDirs) {
+          if (!existsSync(dir)) continue;
+          const files = await readdir(dir);
+          const hit = files.find((file) => filenamesMatchForPlayback(file, decodedFilename));
+          if (hit) {
+            matchingFile = hit;
+            matchedDir = dir;
+            break;
           }
-          // Comparação sem extensão
-          const fileBase = file.replace(/\.[^/.]+$/, '');
-          const decodedBase = decodedFilename.replace(/\.[^/.]+$/, '');
-          if (fileBase.toLowerCase() === decodedBase.toLowerCase()) {
-            return true;
-          }
-          return false;
-        });
-        
-        if (matchingFile) {
+        }
+
+        if (matchingFile && matchedDir) {
           console.warn(`⚠️ Arquivo encontrado com nome diferente: "${matchingFile}" (procurado: "${decodedFilename}")`);
-          filePath = join(downloadsPath, matchingFile);
+          filePath = join(matchedDir, matchingFile);
         } else {
-          console.error('❌ Arquivo não encontrado:', filePath);
+          const rootList = existsSync(downloadsPath) ? await readdir(downloadsPath) : [];
+          console.error('❌ Arquivo não encontrado:', join(downloadsPath, decodedFilename));
           console.error('   Downloads path:', downloadsPath);
           console.error('   Filename recebido:', filename);
           console.error('   Filename decodificado:', decodedFilename);
-          console.error('   Arquivos disponíveis:', files.slice(0, 10).join(', '), files.length > 10 ? `... (${files.length} total)` : '');
+          console.error('   Arquivos disponíveis (raiz):', rootList.slice(0, 10).join(', '), rootList.length > 10 ? `... (${rootList.length} total)` : '');
           return new NextResponse('Arquivo não encontrado', { status: 404 });
         }
       } catch (dirError) {
@@ -71,7 +76,7 @@ export async function GET(
       const fileSize = stat.size;
       
       // Determinar o tipo de conteúdo
-      const fileExt = filename.toLowerCase().split('.').pop();
+      const fileExt = decodedFilename.toLowerCase().split('.').pop();
       const contentType = fileExt === 'flac' ? 'audio/flac' : 'audio/mpeg';
       
       // Verificar se é uma requisição de range (para streaming)

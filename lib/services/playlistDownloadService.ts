@@ -9,7 +9,13 @@ import { metadataAggregator } from './metadataService';
 import { logger } from '../utils/logger';
 import { scrapeTracklist } from '../tracklistScraper';
 import { sendProgressEvent } from '../utils/progressEventService';
-import { getDownloadsPath, ensureValidCookies, hasValidCookiesFile } from '@/app/api/utils/common';
+import {
+  getDownloadsPath,
+  ensureValidCookies,
+  hasValidCookiesFile,
+  runFfmpegCopyWithMetadata,
+  type FfmpegMetadataEntry,
+} from '@/app/api/utils/common';
 
 const execAsync = promisify(exec);
 
@@ -1411,112 +1417,54 @@ export class PlaylistDownloadService {
     existingTags: any
   ): Promise<boolean> {
     try {
-      // Create temporary file for ffmpeg output with correct .flac extension
       const tempPath = filePath.replace('.flac', '_temp.flac');
-      
-      // Helper function to escape metadata values for ffmpeg in PowerShell
-      const escapeMetadataValue = (value: string): string => {
-        if (!value) return '';
-        // PowerShell-safe escaping - melhorado para Windows
-        return value
-          .replace(/"/g, '\\"')        // Escapar aspas duplas
-          .replace(/\$/g, '\\$')       // Escapar $ (PowerShell variables)
-          .replace(/`/g, '\\`')        // Escapar backticks (PowerShell escape char)
-          .replace(/&/g, '\\&')        // Escapar & (PowerShell command separator)
-          .replace(/\|/g, '\\|')       // Escapar | (PowerShell pipe)
-          .replace(/;/g, '\\;')        // Escapar ; (PowerShell command separator)
-          .replace(/</g, '\\<')        // Escapar < (PowerShell redirect)
-          .replace(/>/g, '\\>')        // Escapar > (PowerShell redirect)
-          .replace(/:/g, '\\:')        // Escapar : (PowerShell drive separator)
-          .replace(/\*/g, '\\*')       // Escapar * (PowerShell wildcard)
-          .replace(/\?/g, '\\?')       // Escapar ? (PowerShell wildcard)
-          .replace(/\[/g, '\\[')       // Escapar [ (PowerShell wildcard)
-          .replace(/\]/g, '\\]')       // Escapar ] (PowerShell wildcard)
-          .trim();
-      };
-      
-      // Build ffmpeg command with FLAC tags
-      const ffmpegArgs = [
-        '-i', `"${filePath}"`,
-        '-c', 'copy', // Copy without re-encoding
-        '-metadata', `"title=${escapeMetadataValue(metadata.title || cleanTitle)}"`,
-        '-metadata', `"artist=${escapeMetadataValue(metadata.artist || cleanArtist)}"`,
+
+      const flacMetadata: FfmpegMetadataEntry[] = [
+        { key: 'title', value: metadata.title || cleanTitle },
+        { key: 'artist', value: metadata.artist || cleanArtist },
       ];
 
-      // Add optional metadata fields if they exist
       if (existingTags.album) {
-        ffmpegArgs.push('-metadata', `"album=${escapeMetadataValue(existingTags.album)}"`);
+        flacMetadata.push({ key: 'album', value: existingTags.album });
       }
       if (metadata.year) {
-        ffmpegArgs.push('-metadata', `"date=${metadata.year}"`);
+        flacMetadata.push({ key: 'date', value: String(metadata.year) });
       }
       if (metadata.publishedDate) {
-        ffmpegArgs.push('-metadata', `"publisher_date=${escapeMetadataValue(metadata.publishedDate)}"`);
+        flacMetadata.push({ key: 'publisher_date', value: metadata.publishedDate });
       }
       if (metadata.genre) {
-        // Use both 'genre' and 'Genre' for better compatibility
-        const escapedGenre = escapeMetadataValue(metadata.genre);
-        ffmpegArgs.push('-metadata', `"genre=${escapedGenre}"`);
-        ffmpegArgs.push('-metadata', `"Genre=${escapedGenre}"`);
+        flacMetadata.push({ key: 'genre', value: metadata.genre });
+        flacMetadata.push({ key: 'Genre', value: metadata.genre });
       }
       if (metadata.label) {
-        // Use both 'publisher' and 'label' fields for better compatibility
         const deduplicatedLabel = deduplicateLabel(metadata.label);
         if (deduplicatedLabel) {
-          const escapedLabel = escapeMetadataValue(deduplicatedLabel);
-          ffmpegArgs.push('-metadata', `"publisher=${escapedLabel}"`);
-          ffmpegArgs.push('-metadata', `"label=${escapedLabel}"`);
+          flacMetadata.push({ key: 'publisher', value: deduplicatedLabel });
+          flacMetadata.push({ key: 'label', value: deduplicatedLabel });
         }
       }
       if (metadata.bpm) {
-        // Use both 'BPM' and 'bpm' for better compatibility
-        ffmpegArgs.push('-metadata', `"BPM=${metadata.bpm}"`);
-        ffmpegArgs.push('-metadata', `"bpm=${metadata.bpm}"`);
+        flacMetadata.push({ key: 'BPM', value: String(metadata.bpm) });
+        flacMetadata.push({ key: 'bpm', value: String(metadata.bpm) });
       }
       if (metadata.key) {
-        // Use multiple key field names that the API searches for
-        const escapedKey = escapeMetadataValue(metadata.key);
-        ffmpegArgs.push('-metadata', `"key=${escapedKey}"`);
-        ffmpegArgs.push('-metadata', `"initialKey=${escapedKey}"`);
-        ffmpegArgs.push('-metadata', `"INITIALKEY=${escapedKey}"`);
-        ffmpegArgs.push('-metadata', `"initialkey=${escapedKey}"`);
+        flacMetadata.push({ key: 'key', value: metadata.key });
+        flacMetadata.push({ key: 'initialKey', value: metadata.key });
+        flacMetadata.push({ key: 'INITIALKEY', value: metadata.key });
+        flacMetadata.push({ key: 'initialkey', value: metadata.key });
       }
 
-      // Add comment with source info (escape pipes to avoid shell interpretation)
-      const deduplicatedLabel = metadata.label ? deduplicateLabel(metadata.label) : '';
-      const commentText = `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${deduplicatedLabel || 'N/A'} -- Published: ${metadata.publishedDate || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`;
-      ffmpegArgs.push('-metadata', `"comment=${escapeMetadataValue(commentText)}"`);
+      const deduplicatedLabelComment = metadata.label ? deduplicateLabel(metadata.label) : '';
+      const commentText = `Enhanced metadata -- BPM: ${metadata.bpm || 'N/A'} -- Key: ${metadata.key || 'N/A'} -- Genre: ${metadata.genre || 'N/A'} -- Album: ${existingTags.album || 'N/A'} -- Label: ${deduplicatedLabelComment || 'N/A'} -- Published: ${metadata.publishedDate || 'N/A'} -- Sources: ${metadata.sources?.join(', ') || 'None'}`;
+      flacMetadata.push({ key: 'comment', value: commentText });
 
-      // Specify FLAC format explicitly and output to temp file
-      ffmpegArgs.push('-f', 'flac', `"${tempPath}"`);
+      logger.info(`Writing FLAC metadata for: ${cleanTitle}`);
+      await runFfmpegCopyWithMetadata(filePath, tempPath, flacMetadata, {
+        format: 'flac',
+        timeoutMs: 120000,
+      });
 
-      // Execute ffmpeg command - Use PowerShell-safe format
-      const ffmpegCommand = `ffmpeg -y ${ffmpegArgs.join(' ')}`;
-      logger.info(`Writing FLAC metadata with: ${ffmpegCommand}`);
-      
-      // Execute with shell: false to avoid PowerShell interpretation issues
-      const { execSync } = require('child_process');
-      try {
-        execSync(ffmpegCommand, { 
-          stdio: 'pipe',
-          encoding: 'utf8',
-          timeout: 30000,
-          windowsHide: true
-        });
-      } catch (execError: any) {
-        // Fallback: try with cmd.exe instead of PowerShell
-        logger.warn('FFmpeg failed with PowerShell, trying with cmd.exe...');
-        const cmdCommand = `cmd /c "${ffmpegCommand}"`;
-        execSync(cmdCommand, { 
-          stdio: 'pipe',
-          encoding: 'utf8',
-          timeout: 30000,
-          windowsHide: true
-        });
-      }
-      
-      // Replace original file with updated version
-      const { rename } = require('fs/promises');
       await rename(tempPath, filePath);
       
       logger.info(`✅ FLAC metadata written successfully for: ${cleanTitle}`);

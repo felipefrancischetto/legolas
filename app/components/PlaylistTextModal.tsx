@@ -7,6 +7,7 @@ import { useSettings } from '../hooks/useSettings';
 import BaseModal from './BaseModal';
 import PlaylistTrackItem from './PlaylistTrackItem';
 import { safeSetItem, safeGetItem, safeRemoveItem } from '../utils/localStorage';
+import { parsePlaylistLines } from '../utils/parsePlaylistText';
 
 interface PlaylistTextModalProps {
   isOpen: boolean;
@@ -43,7 +44,7 @@ export default function PlaylistTextModal({ isOpen, onClose, themeColors }: Play
   const [playlistText, setPlaylistText] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [parsedTracks, setParsedTracks] = useState<Array<{ title: string; artist: string }>>([]);
+  const [parsedTracks, setParsedTracks] = useState<Array<{ title: string; artist: string; youtubeUrl?: string; videoId?: string }>>([]);
   const [enabledTracks, setEnabledTracks] = useState<Set<number>>(new Set());
   const [trackMetadata, setTrackMetadata] = useState<Map<number, TrackMetadata>>(new Map());
   const [searchingTracks, setSearchingTracks] = useState<Set<number>>(new Set());
@@ -149,13 +150,16 @@ export default function PlaylistTextModal({ isOpen, onClose, themeColors }: Play
     isInitialMountRef.current = false;
     
     const saved = safeGetItem<SavedPlaylistData>(STORAGE_KEY);
-    if (saved && saved.playlistText && saved.parsedTracks && saved.parsedTracks.length > 0) {
+    if (saved && saved.playlistText && saved.playlistText.trim()) {
       setPlaylistText(saved.playlistText);
-      setParsedTracks(saved.parsedTracks);
+      const lines = saved.playlistText.split('\n').filter(line => line.trim());
+      const tracksFromText = parsePlaylistLines(lines);
+      setParsedTracks(tracksFromText.length > 0 ? tracksFromText : (saved.parsedTracks || []));
       
       // Restaurar enabledTracks (verificação de downloads será feita depois pelo useEffect que monitora files)
       const enabledSet = new Set<number>();
-      saved.parsedTracks.forEach((track, idx) => {
+      const restoredTracks = tracksFromText.length > 0 ? tracksFromText : (saved.parsedTracks || []);
+      restoredTracks.forEach((_, idx) => {
         // Restaurar apenas as que estavam habilitadas antes
         // A verificação se foram baixadas será feita automaticamente pelo useEffect que monitora files
         if ((saved.enabledTracks || []).includes(idx)) {
@@ -168,12 +172,12 @@ export default function PlaylistTextModal({ isOpen, onClose, themeColors }: Play
         setTrackMetadata(new Map(saved.trackMetadata));
       }
       
-      console.log('📦 Playlist carregada na montagem:', saved.parsedTracks.length, 'faixas');
+      console.log('📦 Playlist carregada na montagem:', restoredTracks.length, 'faixas');
     }
   }, []);
   
   // Limite de requisições simultâneas
-  const MAX_CONCURRENT_SEARCHES = 5;
+  const MAX_CONCURRENT_SEARCHES = 2;
   const activeSearchesRef = useRef(0);
   const searchQueueRef = useRef<Array<{ index: number; track: { title: string; artist: string } }>>([]);
   
@@ -372,13 +376,7 @@ export default function PlaylistTextModal({ isOpen, onClose, themeColors }: Play
       // Processar o texto normalizado
       setTimeout(() => {
         const lines = newText.split('\n').filter(line => line.trim());
-        const tracks = lines.map(line => {
-          const parts = line.split('-').map(part => part.trim());
-          return {
-            title: parts[1] || parts[0],
-            artist: parts[0]
-          };
-        });
+        const tracks = parsePlaylistLines(lines);
         
         setParsedTracks(tracks);
         
@@ -405,23 +403,7 @@ export default function PlaylistTextModal({ isOpen, onClose, themeColors }: Play
     
     // Parse tracks from text imediatamente (sem debounce para UI responsiva)
     const lines = text.split('\n').filter(line => line.trim());
-    const tracks = lines.map(line => {
-      // Remove timestamps antes de fazer o parse (já deve estar limpo, mas garantindo)
-      const cleanLine = line
-        .replace(/\*\*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\*\*/g, '')
-        .replace(/\[\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\]/g, '')
-        .replace(/\(\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\)/g, '')
-        .replace(/\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}/g, '')
-        // Remove padrão com dois pontos duplos: 1::40, 2::13, etc.
-        .replace(/\d+::\d{2}/g, '')
-        .trim();
-      
-      const parts = cleanLine.split('-').map(part => part.trim());
-      return {
-        title: parts[1] || parts[0],
-        artist: parts[0]
-      };
-    });
+    const tracks = parsePlaylistLines(lines);
     
     setParsedTracks(tracks);
     
@@ -441,84 +423,159 @@ export default function PlaylistTextModal({ isOpen, onClose, themeColors }: Play
     searchQueueRef.current = [];
   };
   
-  // Função para processar a fila de buscas
+  const applyTrackMetadata = useCallback(
+    (index: number, track: { title: string; artist: string }, videoResult?: {
+      title?: string;
+      uploader?: string;
+      thumbnail?: string;
+      duration?: string;
+      url?: string;
+      videoId?: string;
+      source?: 'youtube-music' | 'youtube';
+    }) => {
+      setTrackMetadata((prev) => {
+        const newMap = new Map(prev);
+        newMap.set(index, {
+          title: videoResult?.title || track.title,
+          artist: videoResult?.uploader || track.artist,
+          thumbnail: videoResult?.thumbnail,
+          duration: videoResult?.duration,
+          url: videoResult?.url,
+          videoId: videoResult?.videoId,
+          source: videoResult?.source,
+        });
+        return newMap;
+      });
+    },
+    []
+  );
+
+  const buildSearchQuery = useCallback((track: { title: string; artist: string; youtubeUrl?: string; videoId?: string }) => {
+    if (track.youtubeUrl) return track.youtubeUrl;
+    const parts = [track.artist, track.title].filter(Boolean);
+    return parts.join(' - ');
+  }, []);
+
+  const searchTracksInBatch = useCallback(
+    async (items: Array<{ index: number; track: { title: string; artist: string; youtubeUrl?: string; videoId?: string } }>) => {
+      const needsRemoteSearch = items.filter(({ track }) => !track.youtubeUrl);
+      const withUrl = items.filter(({ track }) => track.youtubeUrl);
+
+      for (const { index, track } of withUrl) {
+        applyTrackMetadata(index, track, {
+          title: track.title,
+          uploader: track.artist,
+          url: track.youtubeUrl,
+          videoId: track.videoId,
+          source: 'youtube',
+        });
+        setSearchingTracks((prev) => {
+          const next = new Set(prev);
+          next.delete(index);
+          return next;
+        });
+      }
+
+      if (needsRemoteSearch.length === 0) return;
+
+      const chunkSize = 8;
+      for (let offset = 0; offset < needsRemoteSearch.length; offset += chunkSize) {
+        const chunk = needsRemoteSearch.slice(offset, offset + chunkSize);
+        const queries = chunk.map(({ track }) => buildSearchQuery(track));
+
+        try {
+          const response = await fetch('/api/search-video', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ queries, platform: 'youtube-music' }),
+          });
+
+          if (response.ok) {
+            const payload = await response.json();
+            const results = Array.isArray(payload.results) ? payload.results : [];
+
+            for (const entry of results) {
+              const item = chunk[entry.index];
+              if (!item) continue;
+              if (entry.ok && entry.data) {
+                applyTrackMetadata(item.index, item.track, entry.data);
+              } else {
+                applyTrackMetadata(item.index, item.track);
+              }
+              setSearchingTracks((prev) => {
+                const next = new Set(prev);
+                next.delete(item.index);
+                return next;
+              });
+            }
+          } else {
+            for (const item of chunk) {
+              applyTrackMetadata(item.index, item.track);
+              setSearchingTracks((prev) => {
+                const next = new Set(prev);
+                next.delete(item.index);
+                return next;
+              });
+            }
+          }
+        } catch (err) {
+          console.warn('❌ Erro na busca em lote da playlist:', err);
+          for (const item of chunk) {
+            applyTrackMetadata(item.index, item.track);
+            setSearchingTracks((prev) => {
+              const next = new Set(prev);
+              next.delete(item.index);
+              return next;
+            });
+          }
+        }
+
+        if (offset + chunkSize < needsRemoteSearch.length) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
+    },
+    [applyTrackMetadata, buildSearchQuery]
+  );
+
+  // Fallback: fila serializada com poucas requisições paralelas
   const processSearchQueue = useCallback(async () => {
-    // Processar até o limite de requisições simultâneas
     while (searchQueueRef.current.length > 0 && activeSearchesRef.current < MAX_CONCURRENT_SEARCHES) {
       const { index, track } = searchQueueRef.current.shift()!;
       activeSearchesRef.current++;
-      setSearchingTracks(prev => new Set(prev).add(index));
-      
-      // Executar busca de forma assíncrona
+      setSearchingTracks((prev) => new Set(prev).add(index));
+
       (async () => {
         try {
-          const query = `${track.artist} - ${track.title}`;
-          console.log(`🔍 Buscando vídeo para: "${query}"`);
-          
-          const videoResponse = await fetch(`/api/search-video?q=${encodeURIComponent(query)}&platform=youtube-music`);
-          
+          const query = buildSearchQuery(track);
+          const videoResponse = await fetch(
+            `/api/search-video?q=${encodeURIComponent(query)}&platform=youtube-music`
+          );
+
           if (videoResponse.ok) {
             const videoResult = await videoResponse.json();
-            console.log(`✅ Vídeo encontrado para faixa ${index}:`, videoResult?.title);
-            
-            const metadata: TrackMetadata = {
-              title: videoResult?.title || track.title,
-              artist: videoResult?.uploader || track.artist,
-              thumbnail: videoResult?.thumbnail || undefined,
-              duration: videoResult?.duration || undefined,
-              url: videoResult?.url || undefined,
-              videoId: videoResult?.videoId || undefined,
-              source: videoResult?.source || undefined // Não fazer fallback, deixar undefined se não vier
-            };
-            
-            setTrackMetadata(prev => {
-              const newMap = new Map(prev);
-              newMap.set(index, metadata);
-              return newMap;
-            });
+            applyTrackMetadata(index, track, videoResult);
           } else {
-            console.warn(`⚠️ Resposta não OK para faixa ${index}:`, videoResponse.status);
-            // Mesmo sem resultado, marcar como buscado (sem metadados)
-            setTrackMetadata(prev => {
-              const newMap = new Map(prev);
-              if (!newMap.has(index)) {
-                newMap.set(index, {
-                  title: track.title,
-                  artist: track.artist
-                });
-              }
-              return newMap;
-            });
+            applyTrackMetadata(index, track);
           }
         } catch (err) {
           console.warn(`❌ Erro ao buscar vídeo para faixa ${index}:`, err);
-          // Em caso de erro, ainda marcar como buscado (sem metadados)
-          setTrackMetadata(prev => {
-            const newMap = new Map(prev);
-            if (!newMap.has(index)) {
-              newMap.set(index, {
-                title: track.title,
-                artist: track.artist
-              });
-            }
-            return newMap;
-          });
+          applyTrackMetadata(index, track);
         } finally {
           activeSearchesRef.current--;
-          setSearchingTracks(prev => {
+          setSearchingTracks((prev) => {
             const newSet = new Set(prev);
             newSet.delete(index);
             return newSet;
           });
-          
-          // Processar próximo item da fila após um pequeno delay
+
           if (searchQueueRef.current.length > 0) {
-            setTimeout(() => processSearchQueue(), 50);
+            setTimeout(() => processSearchQueue(), 200);
           }
         }
       })();
     }
-  }, []);
+  }, [applyTrackMetadata, buildSearchQuery]);
   
   // Atualizar faixas habilitadas quando os arquivos mudarem (novo download)
   useEffect(() => {
@@ -537,7 +594,13 @@ export default function PlaylistTextModal({ isOpen, onClose, themeColors }: Play
     });
   }, [files, parsedTracks, isTrackDownloaded]);
   
-  // Iniciar buscas quando as faixas mudarem
+  // Chave estável do conteúdo parseado (evita re-busca só por nova referência de array)
+  const parsedTracksKey = useMemo(
+    () => parsedTracks.map(t => `${t.artist}\u0000${t.title}`).join('\n'),
+    [parsedTracks]
+  );
+
+  // Iniciar buscas quando o conteúdo das faixas mudar (com debounce ao digitar)
   useEffect(() => {
     if (parsedTracks.length === 0) {
       setTrackMetadata(new Map());
@@ -546,24 +609,19 @@ export default function PlaylistTextModal({ isOpen, onClose, themeColors }: Play
       searchQueueRef.current = [];
       return;
     }
-    
-    // Limpar estado anterior
-    setTrackMetadata(new Map());
-    activeSearchesRef.current = 0;
-    
-    // Marcar todas as faixas como "buscando" inicialmente
-    setSearchingTracks(new Set(parsedTracks.map((_, idx) => idx)));
-    
-    // Adicionar todas as faixas à fila de busca
-    searchQueueRef.current = parsedTracks.map((track, idx) => ({ index: idx, track }));
-    
-    console.log(`📋 Iniciando busca para ${parsedTracks.length} faixas`);
-    
-    // Processar fila após um pequeno delay para garantir que o estado foi atualizado
-    setTimeout(() => {
-      processSearchQueue();
-    }, 100);
-  }, [parsedTracks.length, processSearchQueue]);
+
+    const debounceId = setTimeout(() => {
+      setTrackMetadata(new Map());
+      activeSearchesRef.current = 0;
+      setSearchingTracks(new Set(parsedTracks.map((_, idx) => idx)));
+      const items = parsedTracks.map((track, idx) => ({ index: idx, track }));
+
+      console.log(`📋 Iniciando busca para ${parsedTracks.length} faixas`);
+      void searchTracksInBatch(items);
+    }, 450);
+
+    return () => clearTimeout(debounceId);
+  }, [parsedTracksKey, parsedTracks, searchTracksInBatch]);
 
   const handleToggleTrack = (index: number) => {
     const track = parsedTracks[index];
@@ -609,11 +667,11 @@ export default function PlaylistTextModal({ isOpen, onClose, themeColors }: Play
           const metadata = trackMetadata.get(idx);
           let queueItem: ReturnType<typeof addToQueue> | null = null;
 
-          if (metadata?.url) {
-            // Adicionar com URL do YouTube encontrada
+          const directUrl = track.youtubeUrl || metadata?.url;
+          if (directUrl) {
             queueItem = addToQueue({
-              url: metadata.url,
-              title: metadata.title || track.title,
+              url: directUrl,
+              title: metadata?.title || track.title,
               format: 'flac',
               enrichWithBeatport: true, // Sempre ativo por padrão
               showBeatportPage: false,

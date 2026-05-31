@@ -436,13 +436,32 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       // Atualizar item específico da playlist - aplicar imediatamente
       setQueue(prev => prev.map(item => {
         if (item.id === downloadId && item.playlistItems) {
-          const updatedPlaylistItems = item.playlistItems.map((plItem, idx) =>
-            idx === playlistIndex ? { 
-              ...plItem, 
-              progress: validProgress, 
-              status: 'downloading' as const 
-            } : plItem
-          );
+          const updatedPlaylistItems = item.playlistItems.map((plItem, idx) => {
+            // Para faixas anteriores à faixa atual, se ainda estiverem "pending" ou "downloading"
+            // e não tiverem erro marcado, consideramos como concluídas.
+            if (idx < playlistIndex) {
+              if (plItem.status === 'pending' || plItem.status === 'downloading') {
+                return {
+                  ...plItem,
+                  status: 'completed' as const,
+                  progress: 100
+                };
+              }
+              return plItem;
+            }
+
+            // Faixa atual: garantir que esteja marcada como "downloading" com o progresso mais recente.
+            if (idx === playlistIndex) {
+              return { 
+                ...plItem, 
+                progress: validProgress, 
+                status: plItem.status === 'error' ? plItem.status : 'downloading' as const
+              };
+            }
+
+            return plItem;
+          });
+
           // Também atualizar progresso geral do item se necessário
           const updatedItem = { 
             ...item, 
@@ -477,12 +496,32 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     const { playlistIndex, ...stepData } = step;
     
     if (typeof playlistIndex === 'number') {
-      // Adicionar step a item específico da playlist
+      // Adicionar step a item específico da playlist e ajustar o status da faixa conforme o tipo do passo
       setQueue(prev => prev.map(item => {
         if (item.id === downloadId && item.playlistItems) {
-          const updatedPlaylistItems = item.playlistItems.map((plItem, idx) =>
-            idx === playlistIndex ? { ...plItem, steps: [...plItem.steps, stepData] } : plItem
-          );
+          const updatedPlaylistItems = item.playlistItems.map((plItem, idx) => {
+            if (idx !== playlistIndex) return plItem;
+
+            let nextStatus = plItem.status;
+
+            if (stepData.type === 'error') {
+              nextStatus = 'error';
+            } else if (stepData.completed) {
+              nextStatus = 'completed';
+            } else if (stepData.type === 'progress' || stepData.type === 'info' || stepData.type === 'warning') {
+              // Qualquer atividade na faixa que não seja erro/completo a marca como "downloading"
+              if (plItem.status === 'pending') {
+                nextStatus = 'downloading';
+              }
+            }
+
+            return { 
+              ...plItem, 
+              status: nextStatus,
+              steps: [...plItem.steps, stepData] 
+            };
+          });
+
           return { ...item, playlistItems: updatedPlaylistItems };
         }
         return item;

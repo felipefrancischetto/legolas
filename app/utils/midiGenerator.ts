@@ -22,6 +22,8 @@ export interface MidiClip {
   time_signature: string;
   bars: number;
   notes: MidiNote[];
+  /** Canal MIDI 0–15; bateria usa 9 (canal 10 no Ableton) */
+  midiChannel?: number;
 }
 
 export interface MidiGenerationContext {
@@ -33,6 +35,12 @@ export interface MidiGenerationContext {
   key?: string;           // e.g., "F minor", "A major"
   genre?: string;         // e.g., "Techno", "House"
   timeSignature?: string; // e.g., "4/4"
+  rhythmicPattern?: string;  // "4x4", "broken beat", "polirrítmico"
+  grooveType?: string;
+  swing?: number;
+  drumPattern?: string;   // "shuffle", "constante", etc.
+  /** Eventos extraídos do áudio (prioridade sobre templates) */
+  extractedNotes?: MidiNote[];
 }
 
 type StemType =
@@ -170,15 +178,39 @@ function identifyStemType(element: string, category: string): StemType {
   return 'pad';
 }
 
+function isDrumStemType(stemType: StemType): boolean {
+  return (
+    stemType === 'kick' ||
+    stemType === 'snare_clap' ||
+    stemType === 'hihat' ||
+    stemType === 'cymbal' ||
+    stemType === 'percussion' ||
+    stemType === 'fill'
+  );
+}
+
 // ──────────────────────────────────────────────────────────────
 // PATTERN GENERATORS
 // ──────────────────────────────────────────────────────────────
+
+function isBrokenBeat(ctx: MidiGenerationContext): boolean {
+  const p = (ctx.rhythmicPattern || '').toLowerCase();
+  return p.includes('broken') || p.includes('polir');
+}
 
 function generateKickPattern(ctx: MidiGenerationContext): MidiNote[] {
   const notes: MidiNote[] = [];
   const bars = ctx.intensity >= 70 ? 1 : 2;
   const totalBeats = bars * 4;
   const vel = Math.min(127, 95 + Math.round(ctx.intensity * 0.2));
+
+  if (isBrokenBeat(ctx)) {
+    const hits = [0, 1.5, 2.5, 3.25, 4, 5.5, 6.5, 7.25];
+    for (const beat of hits) {
+      if (beat < totalBeats) notes.push(n(GM_DRUM.KICK, beat, 0.25, vel - 5));
+    }
+    return notes;
+  }
 
   if (ctx.intensity >= 60) {
     // 4-on-the-floor
@@ -248,10 +280,24 @@ function generateHiHatPattern(ctx: MidiGenerationContext): MidiNote[] {
   const notes: MidiNote[] = [];
   const bars = 1;
   const totalBeats = bars * 4;
+  const isShuffle =
+    (ctx.drumPattern || '').toLowerCase().includes('shuffle') ||
+    (ctx.grooveType || '').toLowerCase().includes('swing');
 
   // Velocity pattern for groove
   const velCycle16 = [100, 45, 65, 45, 85, 45, 65, 45, 95, 45, 65, 45, 85, 45, 65, 45];
   const velCycle8 = [100, 55, 85, 55, 95, 55, 85, 55];
+
+  if (isShuffle) {
+    const shuffleOffsets = [0, 0.66, 1, 1.66, 2, 2.66, 3, 3.66];
+    for (let i = 0; i < shuffleOffsets.length; i++) {
+      const beat = shuffleOffsets[i];
+      if (beat >= totalBeats) break;
+      const vel = Math.round(velCycle8[i % 8] * (0.6 + ctx.intensity / 250));
+      notes.push(n(GM_DRUM.CLOSED_HH, beat, 0.2, Math.min(127, vel)));
+    }
+    return notes;
+  }
 
   if (ctx.intensity >= 60) {
     // 1/16 pattern
@@ -334,13 +380,14 @@ function generatePercussionPattern(ctx: MidiGenerationContext): MidiNote[] {
   notes.push(n(percNotes[0], 6.75, 0.2, vel + 5));
   notes.push(n(percNotes[1], 7.25, 0.2, vel - 10));
 
-  // Add shaker/tamb for high intensity
+  // Add shaker/tamb for high intensity (velocidades determinísticas por posição)
   if (ctx.intensity >= 60) {
+    const shakerVel = [32, 28, 35, 30, 33, 27, 36, 31, 34, 29, 37, 30];
     for (let bar = 0; bar < bars; bar++) {
       const offset = bar * 4;
       for (let i = 0; i < 16; i++) {
-        if (i % 4 !== 0) { // skip downbeats
-          notes.push(n(GM_DRUM.SHAKER, offset + i * 0.25, 0.15, 30 + Math.round(Math.random() * 20)));
+        if (i % 4 !== 0) {
+          notes.push(n(GM_DRUM.SHAKER, offset + i * 0.25, 0.15, shakerVel[i % shakerVel.length]));
         }
       }
     }
@@ -606,6 +653,22 @@ export function generateMidiClip(ctx: MidiGenerationContext): MidiClip {
   const timeSignature = ctx.timeSignature || '4/4';
   const bpm = ctx.bpm || 128;
 
+  // Prioridade: eventos extraídos do áudio (onsets/pitch reais da música)
+  if (ctx.extractedNotes && ctx.extractedNotes.length >= 2) {
+    const maxEnd = Math.max(
+      ...ctx.extractedNotes.map((note) => note.start_beat + note.duration_beats)
+    );
+    const bars = Math.max(1, Math.ceil(maxEnd / 4));
+    return {
+      stem: ctx.element,
+      bpm,
+      time_signature: timeSignature,
+      bars,
+      notes: ctx.extractedNotes,
+      midiChannel: isDrumStemType(stemType) ? 9 : 0,
+    };
+  }
+
   let midiNotes: MidiNote[];
   let bars: number;
 
@@ -677,6 +740,7 @@ export function generateMidiClip(ctx: MidiGenerationContext): MidiClip {
     time_signature: timeSignature,
     bars,
     notes: midiNotes,
+    midiChannel: isDrumStemType(stemType) ? 9 : 0,
   };
 }
 
@@ -711,6 +775,10 @@ export function midiClipToBytes(clip: MidiClip): Uint8Array {
     data: [0xFF, 0x58, 0x04, num || 4, denPow, 24, 8],
   });
 
+  const channel = Math.max(0, Math.min(15, clip.midiChannel ?? 0));
+  const noteOnStatus = 0x90 + channel;
+  const noteOffStatus = 0x80 + channel;
+
   // Note events
   for (const note of clip.notes) {
     const startTick = Math.round(note.start_beat * PPQ);
@@ -718,18 +786,16 @@ export function midiClipToBytes(clip: MidiClip): Uint8Array {
     const midiNote = Math.max(0, Math.min(127, note.midi));
     const vel = Math.max(1, Math.min(127, note.velocity));
 
-    // Note On (channel 0)
     trackEvents.push({
       tick: startTick,
       priority: 10,
-      data: [0x90, midiNote, vel],
+      data: [noteOnStatus, midiNote, vel],
     });
 
-    // Note Off (channel 0)
     trackEvents.push({
       tick: startTick + durationTicks,
-      priority: 5, // note-off before note-on at same tick
-      data: [0x80, midiNote, 0],
+      priority: 5,
+      data: [noteOffStatus, midiNote, 0],
     });
   }
 
@@ -785,14 +851,31 @@ export function midiClipToBytes(clip: MidiClip): Uint8Array {
 // DOWNLOAD / EXPORT
 // ──────────────────────────────────────────────────────────────
 
-/** Downloads the MIDI clip as a .mid file */
-export function downloadMidi(clip: MidiClip, filename?: string): void {
+/** Blob URL do .mid (revogar com revokeMidiObjectUrl quando não precisar mais) */
+export function createMidiObjectUrl(clip: MidiClip): { url: string; filename: string; bytes: Uint8Array } {
   const bytes = midiClipToBytes(clip);
-  const blob = new Blob([bytes], { type: 'audio/midi' });
-  const url = URL.createObjectURL(blob);
+  const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], {
+    type: 'audio/midi',
+  });
+  return {
+    url: URL.createObjectURL(blob),
+    filename: getMidiFilename(clip),
+    bytes,
+  };
+}
 
-  const safeStem = clip.stem.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const name = filename || `${safeStem}_${clip.bpm}bpm_${clip.bars}bar.mid`;
+export function revokeMidiObjectUrl(url: string): void {
+  try {
+    URL.revokeObjectURL(url);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Downloads the MIDI clip as a .mid file */
+export function downloadMidi(clip: MidiClip, filename?: string, trackName?: string): void {
+  const { url, filename: defaultName } = createMidiObjectUrl(clip);
+  const name = filename || (trackName ? getMidiFilename(clip, trackName) : defaultName);
 
   const a = document.createElement('a');
   a.href = url;
@@ -800,7 +883,146 @@ export function downloadMidi(clip: MidiClip, filename?: string): void {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  revokeMidiObjectUrl(url);
+}
+
+/**
+ * Arrastar o .mid para o Ableton (Chrome/Edge no Windows).
+ * O Ableton 12 não aceita Ctrl+V de MIDI do navegador — use arrastar ou baixar.
+ */
+export function setMidiDragTransfer(
+  event: DragEvent,
+  clip: MidiClip,
+  trackName?: string
+): void {
+  const { url, filename } = createMidiObjectUrl(clip);
+  const finalName = trackName ? getMidiFilename(clip, trackName) : filename;
+  const dt = event.dataTransfer;
+  if (!dt) return;
+
+  dt.effectAllowed = 'copy';
+  dt.setData('text/plain', finalName);
+
+  // Chrome/Edge: solta como arquivo .mid no destino (Ableton, Explorer, etc.)
+  try {
+    dt.setData('DownloadURL', `audio/midi:${finalName}:${url}`);
+  } catch {
+    /* Safari/Firefox: sem DownloadURL */
+  }
+
+  try {
+    dt.setData('text/uri-list', url);
+  } catch {
+    /* ignore */
+  }
+
+  // Revoga após o drag terminar
+  const target = event.currentTarget as HTMLElement;
+  const cleanup = () => {
+    revokeMidiObjectUrl(url);
+    target.removeEventListener('dragend', cleanup);
+  };
+  target.addEventListener('dragend', cleanup);
+}
+
+export interface MidiDragFileEntry {
+  url: string;
+  filename: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * Arrasta vários .mid de uma vez para o Ableton (Chrome/Edge no Windows).
+ * Solte na vista Arrangement: o Live cria uma faixa MIDI por arquivo.
+ */
+export function setAllMidiDragTransfer(
+  event: DragEvent,
+  clips: MidiClip[],
+  trackName?: string
+): boolean {
+  const dt = event.dataTransfer;
+  if (!dt || clips.length === 0) return false;
+
+  const entries: MidiDragFileEntry[] = clips.map((clip) => {
+    const { url, filename, bytes } = createMidiObjectUrl(clip);
+    const finalName = trackName ? getMidiFilename(clip, trackName) : filename;
+    return { url, filename: finalName, bytes };
+  });
+
+  dt.effectAllowed = 'copy';
+  dt.setData('text/plain', entries.map((e) => e.filename).join('\n'));
+
+  let filesAdded = 0;
+  for (const entry of entries) {
+    try {
+      const blob = new Blob(
+        [
+          entry.bytes.buffer.slice(
+            entry.bytes.byteOffset,
+            entry.bytes.byteOffset + entry.bytes.byteLength
+          ) as ArrayBuffer,
+        ],
+        { type: 'audio/midi' }
+      );
+      const file = new File([blob], entry.filename, { type: 'audio/midi' });
+      if (dt.items?.add) {
+        dt.items.add(file);
+        filesAdded++;
+      }
+    } catch {
+      /* ignore per-file */
+    }
+  }
+
+  // Fallback: primeiro arquivo via DownloadURL (Safari / drag único)
+  if (filesAdded === 0 && entries[0]) {
+    try {
+      dt.setData('DownloadURL', `audio/midi:${entries[0].filename}:${entries[0].url}`);
+    } catch {
+      /* ignore */
+    }
+    try {
+      dt.setData('text/uri-list', entries[0].url);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const target = event.currentTarget as HTMLElement;
+  const cleanup = () => {
+    for (const entry of entries) revokeMidiObjectUrl(entry.url);
+    target.removeEventListener('dragend', cleanup);
+  };
+  target.addEventListener('dragend', cleanup);
+
+  return filesAdded > 0 || entries.length > 0;
+}
+
+/** Salvar .mid com diálogo do sistema (Chrome/Edge) — melhor para importar no Ableton */
+export async function saveMidiWithPicker(clip: MidiClip, trackName?: string): Promise<boolean> {
+  const picker = (window as Window & { showSaveFilePicker?: (options: object) => Promise<FileSystemFileHandle> })
+    .showSaveFilePicker;
+  if (!picker) return false;
+
+  try {
+    const bytes = midiClipToBytes(clip);
+    const handle = await picker({
+      suggestedName: getMidiFilename(clip, trackName),
+      types: [
+        {
+          description: 'MIDI',
+          accept: { 'audio/midi': ['.mid'], 'audio/x-midi': ['.mid'] },
+        },
+      ],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+    await writable.close();
+    return true;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') return false;
+    return false;
+  }
 }
 
 /** Generates the MIDI clip JSON (for clipboard or API use) */
@@ -831,11 +1053,73 @@ export async function copyMidiClipJSON(clip: MidiClip): Promise<boolean> {
   }
 }
 
-/** Main convenience function: generates clip, downloads .mid, and copies JSON */
-export function generateAndDownloadMidi(ctx: MidiGenerationContext): MidiClip {
+/** Base64 do arquivo .mid (para campo copiável / import manual) */
+export function midiBytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const slice = bytes.subarray(i, i + chunk);
+    binary += String.fromCharCode(...slice);
+  }
+  return btoa(binary);
+}
+
+/** Data URL do .mid — útil para arrastar ou salvar */
+export function midiClipToDataUrl(clip: MidiClip): string {
+  const bytes = midiClipToBytes(clip);
+  return `data:audio/midi;base64,${midiBytesToBase64(bytes)}`;
+}
+
+/** Nome seguro para arquivo .mid */
+export function getMidiFilename(clip: MidiClip, trackName?: string): string {
+  const safeStem = clip.stem.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const prefix = trackName
+    ? trackName.replace(/[^a-zA-Z0-9_\- ]/g, '').replace(/\s+/g, '_').substring(0, 40) + '_'
+    : '';
+  return `${prefix}${safeStem}_${clip.bpm}bpm_${clip.bars}bar.mid`;
+}
+
+/**
+ * @deprecated Ableton Live não importa MIDI via Ctrl+V do navegador. Use downloadMidi ou setMidiDragTransfer.
+ */
+export async function copyMidiFileToClipboard(clip: MidiClip): Promise<'file' | 'base64' | false> {
+  const bytes = midiClipToBytes(clip);
+  const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], {
+    type: 'audio/midi',
+  });
+
+  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+    try {
+      const filename = getMidiFilename(clip);
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'audio/midi': blob,
+          'audio/x-midi': blob,
+          'application/octet-stream': blob,
+          'text/plain': new Blob([filename], { type: 'text/plain' }),
+        }),
+      ]);
+      return 'file';
+    } catch {
+      /* fallthrough */
+    }
+  }
+
+  try {
+    await navigator.clipboard.writeText(midiBytesToBase64(bytes));
+    return 'base64';
+  } catch {
+    return false;
+  }
+}
+
+/** Main convenience function: generates clip and downloads .mid */
+export function generateAndDownloadMidi(
+  ctx: MidiGenerationContext,
+  trackName?: string
+): MidiClip {
   const clip = generateMidiClip(ctx);
-  downloadMidi(clip);
-  copyMidiClipJSON(clip);
+  downloadMidi(clip, undefined, trackName);
   return clip;
 }
 
@@ -843,7 +1127,7 @@ export function generateAndDownloadMidi(ctx: MidiGenerationContext): MidiClip {
 // ZIP BUILDER (STORE method - no compression, ideal for small MIDI files)
 // ──────────────────────────────────────────────────────────────
 
-function createZip(files: { name: string; data: Uint8Array }[]): Uint8Array {
+export function createZipArchive(files: { name: string; data: Uint8Array }[]): Uint8Array {
   const localHeaders: Uint8Array[] = [];
   const centralEntries: Uint8Array[] = [];
   let offset = 0;
@@ -949,7 +1233,8 @@ export function downloadAllMidisAsZip(
   bpm: number,
   key?: string,
   genre?: string,
-  trackName?: string
+  trackName?: string,
+  buildContext?: (el: MidiElementInfo) => MidiGenerationContext
 ): number {
   if (elements.length === 0) return 0;
 
@@ -965,16 +1250,18 @@ export function downloadAllMidisAsZip(
   const files: { name: string; data: Uint8Array }[] = [];
 
   for (const el of uniqueElements) {
-    const ctx: MidiGenerationContext = {
-      element: el.element,
-      category: el.category,
-      role: el.role,
-      intensity: el.intensity,
-      bpm,
-      key,
-      genre,
-      timeSignature: '4/4',
-    };
+    const ctx: MidiGenerationContext = buildContext
+      ? buildContext(el)
+      : {
+          element: el.element,
+          category: el.category,
+          role: el.role,
+          intensity: el.intensity,
+          bpm,
+          key,
+          genre,
+          timeSignature: '4/4',
+        };
 
     const clip = generateMidiClip(ctx);
     const bytes = midiClipToBytes(clip);
@@ -986,21 +1273,25 @@ export function downloadAllMidisAsZip(
     });
   }
 
-  const zipBytes = createZip(files);
-  const blob = new Blob([zipBytes], { type: 'application/zip' });
-  const url = URL.createObjectURL(blob);
-
+  const zipBytes = createZipArchive(files);
   const safeName = trackName
     ? trackName.replace(/[^a-zA-Z0-9_\- ]/g, '').replace(/\s+/g, '_').substring(0, 50)
     : 'track';
+  downloadZipArchive(zipBytes, `${safeName}_MIDIs_${bpm}bpm.zip`);
+  return files.length;
+}
 
+/** Baixa bytes ZIP no navegador */
+export function downloadZipArchive(zipBytes: Uint8Array, filename: string): void {
+  const blob = new Blob([zipBytes.buffer.slice(zipBytes.byteOffset, zipBytes.byteOffset + zipBytes.byteLength) as ArrayBuffer], {
+    type: 'application/zip',
+  });
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${safeName}_MIDIs_${bpm}bpm.zip`;
+  a.download = filename.endsWith('.zip') ? filename : `${filename}.zip`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-
-  return files.length;
 }

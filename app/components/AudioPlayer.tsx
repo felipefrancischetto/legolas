@@ -608,8 +608,9 @@ export default function AudioPlayer() {
           errorDetails.src = audioElement.src;
         }
       }
-      
-      logger.error('❌ Erro no áudio:', errorDetails);
+
+      // Uma única string: o overlay do Next serializa o 2º arg de console.error como "{}".
+      logger.error(`❌ Erro no áudio: ${JSON.stringify(errorDetails)}`);
       
       setPlayerState(prev => ({
         ...prev,

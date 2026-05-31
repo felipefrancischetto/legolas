@@ -1,6 +1,6 @@
 "use client";
 
-import Image from 'next/image';
+import { useState, useMemo, useEffect } from 'react';
 
 interface TrackMetadata {
   title: string;
@@ -47,6 +47,20 @@ export default function PlaylistTrackItem({
   // Usar metadados externos se fornecidos, senão usar estado local
   const metadata = externalMetadata !== undefined ? externalMetadata : null;
   const loading = externalLoading !== undefined ? externalLoading : false;
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+
+  const thumbnailSrc = useMemo(() => {
+    if (thumbnailFailed) return null;
+    if (metadata?.thumbnail) return metadata.thumbnail;
+    if (metadata?.videoId) {
+      return `https://i.ytimg.com/vi/${metadata.videoId}/hqdefault.jpg`;
+    }
+    return null;
+  }, [metadata?.thumbnail, metadata?.videoId, thumbnailFailed]);
+
+  useEffect(() => {
+    setThumbnailFailed(false);
+  }, [metadata?.thumbnail, metadata?.videoId]);
 
   return (
     <div 
@@ -70,14 +84,16 @@ export default function PlaylistTrackItem({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
           </div>
-        ) : metadata?.thumbnail ? (
-          <Image
-            src={metadata.thumbnail}
-            alt={metadata.title}
+        ) : thumbnailSrc ? (
+          <img
+            src={thumbnailSrc}
+            alt=""
             width={64}
             height={64}
-            className="w-16 h-16 rounded-lg object-cover"
-            unoptimized
+            className="w-16 h-16 rounded-lg object-cover bg-zinc-800"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={() => setThumbnailFailed(true)}
           />
         ) : (
           <div 

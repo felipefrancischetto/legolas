@@ -30,9 +30,9 @@ const UIContext = createContext<UIContextType | undefined>(undefined);
 
 export function UIProvider({ children }: { children: ReactNode }) {
   const [search, setSearch] = useState('');
-  const [sortBy, setSortBy] = useState<string>('fileCreatedAt');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [groupByAlbum, setGroupByAlbum] = useState(false);
+  const [sortBy, setSortBy] = useState<string>('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [groupByAlbum, setGroupByAlbum] = useState(true);
   const [showQueue, setShowQueue] = useState(false);
   const [playerOpen, setPlayerOpen] = useState(false);
   const [playerReady, setPlayerReady] = useState(false);
@@ -67,11 +67,14 @@ export function UIProvider({ children }: { children: ReactNode }) {
       }
 
       const savedSortBy = safeGetItem<string>('uiSortBy');
-      if (savedSortBy) {
-        setSortBy(savedSortBy);
-      }
-
       const savedSortOrder = safeGetItem<string>('uiSortOrder');
+      if (savedSortBy) {
+        if (savedSortBy === 'fileCreatedAt' && savedSortOrder === 'desc') {
+          setSortBy('');
+        } else {
+          setSortBy(savedSortBy);
+        }
+      }
       if (savedSortOrder === 'asc' || savedSortOrder === 'desc') {
         setSortOrder(savedSortOrder as 'asc' | 'desc');
       }
