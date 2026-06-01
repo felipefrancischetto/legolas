@@ -22,6 +22,15 @@ export function isStreamActive(downloadId: string): boolean {
   return activeStreams.has(downloadId);
 }
 
+// Estados possíveis de uma faixa em ambiente concorrente
+export type TrackState =
+  | 'queued'
+  | 'downloading'
+  | 'converting'
+  | 'enriching'
+  | 'done'
+  | 'failed';
+
 // Função para enviar eventos de progresso
 export function sendProgressEvent(downloadId: string, data: {
   type: string;
@@ -31,6 +40,11 @@ export function sendProgressEvent(downloadId: string, data: {
   detail?: string;
   metadata?: any;
   playlistIndex?: number;
+  // Estado estruturado por faixa (ambiente concorrente). Quando type === 'track',
+  // estes campos descrevem a faixa em playlistIndex sem inferir nada sobre as demais.
+  trackState?: TrackState;
+  trackReason?: string;
+  trackTitle?: string;
 }) {
   // Garantir que downloadId seja uma string limpa
   const cleanDownloadId = downloadId?.toString().trim();

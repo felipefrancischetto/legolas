@@ -31,6 +31,11 @@ interface FileInfo {
   remixer?: string;
   catalogNumber?: string;
   catalog?: string;
+  /** Fonte de áudio externa (prévia de faixa não baixada). Quando presente, o
+   *  AudioPlayer toca esta URL em vez de /api/downloads/<name>. */
+  streamUrl?: string;
+  /** Indica que é uma prévia (não-baixada) — evita persistir no localStorage. */
+  isPreview?: boolean;
 }
 
 interface PlayerState {
@@ -142,7 +147,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // Debounce para evitar salvamento excessivo
     saveTimeoutRef.current = setTimeout(() => {
       try {
-        if (newState.currentFile) {
+        if (newState.currentFile && !newState.currentFile.isPreview) {
           // Otimizar arquivo: remover campos grandes desnecessários
           const optimizedFile = {
             name: newState.currentFile.name,

@@ -77,7 +77,8 @@ export default function AudioPlayer() {
   const [imageError, setImageError] = useState(false);
 
   const lastInitializedFile = useRef<string | null>(null);
-  const isInitializing = useRef(false); // Para evitar múltiplas inicializações simultâneas
+  const isInitializing = useRef(false); // Para evitar múltiplas inicializações simultâneas do áudio nativo
+  const isWaveInitializing = useRef(false); // Guarda própria do WaveSurfer (não compartilhar com o áudio: prévias demoram a carregar o áudio e bloqueariam a wave)
   const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Para debounce
   const isNavigatingRef = useRef(false); // Flag para indicar navegação (next/prev)
   const navigationTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Timeout para resetar flag de navegação
@@ -116,8 +117,10 @@ export default function AudioPlayer() {
   // Memoizar URL do thumbnail para evitar requisições repetidas
   const thumbnailUrl = useMemo(() => {
     if (!currentFile?.name) return '';
+    // Prévia (faixa não baixada): usar a capa externa (YouTube), não /api/thumbnail.
+    if ((currentFile as any).streamUrl) return currentFile.thumbnail || '';
     return getThumbnailUrl(currentFile.name);
-  }, [currentFile?.name]);
+  }, [currentFile?.name, (currentFile as any)?.streamUrl, currentFile?.thumbnail]);
 
   // Ref para rastrear a última URL do thumbnail carregada e evitar re-renders
   const lastThumbnailUrlRef = useRef<string>('');
@@ -361,11 +364,14 @@ export default function AudioPlayer() {
       return;
     }
 
+    // Fonte: prévia externa (streamUrl) ou arquivo local em /api/downloads.
+    const audioUrl = (currentFile as any).streamUrl
+      || `/api/downloads/${encodeURIComponent(currentFile.name)}`;
+
     // Limpar áudio anterior se existir e for diferente
     if (audioRef.current) {
       const currentSrc = audioRef.current.src;
-      const newUrl = `/api/downloads/${encodeURIComponent(currentFile.name)}`;
-      if (currentSrc && !currentSrc.includes(encodeURIComponent(currentFile.name))) {
+      if (currentSrc && !currentSrc.includes(audioUrl)) {
         logger.debug('🧹 Limpando áudio anterior antes de inicializar novo');
         audioRef.current.pause();
         audioRef.current.src = '';
@@ -375,13 +381,12 @@ export default function AudioPlayer() {
         audioRef.current.removeEventListener('ended', () => {});
         audioRef.current.removeEventListener('error', () => {});
         audioRef.current = null;
-      } else if (currentSrc && currentSrc.includes(encodeURIComponent(currentFile.name))) {
+      } else if (currentSrc && currentSrc.includes(audioUrl)) {
         logger.debug('⚠️ Áudio já existe para este arquivo, ignorando:', currentFile.name);
         return;
       }
     }
 
-    const audioUrl = `/api/downloads/${encodeURIComponent(currentFile.name)}`;
     logger.debug('🎵 Inicializando áudio para:', currentFile.name);
     
     // Marcar como inicializando ANTES de criar o novo Audio
@@ -797,24 +802,24 @@ export default function AudioPlayer() {
         return;
       }
 
-      // Evitar múltiplas inicializações simultâneas
-      if (isInitializing.current) {
+      // Evitar múltiplas inicializações simultâneas (guarda própria da wave)
+      if (isWaveInitializing.current) {
         logger.debug('⚠️ WaveSurfer já está sendo inicializado, cancelando nova tentativa');
         return;
       }
 
-      isInitializing.current = true;
+      isWaveInitializing.current = true;
 
       const initWaveSurfer = async () => {
         const containerRef = isMobile ? waveformMobileRef.current : waveformDesktopRef.current;
         if (!containerRef) {
           logger.warn('❌ Container do WaveSurfer não encontrado');
-          isInitializing.current = false;
+          isWaveInitializing.current = false;
           return;
         }
         if (containerRef.offsetWidth === 0 || containerRef.offsetHeight === 0) {
           logger.warn('❌ Container do WaveSurfer não tem dimensões válidas');
-          isInitializing.current = false;
+          isWaveInitializing.current = false;
           return;
         }
 
@@ -885,7 +890,7 @@ export default function AudioPlayer() {
               logger.debug('✅ WaveSurfer canvas:', containerRef.querySelector('canvas'));
               setIsWaveReady(true);
               lastInitializedFile.current = currentFile.name;
-              isInitializing.current = false;
+              isWaveInitializing.current = false;
               
               // Sincronizar com posição atual se necessário
               if (currentTime > 0 && duration > 0) {
@@ -923,7 +928,7 @@ export default function AudioPlayer() {
               });
               // Mesmo com erro, marcar como pronto para não travar a UI
               setIsWaveReady(true);
-              isInitializing.current = false;
+              isWaveInitializing.current = false;
             }
           });
 
@@ -957,7 +962,7 @@ export default function AudioPlayer() {
           if (!isCancelled) {
             logger.warn('⚠️ Erro ao inicializar WaveSurfer:', error);
             setIsWaveReady(true); // Marcar como pronto mesmo com erro
-            isInitializing.current = false; // Finalizar inicialização mesmo com erro
+            isWaveInitializing.current = false; // Finalizar inicialização mesmo com erro
           }
         }
 
@@ -969,7 +974,8 @@ export default function AudioPlayer() {
 
         // Carregar áudio no WaveSurfer usando URL string
         // IMPORTANTE: Sempre usar URL string, nunca passar HTMLAudioElement diretamente
-        const audioUrl = `/api/downloads/${encodeURIComponent(currentFile.name)}`;
+        const audioUrl = (currentFile as any).streamUrl
+          || `/api/downloads/${encodeURIComponent(currentFile.name)}`;
         
         logger.debug('📡 Preparando carregamento do WaveSurfer para:', currentFile.name);
         logger.debug('📡 URL do áudio:', audioUrl);
@@ -992,13 +998,13 @@ export default function AudioPlayer() {
           } else {
             logger.warn('⚠️ Container inválido no momento do carregamento');
             setIsWaveReady(true);
-            isInitializing.current = false;
+            isWaveInitializing.current = false;
           }
         } catch (error) {
           logger.warn('Erro ao carregar WaveSurfer:', error);
           if (!isCancelled) {
             setIsWaveReady(true);
-            isInitializing.current = false;
+            isWaveInitializing.current = false;
           }
         }
         
@@ -1010,7 +1016,7 @@ export default function AudioPlayer() {
 
     return () => {
       isCancelled = true;
-      isInitializing.current = false; // Resetar flag de inicialização
+      isWaveInitializing.current = false; // Resetar flag de inicialização da wave
       logger.debug('🔄 Destruindo WaveSurfer para:', currentFile?.name);
       
       // Cancelar timeouts pendentes

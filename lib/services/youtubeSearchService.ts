@@ -6,6 +6,7 @@
 interface YouTubeSearchResult {
   title: string;
   artist?: string;
+  album?: string;
   videoId: string;
   thumbnail?: string;
   duration?: string;
@@ -82,10 +83,23 @@ function extractMusicResults(data: any): any[] {
     
     // Extrair artista
     const artistRuns = item?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
-    const artist = artistRuns?.[0]?.text || 
+    const artist = artistRuns?.[0]?.text ||
                    item?.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.simpleText ||
                    item?.subtitle?.runs?.[0]?.text;
-    
+
+    // Extrair álbum do subtítulo ("Artista • Álbum • Duração • plays").
+    // Usado pelo feed para cruzar a faixa com o ano do release e ordenar por data.
+    const subParts = (item?.flexColumns || [])
+      .slice(1)
+      .flatMap((c: any) => c?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [])
+      .map((r: any) => r?.text || '')
+      .join('')
+      .split('•')
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+    // parts[0] = artista, parts[1] = álbum (quando presente). Ignora a parte de duração/plays.
+    const album = subParts.length >= 2 && !/^\d{1,2}:\d{2}/.test(subParts[1]) ? subParts[1] : undefined;
+
     // Extrair thumbnail
     let thumbnail: string | undefined;
     const thumbnailData = item?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails ||
@@ -98,10 +112,11 @@ function extractMusicResults(data: any): any[] {
       videoId,
       title,
       artist,
+      album,
       thumbnail
     });
   }
-  
+
   return results;
 }
 
@@ -178,6 +193,7 @@ export async function searchYouTubeMusicAPI(
     return musicResults.slice(0, maxResults).map(result => ({
       title: result.title,
       artist: result.artist,
+      album: result.album,
       videoId: result.videoId,
       thumbnail: result.thumbnail || `https://img.youtube.com/vi/${result.videoId}/maxresdefault.jpg`,
       url: `https://www.youtube.com/watch?v=${result.videoId}`,

@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Legolas · Biblioteca (redesign)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --emerald:16,185,129;
+    --emerald-dark:5,150,105;
+    --amber:251,191,36;
+    --orange:249,115,22;
+    --blue:59,130,246;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{
+    background:#000;
+    font-family:'Inter',system-ui,sans-serif;
+    color:#fff;
+    -webkit-font-smoothing:antialiased;
+  }
+  body{
+    background:
+      radial-gradient(1200px 500px at 18% -8%, rgba(var(--emerald),.10), transparent 60%),
+      linear-gradient(135deg, rgba(0,0,0,.95) 0%, rgba(15,23,42,.98) 50%, rgba(0,0,0,.95) 100%);
+    min-height:100vh;
+    padding:0;
+  }
+  .mono{font-family:'JetBrains Mono',ui-monospace,monospace;}
+  .app{max-width:1410px;margin:0 auto;padding:14px 22px 60px;}
+
+  /* ===== Top app bar ===== */
+  .appbar{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
+  .logo{width:40px;height:40px;border-radius:12px;flex-shrink:0;
+    background:radial-gradient(circle at 35% 30%, rgba(var(--emerald),.55), rgba(var(--emerald-dark),.25));
+    border:1px solid rgba(var(--emerald),.5);display:flex;align-items:center;justify-content:center;
+    box-shadow:0 0 24px rgba(var(--emerald),.35);font-size:20px;}
+  .url-input{flex:1;height:44px;border-radius:12px;border:1px solid rgba(255,255,255,.10);
+    background:linear-gradient(135deg, rgba(var(--emerald),.05) 0%, rgba(var(--emerald-dark),.08) 30%, rgba(0,0,0,.6) 70%, rgba(15,23,42,.7) 100%);
+    color:#71717a;display:flex;align-items:center;padding:0 18px;font-size:14px;
+    box-shadow:0 6px 20px rgba(var(--emerald),.10), inset 0 1px 0 rgba(255,255,255,.05);}
+  .btn-dl{height:44px;padding:0 20px;border-radius:12px;border:1px solid rgba(255,255,255,.10);
+    background:rgba(39,39,42,.7);color:#d4d4d8;font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px;}
+  .icon-btn{width:42px;height:42px;border-radius:12px;border:1px solid rgba(var(--emerald),.35);
+    background:linear-gradient(135deg, rgba(var(--emerald),.12), rgba(var(--emerald),.04));
+    color:rgb(var(--emerald));display:flex;align-items:center;justify-content:center;font-size:16px;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.08);}
+
+  /* ===== Tabs ===== */
+  .tabs{display:flex;gap:4px;border-bottom:1px solid rgba(255,255,255,.10);margin-bottom:16px;}
+  .tab{padding:10px 16px;font-size:14px;font-weight:600;color:#a1a1aa;border-bottom:2px solid transparent;margin-bottom:-1px;}
+  .tab.active{color:#fff;border-color:rgb(var(--emerald));}
+  .tab .badge-dot{display:inline-block;margin-left:7px;font-size:10px;font-weight:700;color:rgb(var(--emerald));
+    background:rgba(var(--emerald),.15);border:1px solid rgba(var(--emerald),.3);border-radius:999px;padding:1px 7px;}
+
+  /* ===== Toolbar ===== */
+  .toolbar{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:nowrap;}
+  .search{flex:1;min-width:220px;height:42px;position:relative;}
+  .search input{width:100%;height:100%;border-radius:12px;border:1px solid rgba(255,255,255,.10);
+    background:linear-gradient(135deg, rgba(var(--emerald),.05) 0%, rgba(var(--emerald-dark),.08) 30%, rgba(0,0,0,.6) 70%, rgba(15,23,42,.7) 100%);
+    color:#fff;padding:0 42px 0 16px;font-size:14px;
+    box-shadow:0 6px 20px rgba(var(--emerald),.10), inset 0 1px 0 rgba(255,255,255,.05);}
+  .search input::placeholder{color:#71717a;}
+  .search .si{position:absolute;right:14px;top:50%;transform:translateY(-50%);color:rgb(var(--emerald));font-size:15px;}
+  .pill{height:42px;display:flex;align-items:center;gap:8px;padding:0 14px;border-radius:12px;
+    font-size:13px;font-weight:600;white-space:nowrap;border:1px solid rgba(255,255,255,.10);
+    background:rgba(0,0,0,.25);color:#d4d4d8;backdrop-filter:blur(8px);}
+  .pill .lbl{color:#9ca3af;font-weight:500;}
+  .pill.select{color:#fff;background:linear-gradient(135deg, rgba(var(--emerald),.05) 0%, rgba(var(--emerald-dark),.08) 30%, rgba(0,0,0,.6) 70%, rgba(15,23,42,.7) 100%);
+    box-shadow:0 6px 20px rgba(var(--emerald),.10), inset 0 1px 0 rgba(255,255,255,.05);}
+  .pill.count{color:#9ca3af;}
+  .pill.count b{color:#fff;}
+  .pill.midi{background:rgba(var(--emerald),.15);color:rgb(var(--emerald));border-color:rgba(var(--emerald),.32);}
+  .pill.warn{background:rgba(var(--orange),.18);color:#fdba74;border-color:rgba(var(--orange),.32);}
+  .pill.blue{background:rgba(var(--blue),.18);color:#93c5fd;border-color:rgba(var(--blue),.32);}
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor;}
+  .seg{display:flex;height:42px;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.25);}
+  .seg button{width:40px;border:none;background:transparent;color:#71717a;font-size:15px;display:flex;align-items:center;justify-content:center;cursor:pointer;}
+  .seg button.active{background:linear-gradient(135deg, rgba(var(--emerald),.22), rgba(var(--emerald),.08));color:rgb(var(--emerald));}
+
+  /* ===== Album group header ===== */
+  .group{display:flex;align-items:center;gap:14px;padding:10px 14px;border-radius:14px;margin:18px 0 10px;
+    background:linear-gradient(90deg, rgba(var(--emerald),.10), rgba(0,0,0,.25) 60%);
+    border:1px solid rgba(255,255,255,.08);backdrop-filter:blur(8px);}
+  .group .gcover{width:46px;height:46px;border-radius:10px;flex-shrink:0;background-size:cover;background-position:center;
+    box-shadow:0 4px 14px rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.1);}
+  .group .gtitle{font-size:15px;font-weight:700;color:#fff;display:flex;align-items:center;gap:8px;}
+  .group .gtag{font-size:10px;font-weight:700;letter-spacing:.04em;color:#9ca3af;text-transform:uppercase;
+    background:rgba(255,255,255,.06);border-radius:6px;padding:2px 7px;}
+  .group .gmeta{font-size:12px;color:#9ca3af;margin-top:2px;display:flex;gap:14px;}
+  .group .gmeta .mono{color:#d4d4d8;}
+  .group .gactions{margin-left:auto;display:flex;gap:8px;}
+  .group .gbtn{font-size:12px;font-weight:600;color:#d4d4d8;border:1px solid rgba(255,255,255,.12);
+    background:rgba(0,0,0,.3);border-radius:9px;padding:7px 12px;display:flex;align-items:center;gap:6px;}
+  .group .gbtn.accent{color:rgb(var(--emerald));border-color:rgba(var(--emerald),.3);background:rgba(var(--emerald),.12);}
+
+  /* ===== Track card ===== */
+  .card{position:relative;display:flex;gap:0;border-radius:16px;overflow:hidden;margin-bottom:12px;
+    border:1px solid rgba(255,255,255,.10);
+    background:linear-gradient(135deg, rgba(var(--emerald),.05) 0%, rgba(var(--emerald-dark),.08) 30%, rgba(0,0,0,.5) 70%, rgba(15,23,42,.6) 100%);
+    box-shadow:0 6px 22px rgba(0,0,0,.28), 0 0 0 1px rgba(255,255,255,.02) inset;}
+  .card.playing{border-color:rgba(var(--emerald),.45);
+    background:linear-gradient(135deg, rgba(var(--emerald),.18) 0%, rgba(var(--emerald),.10) 30%, rgba(0,0,0,.55) 70%, rgba(15,23,42,.7) 100%);
+    box-shadow:0 10px 34px rgba(var(--emerald),.22), inset 0 1px 0 rgba(255,255,255,.1);}
+  .card .accent-rail{position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg, rgba(var(--emerald),.9), rgba(var(--emerald),.2));opacity:0;}
+  .card.playing .accent-rail{opacity:1;}
+
+  .cover{position:relative;width:138px;min-width:138px;background:#18181b;background-size:cover;background-position:center;}
+  .cover .badge-bp{position:absolute;top:7px;left:7px;font-size:8px;font-weight:800;letter-spacing:.06em;color:#fff;text-transform:uppercase;
+    background:rgb(var(--emerald));padding:2px 6px;border-radius:5px;box-shadow:0 2px 8px rgba(var(--emerald),.5);}
+  .cover .play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);opacity:0;transition:.2s;}
+  .cover .play .pbtn{width:46px;height:46px;border-radius:50%;background:rgba(var(--emerald),.95);color:#06281e;font-size:18px;
+    display:flex;align-items:center;justify-content:center;box-shadow:0 6px 22px rgba(var(--emerald),.6);}
+  .card:hover .cover .play{opacity:1;}
+  .cover .nowwave{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:3px;background:rgba(0,0,0,.55);}
+  .cover .nowwave span{width:4px;border-radius:3px;background:rgb(var(--emerald));box-shadow:0 0 10px rgba(var(--emerald),.8);}
+
+  .body{flex:1;min-width:0;padding:13px 14px 11px;display:flex;flex-direction:column;position:relative;}
+
+  /* header row: title + actions */
+  .head{display:flex;align-items:flex-start;gap:12px;}
+  .titles{min-width:0;flex:1;}
+  .title{font-size:16px;font-weight:700;color:#fff;line-height:1.15;display:flex;align-items:center;gap:8px;}
+  .title .num{font-size:11px;color:#52525b;font-weight:600;}
+  .artist{font-size:13.5px;font-weight:600;color:rgb(var(--emerald));margin-top:2px;}
+  .artist .feat{color:#86c5b0;font-weight:500;}
+  .release{font-size:11.5px;color:#71717a;margin-top:4px;display:flex;flex-wrap:wrap;gap:4px 12px;}
+  .release b{color:#a1a1aa;font-weight:600;}
+
+  .actions{display:flex;align-items:center;gap:6px;flex-shrink:0;}
+  .act{height:30px;border-radius:9px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.32);
+    color:#d4d4d8;display:flex;align-items:center;gap:6px;padding:0 9px;font-size:12px;font-weight:600;backdrop-filter:blur(6px);}
+  .act .ic{font-size:13px;line-height:1;}
+  .act.emerald{color:rgb(var(--emerald));border-color:rgba(var(--emerald),.4);background:linear-gradient(135deg, rgba(var(--emerald),.16), rgba(var(--emerald),.06));}
+  .act.amber{color:rgb(var(--amber));border-color:rgba(var(--amber),.4);background:rgba(var(--amber),.12);}
+  .act.yt{color:#fca5a5;border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.12);}
+  .act.icononly{width:30px;justify-content:center;padding:0;}
+
+  /* DJ stat badges */
+  .stats{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px;}
+  .stat{display:flex;align-items:center;gap:8px;height:34px;padding:0 12px;border-radius:10px;
+    background:rgba(0,0,0,.30);border:1px solid rgba(255,255,255,.08);}
+  .stat .k{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:#71717a;font-weight:700;}
+  .stat .v{font-size:14px;font-weight:700;color:#fff;line-height:1;}
+  .stat .v.muted{color:#52525b;}
+  .stat.key{padding-left:9px;}
+  .stat.key .swatch{width:22px;height:22px;border-radius:7px;display:flex;align-items:center;justify-content:center;
+    font-size:10px;font-weight:800;color:#04140f;}
+  .stat.bpm .v{font-variant-numeric:tabular-nums;}
+  .stat.genre{max-width:230px;}
+  .stat.genre .v{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .energy{display:flex;align-items:flex-end;gap:2px;height:18px;}
+  .energy i{width:3px;border-radius:2px;background:rgb(var(--emerald));display:block;}
+  .energy i.off{background:rgba(255,255,255,.12);}
+
+  /* file meta row */
+  .filemeta{margin-top:11px;padding-top:9px;border-top:1px solid rgba(255,255,255,.07);
+    display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11.5px;color:#71717a;align-items:center;}
+  .filemeta .fm{display:flex;align-items:center;gap:6px;}
+  .filemeta .fm .lab{color:#52525b;}
+  .filemeta .fm .val{color:#a1a1aa;}
+  .chip-fmt{font-size:10px;font-weight:700;letter-spacing:.05em;color:rgb(var(--emerald));
+    border:1px solid rgba(var(--emerald),.35);background:rgba(var(--emerald),.10);border-radius:6px;padding:2px 7px;}
+  .chip-flag{font-size:10px;font-weight:700;color:#fdba74;border:1px solid rgba(var(--orange),.35);
+    background:rgba(var(--orange),.12);border-radius:6px;padding:2px 7px;}
+  .hi{color:#fff;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- App bar -->
+  <div class="appbar">
+    <div class="logo">🏹</div>
+    <div class="url-input">Cole a URL do YouTube aqui…</div>
+    <div class="btn-dl">⬇ Baixar</div>
+    <div class="icon-btn">✨</div>
+    <div class="icon-btn">🔍</div>
+    <div class="icon-btn">📋</div>
+    <div class="icon-btn">☰</div>
+    <div class="icon-btn">★</div>
+    <div class="icon-btn">⚙</div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active">Biblioteca <span class="badge-dot">140</span></div>
+    <div class="tab">Novidades <span class="badge-dot" style="color:#fdba74;background:rgba(249,115,22,.15);border-color:rgba(249,115,22,.3)">12</span></div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="search">
+      <input placeholder="Buscar por título, artista, label ou BPM…" value="" />
+      <span class="si">🔍</span>
+    </div>
+    <div class="pill select"><span class="lbl">Agrupar:</span> Álbum ▾</div>
+    <div class="pill select"><span class="lbl">Ordenar:</span> Recentes ▾</div>
+    <div class="pill count">♫ <b>140</b> músicas</div>
+    <div class="pill midi"><span class="dot"></span> Pack MIDI</div>
+    <div class="pill warn"><span class="dot"></span> 1 fora do padrão Beatport</div>
+    <div class="pill blue">📁 Organizar não normalizados</div>
+    <div class="seg">
+      <button>≣</button>
+      <button class="active" title="Cards">▦</button>
+      <button>▤</button>
+    </div>
+  </div>
+
+  <!-- ===== Album group: Grand Illusions ===== -->
+  <div class="group">
+    <div class="gcover" style="background:linear-gradient(135deg,#0b3b2e,#0a1f1a);"></div>
+    <div>
+      <div class="gtitle">Grand Illusions (Club Edit) <span class="gtag">Álbum</span></div>
+      <div class="gmeta"><span>1 faixa</span><span class="mono">5:12</span><span class="mono">50.8 MB</span><span>Get Physical Music · 2022</span></div>
+    </div>
+    <div class="gactions">
+      <div class="gbtn accent">▶ Tocar tudo</div>
+      <div class="gbtn">★ Favoritar</div>
+      <div class="gbtn">⋯</div>
+    </div>
+  </div>
+
+  <!-- Track card 1 (playing) -->
+  <div class="card playing">
+    <div class="accent-rail"></div>
+    <div class="cover" style="background:linear-gradient(135deg,#1f2937,#111827);">
+      <div class="badge-bp">Beatport</div>
+      <div class="nowwave">
+        <span style="height:14px"></span><span style="height:26px"></span><span style="height:10px"></span><span style="height:30px"></span><span style="height:18px"></span>
+      </div>
+    </div>
+    <div class="body">
+      <div class="head">
+        <div class="titles">
+          <div class="title">Grand Illusions <span style="color:#86c5b0;font-weight:600;font-size:13px;">(Club Edit)</span></div>
+          <div class="artist">Daniel Dubb</div>
+          <div class="release">
+            <span><b>Gravadora</b> Get Physical Music</span>
+            <span><b>Lançamento</b> 2022-03-18</span>
+            <span><b>Catálogo</b> <span class="mono">GPM612</span></span>
+          </div>
+        </div>
+        <div class="actions">
+          <div class="act amber"><span class="ic">★</span> Favorito</div>
+          <div class="act emerald"><span class="ic">♪</span> MIDI</div>
+          <div class="act yt icononly" title="Buscar no YouTube"><span class="ic">▶</span></div>
+          <div class="act icononly" title="Beatport"><span class="ic">B</span></div>
+          <div class="act icononly" title="Mais"><span class="ic">⋯</span></div>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat key"><div class="swatch" style="background:#37e6b4;">5A</div><div><div class="k">Key</div><div class="v">F Minor</div></div></div>
+        <div class="stat bpm"><div><div class="k">BPM</div><div class="v">122</div></div></div>
+        <div class="stat genre"><div><div class="k">Gênero</div><div class="v">Deep House</div></div></div>
+        <div class="stat"><div class="k">Energia</div><div class="energy"><i style="height:5px"></i><i style="height:8px"></i><i style="height:11px"></i><i style="height:14px"></i><i style="height:18px" class="off"></i></div></div>
+      </div>
+      <div class="filemeta">
+        <div class="fm"><span class="lab">Duração</span> <span class="val mono hi">5:12</span></div>
+        <div class="fm"><span class="lab">Tamanho</span> <span class="val mono">50.8 MB</span></div>
+        <div class="fm"><span class="lab">Formato</span> <span class="chip-fmt">FLAC</span> <span class="val mono">· 44.1kHz · 16bit</span></div>
+        <div class="fm"><span class="lab">Baixado</span> <span class="val mono">31-05-2026</span></div>
+        <div class="fm"><span class="lab">Tags</span> <span class="chip-fmt">✓ Beatport</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Album group: Connecting the Dots ===== -->
+  <div class="group">
+    <div class="gcover" style="background:linear-gradient(135deg,#dde7ff,#1b2440);background-image:repeating-linear-gradient(45deg,#cfe0ff 0 4px,#1b2440 4px 8px);"></div>
+    <div>
+      <div class="gtitle">Connecting the Dots <span class="gtag">Álbum</span></div>
+      <div class="gmeta"><span>1 faixa</span><span class="mono">8:21</span><span class="mono">83.3 MB</span><span>2024</span></div>
+    </div>
+    <div class="gactions">
+      <div class="gbtn accent">▶ Tocar tudo</div>
+      <div class="gbtn">★ Favoritar</div>
+      <div class="gbtn">⋯</div>
+    </div>
+  </div>
+
+  <!-- Track card 2 (incomplete metadata example) -->
+  <div class="card">
+    <div class="accent-rail"></div>
+    <div class="cover" style="background:#0b1020;background-image:repeating-linear-gradient(45deg,#1e293b 0 6px,#0b1020 6px 12px);">
+      <div class="play"><div class="pbtn">▶</div></div>
+    </div>
+    <div class="body">
+      <div class="head">
+        <div class="titles">
+          <div class="title">The Golden Age</div>
+          <div class="artist">HOSH, <span class="feat">Holger Behn</span></div>
+          <div class="release">
+            <span><b>Gravadora</b> <span style="color:#52525b">—</span></span>
+            <span><b>Lançamento</b> 2024-02-08</span>
+            <span><b>Catálogo</b> <span style="color:#52525b">—</span></span>
+          </div>
+        </div>
+        <div class="actions">
+          <div class="act"><span class="ic">★</span> Favoritar</div>
+          <div class="act emerald"><span class="ic">♪</span> MIDI</div>
+          <div class="act yt icononly" title="Buscar no YouTube"><span class="ic">▶</span></div>
+          <div class="act icononly" title="Beatport"><span class="ic">B</span></div>
+          <div class="act icononly" title="Mais"><span class="ic">⋯</span></div>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat key"><div class="swatch" style="background:rgba(255,255,255,.10);color:#71717a;">?</div><div><div class="k">Key</div><div class="v muted">—</div></div></div>
+        <div class="stat bpm"><div><div class="k">BPM</div><div class="v muted">—</div></div></div>
+        <div class="stat genre"><div><div class="k">Gênero</div><div class="v muted">—</div></div></div>
+        <div class="stat" style="border-color:rgba(var(--orange),.3);background:rgba(var(--orange),.08);"><span style="color:#fdba74;font-size:12px;font-weight:600;">⟳ Buscar metadados</span></div>
+      </div>
+      <div class="filemeta">
+        <div class="fm"><span class="lab">Duração</span> <span class="val mono hi">8:21</span></div>
+        <div class="fm"><span class="lab">Tamanho</span> <span class="val mono">83.3 MB</span></div>
+        <div class="fm"><span class="lab">Formato</span> <span class="chip-fmt">FLAC</span></div>
+        <div class="fm"><span class="lab">Baixado</span> <span class="val mono">31-05-2026</span></div>
+        <div class="fm"><span class="chip-flag">⚠ Sem dados Beatport</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Album group: Repeat ===== -->
+  <div class="group">
+    <div class="gcover" style="background:radial-gradient(circle at 50% 50%, #1fb6a0, #0a3b34 70%);"></div>
+    <div>
+      <div class="gtitle">Repeat <span class="gtag">Álbum</span></div>
+      <div class="gmeta"><span>1 faixa</span><span class="mono">4:34</span><span class="mono">47.7 MB</span><span>Truncate · 2020</span></div>
+    </div>
+    <div class="gactions">
+      <div class="gbtn accent">▶ Tocar tudo</div>
+      <div class="gbtn">★ Favoritar</div>
+      <div class="gbtn">⋯</div>
+    </div>
+  </div>
+
+  <!-- Track card 3 -->
+  <div class="card">
+    <div class="accent-rail"></div>
+    <div class="cover" style="background:radial-gradient(circle at 50% 45%, #19a98f, #07332c 72%);">
+      <div class="badge-bp">Beatport</div>
+      <div class="play"><div class="pbtn">▶</div></div>
+    </div>
+    <div class="body">
+      <div class="head">
+        <div class="titles">
+          <div class="title">El Sonido</div>
+          <div class="artist">Truncate</div>
+          <div class="release">
+            <span><b>Gravadora</b> Truncate</span>
+            <span><b>Lançamento</b> 2020-09-11</span>
+            <span><b>Catálogo</b> <span class="mono">TRUNCATE024</span></span>
+          </div>
+        </div>
+        <div class="actions">
+          <div class="act"><span class="ic">★</span> Favoritar</div>
+          <div class="act emerald"><span class="ic">♪</span> MIDI</div>
+          <div class="act yt icononly" title="Buscar no YouTube"><span class="ic">▶</span></div>
+          <div class="act icononly" title="Beatport"><span class="ic">B</span></div>
+          <div class="act icononly" title="Mais"><span class="ic">⋯</span></div>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat key"><div class="swatch" style="background:#5b8def;color:#fff;">1A</div><div><div class="k">Key</div><div class="v">B Minor</div></div></div>
+        <div class="stat bpm"><div><div class="k">BPM</div><div class="v">134</div></div></div>
+        <div class="stat genre"><div><div class="k">Gênero</div><div class="v">Techno (Peak Time / Driving)</div></div></div>
+        <div class="stat"><div class="k">Energia</div><div class="energy"><i style="height:5px"></i><i style="height:8px"></i><i style="height:11px"></i><i style="height:14px"></i><i style="height:18px"></i></div></div>
+      </div>
+      <div class="filemeta">
+        <div class="fm"><span class="lab">Duração</span> <span class="val mono hi">4:34</span></div>
+        <div class="fm"><span class="lab">Tamanho</span> <span class="val mono">47.7 MB</span></div>
+        <div class="fm"><span class="lab">Formato</span> <span class="chip-fmt">FLAC</span> <span class="val mono">· 44.1kHz · 24bit</span></div>
+        <div class="fm"><span class="lab">Baixado</span> <span class="val mono">31-05-2026</span></div>
+        <div class="fm"><span class="lab">Tags</span> <span class="chip-fmt">✓ Beatport</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Album group: Global Underground (multi) ===== -->
+  <div class="group">
+    <div class="gcover" style="background:linear-gradient(135deg,#ef4444,#7c2d12);"></div>
+    <div>
+      <div class="gtitle">Global Underground: Adapt #6 / Unmixed <span class="gtag">Álbum</span></div>
+      <div class="gmeta"><span>19 faixas</span><span class="mono">2h 14m</span><span class="mono">1.3 GB</span><span>Global Underground · 2023</span></div>
+    </div>
+    <div class="gactions">
+      <div class="gbtn accent">▶ Tocar tudo</div>
+      <div class="gbtn">★ Favoritar</div>
+      <div class="gbtn">⋯</div>
+    </div>
+  </div>
+
+  <!-- Track card 4 (compact peek of list continuing) -->
+  <div class="card">
+    <div class="accent-rail"></div>
+    <div class="cover" style="background:linear-gradient(135deg,#b91c1c,#450a0a);">
+      <div class="badge-bp">Beatport</div>
+      <div class="play"><div class="pbtn">▶</div></div>
+    </div>
+    <div class="body">
+      <div class="head">
+        <div class="titles">
+          <div class="title"><span class="num mono">01 ·</span> Borboleta <span style="color:#86c5b0;font-weight:600;font-size:13px;">(Original Mix)</span></div>
+          <div class="artist">Marsh</div>
+          <div class="release">
+            <span><b>Gravadora</b> Global Underground</span>
+            <span><b>Lançamento</b> 2023-06-23</span>
+            <span><b>Catálogo</b> <span class="mono">GU045</span></span>
+          </div>
+        </div>
+        <div class="actions">
+          <div class="act"><span class="ic">★</span> Favoritar</div>
+          <div class="act emerald"><span class="ic">♪</span> MIDI</div>
+          <div class="act yt icononly" title="Buscar no YouTube"><span class="ic">▶</span></div>
+          <div class="act icononly" title="Beatport"><span class="ic">B</span></div>
+          <div class="act icononly" title="Mais"><span class="ic">⋯</span></div>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat key"><div class="swatch" style="background:#f0c548;">9B</div><div><div class="k">Key</div><div class="v">A Major</div></div></div>
+        <div class="stat bpm"><div><div class="k">BPM</div><div class="v">120</div></div></div>
+        <div class="stat genre"><div><div class="k">Gênero</div><div class="v">Progressive House</div></div></div>
+        <div class="stat"><div class="k">Energia</div><div class="energy"><i style="height:5px"></i><i style="height:8px"></i><i style="height:11px"></i><i style="height:14px" class="off"></i><i style="height:18px" class="off"></i></div></div>
+      </div>
+      <div class="filemeta">
+        <div class="fm"><span class="lab">Duração</span> <span class="val mono hi">6:48</span></div>
+        <div class="fm"><span class="lab">Tamanho</span> <span class="val mono">71.2 MB</span></div>
+        <div class="fm"><span class="lab">Formato</span> <span class="chip-fmt">FLAC</span> <span class="val mono">· 44.1kHz · 24bit</span></div>
+        <div class="fm"><span class="lab">Baixado</span> <span class="val mono">30-05-2026</span></div>
+        <div class="fm"><span class="lab">Tags</span> <span class="chip-fmt">✓ Beatport</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

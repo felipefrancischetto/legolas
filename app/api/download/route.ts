@@ -15,6 +15,7 @@ import {
   type FfmpegMetadataEntry,
 } from '@/app/api/utils/common';
 import { buildYtDlpDownloadInput, runYtDlpDumpJson } from '@/app/api/utils/ytdlp';
+import { downloadTrack } from '@/lib/services/downloadEngine';
 
 const execAsync = promisify(exec);
 
@@ -221,30 +222,29 @@ export async function GET(request: NextRequest) {
     const downloadTarget = buildYtDlpDownloadInput(url);
     const quotedTarget = `"${downloadTarget.replace(/"/g, '\\"')}"`;
 
-    const downloadCommands = [
-      `yt-dlp -x --audio-format ${format} --audio-quality 10 --embed-thumbnail --convert-thumbnails jpg --add-metadata ${cookiesFlag}--extractor-args "youtube:player_client=android" -o "${normalizedDownloadsFolder}/%(title)s.%(ext)s" --no-part --force-overwrites ${quotedTarget}`,
-      `yt-dlp -x --audio-format ${format} --audio-quality 10 --embed-thumbnail --convert-thumbnails jpg --add-metadata ${cookiesFlag}--extractor-args "youtube:player_client=ios" -o "${normalizedDownloadsFolder}/%(title)s.%(ext)s" --no-part --force-overwrites ${quotedTarget}`,
-      `yt-dlp -x --audio-format ${format} --audio-quality 10 --embed-thumbnail --convert-thumbnails jpg --add-metadata ${cookiesFlag}-o "${normalizedDownloadsFolder}/%(title)s.%(ext)s" --no-part --force-overwrites ${quotedTarget}`,
-    ];
-
-    let stdout = '';
-    let lastDownloadError: unknown;
-    for (const command of downloadCommands) {
-      try {
-        const result = await execAsync(command, { maxBuffer: 1024 * 1024 * 10 });
-        stdout = result.stdout;
-        lastDownloadError = undefined;
-        break;
-      } catch (error) {
-        lastDownloadError = error;
+    // Motor unificado: mesma lógica (adaptativa, acelerada, anti-thumbnail) da playlist.
+    const engineResult = await downloadTrack(
+      { url: downloadTarget, videoId: (videoInfo as any)?.id, kind: 'youtube' },
+      {
+        format,
+        quality: '10',
+        outputDir: normalizedDownloadsFolder,
+        outputBasename: '%(title)s',
+        useTemplate: true,
+        cookiesFlag,
+        downloadId: downloadId || undefined,
+        trackConcurrency: 1,
+        allowResume: false,
       }
+    );
+
+    if (!engineResult.success) {
+      throw new Error(engineResult.error || 'Falha no download do áudio');
     }
 
-    if (lastDownloadError) {
-      throw lastDownloadError;
-    }
-    
-    console.log('Download concluído:', stdout);
+    // Caminho real do arquivo localizado/verificado pelo motor (preferido sobre o nome-template).
+    const downloadedFilePath: string | undefined = engineResult.filePath;
+    console.log('Download concluído:', downloadedFilePath);
 
     // Evento: Download do áudio concluído
     if (downloadId) {
@@ -391,7 +391,7 @@ export async function GET(request: NextRequest) {
     // Escrever metadados no arquivo
     console.log('\n📝 [Download] Iniciando escrita de metadados no arquivo...');
     try {
-      let audioFile = join(downloadsFolder, `${videoInfo.title}.${format}`);
+      let audioFile = downloadedFilePath || join(downloadsFolder, `${videoInfo.title}.${format}`);
       const exists = await fileExists(audioFile);
       console.log(`   📁 Arquivo: ${audioFile}`);
       console.log(`   ✅ Arquivo existe: ${exists}`);
@@ -711,6 +711,8 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { url, downloadId: bodyDownloadId, format = 'flac', useBeatport = false, showBeatportPage = false, isPlaylist = false } = body;
+    // Concorrência entre faixas (default conservador 3, cap de segurança 6 para não atrair bloqueio)
+    const maxConcurrent = Math.max(1, Math.min(parseInt(String(body.maxConcurrent ?? 3), 10) || 3, 6));
     
     downloadId = bodyDownloadId;
     
@@ -740,10 +742,12 @@ export async function POST(request: NextRequest) {
       
       console.log('🎵 Iniciando download de playlist com serviço dedicado...');
       
+      console.log(`🎵 [API] Concorrência entre faixas: ${maxConcurrent}`);
+
       const result = await playlistDownloadService.downloadPlaylist(url, {
         format: format as 'mp3' | 'flac' | 'wav',
         enhanceMetadata: true,
-        maxConcurrent: 3,
+        maxConcurrent,
         useBeatport,
         showBeatportPage,
         downloadId: downloadId || undefined

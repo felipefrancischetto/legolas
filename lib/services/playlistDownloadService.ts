@@ -8,7 +8,10 @@ import NodeID3 from 'node-id3';
 import { metadataAggregator } from './metadataService';
 import { logger } from '../utils/logger';
 import { scrapeTracklist } from '../tracklistScraper';
-import { sendProgressEvent } from '../utils/progressEventService';
+import PQueue from 'p-queue';
+import { sendProgressEvent, type TrackState } from '../utils/progressEventService';
+import { downloadTrack, resetEngineSession } from './downloadEngine';
+import { getYtDlpBin } from '../utils/ytDlpBin';
 import {
   getDownloadsPath,
   ensureValidCookies,
@@ -39,6 +42,31 @@ export interface PlaylistDownloadResult {
   beatportTracksFound?: number;
   tracklistScraping?: any[];
 }
+
+// Resultado estruturado do download de uma única faixa (sem enriquecimento).
+type TrackFailureReason =
+  | 'invalid-entry'
+  | 'blocked'
+  | 'download-failed'
+  | 'file-not-found'
+  | 'thumbnail-only';
+
+interface TrackOutcome {
+  index: number;
+  entry: any;
+  baseTitle: string;
+  trackNumber: number;
+  success: boolean;
+  filePath?: string;
+  strategyUsed?: string;
+  error?: string;
+  reason?: TrackFailureReason;
+  hadYouTubeIssues?: boolean;
+}
+
+// Tamanho mínimo plausível para um arquivo de áudio real. Abaixo disso provavelmente
+// veio só a thumbnail (.jpg) ou um arquivo truncado — conta como falha, não sucesso.
+const MIN_AUDIO_BYTES = 50 * 1024; // 50KB
 
 // getDownloadsPath agora é importado de @/app/api/utils/common
 
@@ -123,6 +151,22 @@ function cleanArtistName(artist: string): string {
 }
 
 export class PlaylistDownloadService {
+  // Controladores de cancelamento por downloadId (propagam AbortSignal às tasks da fila).
+  // A estratégia adaptativa e a renovação de cookies vivem agora no downloadEngine.
+  private abortControllers = new Map<string, AbortController>();
+
+  /** Cancela uma execução de playlist em andamento, abortando os downloads pendentes. */
+  cancel(downloadId: string): boolean {
+    const controller = this.abortControllers.get(downloadId);
+    if (controller) {
+      controller.abort();
+      this.abortControllers.delete(downloadId);
+      logger.info(`🛑 Download da playlist cancelado: ${downloadId}`);
+      return true;
+    }
+    return false;
+  }
+
   async downloadPlaylist(
     url: string, 
     options: PlaylistDownloadOptions = {}
@@ -228,20 +272,21 @@ export class PlaylistDownloadService {
       // REMOVIDO: Verificação de cookies - usando apenas métodos sem cookies (mais rápido)
       logger.info(`[DEBUG] Usando métodos SEM cookies (mais rápido)`);
       
-      // Lista de métodos de extração SEM cookies (prioridade: Android > iOS > Web > básico)
+      // Binário resolvido (usa o yt-dlp mais novo disponível, não o que estiver travado no PATH).
+      const ytDlpBin = await getYtDlpBin();
+      // Lista de métodos de extração SEM cookies. Default primeiro (estratégia que funciona
+      // com o YouTube atual); clientes forçados ficam como fallback.
       const extractionMethods: string[] = [
-        // Método 1: Android client (menos detectável)
-        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=android" "${url}"`,
+        // Método 1: Default (sem forçar player_client)
+        `${ytDlpBin} --dump-json --flat-playlist --no-playlist-reverse "${url}"`,
         // Método 2: iOS client
-        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=ios" "${url}"`,
-        // Método 3: Web client
-        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=web" "${url}"`,
-        // Método 4: Básico sem limite
-        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse "${url}"`,
-        // Método 5: Básico com limite alto
-        `yt-dlp --dump-json --flat-playlist --no-playlist-reverse --playlist-end 999999 "${url}"`,
-        // Método 6: Comando básico
-        `yt-dlp --dump-json --flat-playlist "${url}"`
+        `${ytDlpBin} --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=ios" "${url}"`,
+        // Método 3: Android client
+        `${ytDlpBin} --dump-json --flat-playlist --no-playlist-reverse --extractor-args "youtube:player_client=android" "${url}"`,
+        // Método 4: Default com limite alto
+        `${ytDlpBin} --dump-json --flat-playlist --no-playlist-reverse --playlist-end 999999 "${url}"`,
+        // Método 5: Comando básico
+        `${ytDlpBin} --dump-json --flat-playlist "${url}"`
       ];
       
       let extractionSuccess = false;
@@ -402,8 +447,7 @@ export class PlaylistDownloadService {
         });
       }
       
-      await this.downloadAndProcessTracksSequentially(
-        url,
+      await this.downloadAndProcessTracks(
         playlistEntries,
         downloadsFolder,
         format,
@@ -412,7 +456,8 @@ export class PlaylistDownloadService {
         useBeatport,
         showBeatportPage,
         result,
-        downloadId // Passar downloadId
+        maxConcurrent,
+        downloadId
       );
 
       result.success = true;
@@ -472,6 +517,294 @@ export class PlaylistDownloadService {
 
     // Retorna também o scraping da tracklist junto do resultado
     return { ...result, tracklistScraping: scrapedTracklist };
+  }
+
+  /**
+   * Emite um evento de estado estruturado para uma faixa específica (ambiente concorrente).
+   * Não infere nada sobre as demais faixas — o frontend atualiza apenas playlistIndex.
+   */
+  private emitTrackEvent(
+    downloadId: string | undefined,
+    index: number,
+    totalTracks: number,
+    state: TrackState,
+    completedCount: number,
+    opts?: { title?: string; reason?: string; detail?: string }
+  ): void {
+    if (!downloadId) return;
+    const progress = Math.min(30 + Math.round((completedCount / Math.max(1, totalTracks)) * 65), 95);
+    sendProgressEvent(downloadId, {
+      type: 'track',
+      step: `Faixa ${index + 1}/${totalTracks}`,
+      progress,
+      substep: opts?.title,
+      detail: opts?.detail ?? opts?.reason,
+      playlistIndex: index,
+      trackState: state,
+      trackReason: opts?.reason,
+      trackTitle: opts?.title,
+    });
+  }
+
+  /** Emite o progresso global agregado (barra principal + contadores), sem playlistIndex. */
+  private emitAggregateProgress(
+    downloadId: string | undefined,
+    totalTracks: number,
+    completedCount: number,
+    result: PlaylistDownloadResult,
+    step: string,
+    isProcessingMetadata: boolean
+  ): void {
+    if (!downloadId) return;
+    const progress = Math.min(30 + Math.round((completedCount / Math.max(1, totalTracks)) * 65), 95);
+    sendProgressEvent(downloadId, {
+      type: 'download',
+      step,
+      progress,
+      detail: `${result.processedTracks} baixadas, ${result.enhancedTracks} com metadados`,
+      metadata: {
+        totalTracks,
+        downloadedTracks: result.processedTracks,
+        processedTracks: result.enhancedTracks,
+        enhancedTracks: result.enhancedTracks,
+        beatportTracksFound: result.beatportTracksFound || 0,
+        errors: result.errors.length,
+        currentTrack: completedCount,
+        isProcessingMetadata,
+      },
+    });
+  }
+
+
+  /**
+   * Baixa UMA faixa (download-only, sem enriquecimento de metadados). Tenta as estratégias
+   * de cliente (Android → iOS → Web) em série, detecta bloqueio e verifica que o artefato
+   * é áudio real (anti-thumbnail). Retorna um TrackOutcome estruturado — nunca lança.
+   */
+  private async downloadSingleTrack(
+    entry: any,
+    index: number,
+    totalTracks: number,
+    downloadsFolder: string,
+    format: string,
+    quality: string,
+    cookiesFlag: string,
+    trackConcurrency: number,
+    signal?: AbortSignal,
+    downloadId?: string
+  ): Promise<TrackOutcome> {
+    const trackNumber = index + 1;
+    const baseTitle = sanitizeTitle(entry?.title || 'Unknown');
+
+    const fail = (reason: TrackFailureReason, error: string, hadYouTubeIssues = false): TrackOutcome => ({
+      index, entry, baseTitle, trackNumber, success: false, reason, error, hadYouTubeIssues,
+    });
+
+    if (!entry || (!entry.id && !entry.url)) {
+      return fail('invalid-entry', `Entrada ${trackNumber} inválida (sem ID ou URL)`);
+    }
+
+    this.emitTrackEvent(downloadId, index, totalTracks, 'downloading', index, { title: entry.title });
+
+    const trackUrl = entry.id ? `https://www.youtube.com/watch?v=${entry.id}` : entry.url;
+    const tempFilename = `${baseTitle} [${entry.id}]`;
+
+    // Delegar ao motor unificado (estratégia adaptativa, acelerado, retomada, cancelamento).
+    const res = await downloadTrack(
+      { url: trackUrl, videoId: entry.id, kind: 'youtube' },
+      {
+        format,
+        quality,
+        outputDir: downloadsFolder,
+        outputBasename: tempFilename,
+        cookiesFlag,
+        downloadId,
+        signal,
+        trackConcurrency,
+        allowResume: true,
+      }
+    );
+
+    if (!res.success) {
+      const reason: TrackFailureReason =
+        res.reason === 'aborted' ? 'download-failed' : (res.reason ?? 'download-failed');
+      return fail(reason, `Falha no download da faixa ${trackNumber} ("${entry.title || entry.id}"): ${res.error ?? 'erro desconhecido'}`, res.hadYouTubeIssues);
+    }
+
+    if (res.skipped) {
+      logger.info(`   ⏭️ [${trackNumber}] reaproveitada do disco (retomada).`);
+    }
+
+    return { index, entry, baseTitle, trackNumber, success: true, filePath: res.filePath, strategyUsed: res.strategyUsed, hadYouTubeIssues: res.hadYouTubeIssues };
+  }
+
+  /**
+   * Carimba os mtimes dos arquivos baixados em ordem CRESCENTE de índice da playlist.
+   * Como a concorrência intercala os timestamps de criação, isto garante que qualquer
+   * visualização ordenada por data reflita a ordem original da playlist (best-effort).
+   */
+  private async restorePlaylistOrder(successful: TrackOutcome[]): Promise<void> {
+    const { utimes } = await import('fs/promises');
+    const base = Date.now();
+    // 2s de espaçamento por faixa para evitar colisões e manter ordem estável.
+    const ordered = [...successful].sort((a, b) => a.index - b.index);
+    for (let i = 0; i < ordered.length; i++) {
+      const o = ordered[i];
+      if (!o.filePath) continue;
+      const t = new Date(base + i * 2000);
+      try {
+        await utimes(o.filePath, t, t);
+      } catch {
+        // Arquivo pode ter sido movido (ex.: nao-normalizadas) — ignorar.
+      }
+    }
+  }
+
+  /**
+   * Orquestra o download da playlist com concorrência (PQueue honrando maxConcurrent),
+   * preservando a ordem original no resultado. O enriquecimento de metadados roda DEPOIS,
+   * em um passo paralelo controlado (fora do caminho crítico do download).
+   */
+  private async downloadAndProcessTracks(
+    playlistEntries: any[],
+    downloadsFolder: string,
+    format: string,
+    quality: string,
+    enhanceMetadata: boolean,
+    useBeatport: boolean,
+    showBeatportPage: boolean,
+    result: PlaylistDownloadResult,
+    maxConcurrent: number,
+    downloadId?: string
+  ): Promise<void> {
+    if (!playlistEntries || playlistEntries.length === 0) {
+      logger.error(`❌ Nenhuma entrada válida na playlist!`);
+      result.errors.push('Playlist vazia ou sem entradas válidas');
+      return;
+    }
+
+    const totalTracks = playlistEntries.length;
+    // Concorrência conservadora e configurável; cap de segurança para não atrair bloqueio.
+    const concurrency = Math.max(1, Math.min(maxConcurrent || 3, 6));
+    logger.info(`🚀 Baixando ${totalTracks} faixas com concorrência=${concurrency}...`);
+
+    // Resetar a sessão do motor (coordenação de renovação de cookies; a campeã persiste).
+    resetEngineSession();
+
+    // Controlador de cancelamento desta execução (propaga AbortSignal às tasks da fila).
+    const abortController = new AbortController();
+    if (downloadId) this.abortControllers.set(downloadId, abortController);
+    const signal = abortController.signal;
+
+    // Cookies resolvidos uma única vez (compartilhados entre as tasks)
+    const hasValidCookies = await hasValidCookiesFile();
+    const cookiesFlag = hasValidCookies ? '--cookies "cookies.txt" ' : '';
+    logger.info(`   🍪 Cookies disponíveis: ${hasValidCookies ? 'Sim' : 'Não'}`);
+
+    // Marcar todas as faixas como enfileiradas
+    playlistEntries.forEach((entry, i) =>
+      this.emitTrackEvent(downloadId, i, totalTracks, 'queued', 0, { title: entry?.title })
+    );
+
+    // ===== FASE DE DOWNLOAD (concorrente) =====
+    const downloadQueue = new PQueue({ concurrency });
+    const outcomes: (TrackOutcome | null)[] = new Array(totalTracks).fill(null);
+    let completedDownloads = 0;
+
+    playlistEntries.forEach((entry, i) => {
+      downloadQueue.add(async () => {
+        const outcome = await this.downloadSingleTrack(
+          entry, i, totalTracks, downloadsFolder, format, quality, cookiesFlag, concurrency, signal, downloadId
+        );
+        outcomes[i] = outcome;
+        completedDownloads++;
+
+        if (outcome.success) {
+          logger.info(`   ✅ [${outcome.trackNumber}/${totalTracks}] baixada (${completedDownloads}/${totalTracks} concluídas)`);
+        } else {
+          result.errors.push(outcome.error || `Falha na faixa ${outcome.trackNumber}`);
+          this.emitTrackEvent(downloadId, i, totalTracks, 'failed', completedDownloads, {
+            title: entry?.title,
+            reason: outcome.reason,
+            detail: outcome.error,
+          });
+          logger.error(`   ❌ [${outcome.trackNumber}/${totalTracks}] falhou: ${outcome.reason}`);
+        }
+
+        this.emitAggregateProgress(
+          downloadId, totalTracks, completedDownloads, result,
+          `Baixando faixas (${completedDownloads}/${totalTracks})`, false
+        );
+      });
+    });
+
+    await downloadQueue.onIdle();
+
+    // processedTracks = downloads realmente bem-sucedidos (com áudio verificado)
+    const successful = outcomes.filter((o): o is TrackOutcome => !!o && o.success);
+    result.processedTracks = successful.length;
+    logger.info(`📥 Downloads concluídos: ${successful.length}/${totalTracks} (falhas: ${totalTracks - successful.length})`);
+
+    // ===== FASE DE ENRIQUECIMENTO (paralela, controlada, fora do caminho crítico) =====
+    if (!enhanceMetadata || successful.length === 0) {
+      // Sem enriquecimento: preservar ordem da playlist e marcar como concluídas.
+      await this.restorePlaylistOrder(successful);
+      for (const o of successful) {
+        this.emitTrackEvent(downloadId, o.index, totalTracks, 'done', completedDownloads, { title: o.entry?.title });
+      }
+      if (downloadId) this.abortControllers.delete(downloadId);
+      return;
+    }
+
+    logger.info(`🎨 Enriquecendo ${successful.length} faixas em paralelo (Beatport: ${useBeatport})...`);
+    const enrichQueue = new PQueue({ concurrency: Math.max(1, Math.min(concurrency, 4)) });
+    let completedEnrich = 0;
+
+    for (const o of successful) {
+      enrichQueue.add(async () => {
+        this.emitTrackEvent(downloadId, o.index, totalTracks, 'enriching', completedDownloads, { title: o.entry?.title });
+        try {
+          const enhanced = await this.enhanceFileMetadata(
+            o.filePath!, o.baseTitle, useBeatport, showBeatportPage, o.entry
+          );
+          if (enhanced.success) {
+            result.enhancedTracks++;
+            if (enhanced.fromBeatport) {
+              result.beatportTracksFound = (result.beatportTracksFound || 0) + 1;
+            }
+          }
+          if (useBeatport && (!enhanced.success || !enhanced.fromBeatport)) {
+            try {
+              await this.moveToNonNormalizedFolder(o.filePath!, downloadsFolder);
+            } catch (moveError) {
+              logger.warn(`   ⚠️ Erro ao mover para nao-normalizadas: ${moveError instanceof Error ? moveError.message : 'erro'}`);
+            }
+          }
+          this.emitTrackEvent(downloadId, o.index, totalTracks, 'done', completedDownloads, { title: o.entry?.title });
+        } catch (metadataError) {
+          const msg = metadataError instanceof Error ? metadataError.message : 'Unknown error';
+          result.errors.push(`Falha ao enriquecer faixa ${o.trackNumber}: ${msg}`);
+          logger.error(`   ❌ [${o.trackNumber}] enriquecimento falhou: ${msg}`);
+          // O download em si foi bem-sucedido — marcar como concluída (sem metadados).
+          this.emitTrackEvent(downloadId, o.index, totalTracks, 'done', completedDownloads, {
+            title: o.entry?.title, detail: 'baixada (sem metadados)',
+          });
+        } finally {
+          completedEnrich++;
+          this.emitAggregateProgress(
+            downloadId, totalTracks, completedDownloads, result,
+            `Processando metadados (${completedEnrich}/${successful.length})`, true
+          );
+        }
+      });
+    }
+
+    await enrichQueue.onIdle();
+
+    // Preservar a ordem da playlist no disco após o enriquecimento (que reescreve os arquivos).
+    await this.restorePlaylistOrder(successful);
+    if (downloadId) this.abortControllers.delete(downloadId);
+    logger.info(`🎉 Enriquecimento concluído: ${result.enhancedTracks}/${successful.length} faixas (Beatport: ${result.beatportTracksFound || 0})`);
   }
 
   private async downloadAndProcessTracksSequentially(

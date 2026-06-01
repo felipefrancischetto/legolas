@@ -15,6 +15,9 @@ interface DownloadItemComponentProps {
   getStatusText: (status: string) => string;
   formatDate: (timestamp: string | number) => string;
   formatDuration: (seconds: number) => string;
+  // Modo painel de detalhe: mostra todas as faixas e oculta os botões internos
+  // (as ações ficam na toolbar do detalhe).
+  detail?: boolean;
 }
 
 interface AlbumGroupProps {
@@ -131,7 +134,7 @@ function AlbumGroup({ albumKey, albumItems, handleRetry, handleRemove, getStatus
   );
 }
 
-function DownloadItemComponent({ item, handleRetry, handleRemove, getStatusText, formatDate, formatDuration }: DownloadItemComponentProps) {
+function DownloadItemComponent({ item, handleRetry, handleRemove, getStatusText, formatDate, formatDuration, detail = false }: DownloadItemComponentProps) {
   return (
     <div
       className="backdrop-blur-sm rounded-xl p-4 border transition-all duration-200 hover:scale-[1.01]"
@@ -293,7 +296,7 @@ function DownloadItemComponent({ item, handleRetry, handleRemove, getStatusText,
           </span>
           
           <div className="flex items-center gap-1">
-            {item.status === 'error' && (
+            {!detail && item.status === 'error' && (
               <button
                 onClick={() => handleRetry(item)}
                 className="p-2 rounded-lg transition-all duration-200 hover:scale-110"
@@ -319,7 +322,7 @@ function DownloadItemComponent({ item, handleRetry, handleRemove, getStatusText,
             )}
             
             {/* Botão de remover/cancelar - disponível para todos os status exceto completed */}
-            {item.source === 'queue' && item.status !== 'completed' && (
+            {!detail && item.source === 'queue' && item.status !== 'completed' && (
               <button
                 onClick={() => handleRemove(item)}
                 className="p-2 rounded-lg transition-all duration-200 hover:scale-110"
@@ -487,33 +490,69 @@ function DownloadItemComponent({ item, handleRetry, handleRemove, getStatusText,
               </span>
             </div>
           </div>
-          <div className="max-h-32 overflow-y-auto space-y-1 custom-scroll">
-            {item.playlistItems.slice(0, 10).map((track: any, index: number) => (
-              <div key={index} className="flex items-center gap-2 text-sm">
-                <div 
-                  className="w-2 h-2 rounded-full flex-shrink-0"
-                  style={{
-                    backgroundColor: 
-                      track.status === 'completed' ? 'rgba(16, 185, 129, 0.9)' :
-                      track.status === 'error' ? 'rgba(239, 68, 68, 0.9)' :
-                      track.status === 'downloading' ? 'rgba(16, 185, 129, 0.9)' :
-                      'rgba(156, 163, 175, 0.9)',
-                    boxShadow: track.status === 'downloading' || track.status === 'completed'
-                      ? '0 0 4px rgba(16, 185, 129, 0.5)'
-                      : 'none'
-                  }}
-                />
-                <span className="truncate" style={{ color: 'rgba(209, 213, 219, 0.9)' }}>
-                  {track.title}
-                </span>
-                {track.progress && track.progress > 0 && (
-                  <span className="text-xs ml-auto" style={{ color: 'rgba(107, 114, 128, 0.9)' }}>
-                    {track.progress}%
+          <div className={`${detail ? '' : 'max-h-32'} overflow-y-auto space-y-1 custom-scroll`}>
+            {item.playlistItems.slice(0, detail ? item.playlistItems.length : 10).map((track: any, index: number) => {
+              const reasonLabels: Record<string, string> = {
+                blocked: 'bloqueado pelo YouTube',
+                'download-failed': 'falha no download',
+                'file-not-found': 'arquivo não encontrado',
+                'thumbnail-only': 'só veio thumbnail',
+                'invalid-entry': 'entrada inválida',
+              };
+              const stateLabels: Record<string, string> = {
+                queued: 'na fila',
+                downloading: 'baixando',
+                converting: 'convertendo',
+                enriching: 'metadados',
+                done: 'concluída',
+                failed: track.reason ? (reasonLabels[track.reason] || 'falhou') : 'falhou',
+              };
+              const label = track.trackState ? stateLabels[track.trackState] : undefined;
+              const isActive = track.trackState === 'downloading' || track.trackState === 'converting' || track.trackState === 'enriching';
+              return (
+              <div key={index}>
+                <div className="flex items-center gap-2 text-sm">
+                  <div
+                    className={`w-2 h-2 rounded-full flex-shrink-0 ${isActive ? 'animate-pulse' : ''}`}
+                    style={{
+                      backgroundColor:
+                        track.status === 'completed' ? 'rgba(16, 185, 129, 0.9)' :
+                        track.status === 'error' ? 'rgba(239, 68, 68, 0.9)' :
+                        track.status === 'downloading' ? 'rgba(16, 185, 129, 0.9)' :
+                        'rgba(156, 163, 175, 0.9)',
+                      boxShadow: track.status === 'downloading' || track.status === 'completed'
+                        ? '0 0 4px rgba(16, 185, 129, 0.5)'
+                        : 'none'
+                    }}
+                  />
+                  <span className="truncate" style={{ color: 'rgba(209, 213, 219, 0.9)' }}>
+                    {track.title}
                   </span>
+                  {label && (
+                    <span
+                      className="text-xs ml-auto flex-shrink-0"
+                      title={track.status === 'error' ? (track.error || label) : label}
+                      style={{
+                        color: track.status === 'error'
+                          ? 'rgba(252, 165, 165, 0.9)'
+                          : track.status === 'completed'
+                          ? 'rgba(110, 231, 183, 0.9)'
+                          : 'rgba(156, 163, 175, 0.9)',
+                      }}
+                    >
+                      {label}
+                    </span>
+                  )}
+                </div>
+                {detail && track.status === 'error' && track.error && (
+                  <div className="text-xs pl-4 mt-0.5 truncate" title={track.error} style={{ color: 'rgba(252, 165, 165, 0.65)' }}>
+                    └ {track.error}
+                  </div>
                 )}
               </div>
-            ))}
-            {item.playlistItems.length > 10 && (
+              );
+            })}
+            {!detail && item.playlistItems.length > 10 && (
               <div className="text-xs text-center pt-1" style={{ color: 'rgba(107, 114, 128, 0.9)' }}>
                 +{item.playlistItems.length - 10} faixas restantes...
               </div>
@@ -556,21 +595,66 @@ function DownloadItemComponent({ item, handleRetry, handleRemove, getStatusText,
   );
 }
 
+// Linha compacta da lista (painel esquerdo) — selecionável.
+function CompactRow({ item, selected, onSelect, miniStat, hasFailure }: {
+  item: any;
+  selected: boolean;
+  onSelect: () => void;
+  miniStat: string;
+  hasFailure: boolean;
+}) {
+  const dotColor =
+    hasFailure ? 'rgba(239, 68, 68, 0.9)' :
+    item.status === 'completed' ? 'rgba(16, 185, 129, 0.9)' :
+    item.status === 'downloading' ? 'rgba(16, 185, 129, 0.9)' :
+    (item.status === 'pending' || item.status === 'queued') ? 'rgba(234, 179, 8, 0.9)' :
+    'rgba(156, 163, 175, 0.9)';
+  return (
+    <button
+      onClick={onSelect}
+      className="w-full text-left flex items-center gap-2 px-2 py-2 rounded-lg transition-all"
+      style={{
+        background: selected ? 'rgba(16, 185, 129, 0.18)' : 'transparent',
+        border: selected ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid transparent',
+      }}
+      onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = 'rgba(16, 185, 129, 0.08)'; }}
+      onMouseLeave={(e) => { if (!selected) e.currentTarget.style.background = 'transparent'; }}
+    >
+      <div
+        className={`w-2 h-2 rounded-full flex-shrink-0 ${item.status === 'downloading' ? 'animate-pulse' : ''}`}
+        style={{ backgroundColor: dotColor }}
+      />
+      <span className="flex-1 truncate text-sm" style={{ color: 'rgba(229, 231, 235, 0.95)' }}>
+        {item.title || item.url}
+      </span>
+      <span className="text-xs flex-shrink-0" style={{ color: hasFailure ? 'rgba(252, 165, 165, 0.9)' : 'rgba(156, 163, 175, 0.85)' }}>
+        {miniStat}
+      </span>
+    </button>
+  );
+}
+
 export default function DownloadQueue({ onClose }: DownloadQueueProps) {
-  const { 
-    queue, 
+  const {
+    queue,
     history,
-    removeFromQueue, 
-    retryDownload, 
+    removeFromQueue,
+    retryDownload,
+    retryItem,
+    retryAllFailures,
     cancelDownload,
     clearHistory,
     getPlaylistProgressData,
     clearStuckDownloads,
-    addToQueue
+    addToQueue,
+    focusDownloadId,
+    setFocusDownloadId
   } = useDownload();
 
   const [filter, setFilter] = useState<'all' | 'active' | 'completed' | 'failed'>('all');
   const [modalColor, setModalColor] = useState<string>('rgba(0, 0, 0, 0.9)');
+  // Download selecionado no painel de detalhe (layout de dois painéis).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   
   // Cache para evitar recálculos desnecessários
   const queueHashRef = useRef<string>('');
@@ -797,6 +881,51 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   }, []);
 
+  // Pré-seleção vinda do toast ("ver"/"abrir no item X").
+  useEffect(() => {
+    if (focusDownloadId) {
+      setSelectedId(focusDownloadId);
+      setFocusDownloadId(null);
+    }
+  }, [focusDownloadId, setFocusDownloadId]);
+
+  // Garantir uma seleção válida: mantém a atual se existir; senão, primeiro ativo, senão o primeiro.
+  useEffect(() => {
+    if (selectedId && allDownloads.some(i => i.id === selectedId)) return;
+    const firstActive = allDownloads.find(i => ['downloading', 'pending', 'queued'].includes(i.status));
+    setSelectedId((firstActive || allDownloads[0])?.id ?? null);
+  }, [allDownloads, selectedId]);
+
+  const selectedItem = useMemo(
+    () => allDownloads.find(i => i.id === selectedId) || null,
+    [allDownloads, selectedId]
+  );
+
+  // Há alguma falha (item com erro ou playlist com faixa falha)?
+  const hasFailures = useMemo(
+    () => allDownloads.some(i =>
+      i.status === 'error' ||
+      (i.isPlaylist && (i as any).playlistItems?.some((t: any) => t.status === 'error' || t.trackState === 'failed'))
+    ),
+    [allDownloads]
+  );
+
+  // Estatística compacta por item (para a linha da lista).
+  const itemMiniStat = useCallback((item: any): string => {
+    if (item.isPlaylist && item.playlistItems?.length) {
+      const total = item.playlistItems.length;
+      const done = item.playlistItems.filter((t: any) => t.status === 'completed').length;
+      const errs = item.playlistItems.filter((t: any) => t.status === 'error').length;
+      return `${done}/${total}${errs > 0 ? ` · ⚠${errs}` : ''}`;
+    }
+    return getStatusText(item.status);
+  }, [getStatusText]);
+
+  const itemHasFailure = useCallback((item: any): boolean =>
+    item.status === 'error' ||
+    (item.isPlaylist && item.playlistItems?.some((t: any) => t.status === 'error' || t.trackState === 'failed')),
+  []);
+
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div 
@@ -870,9 +999,25 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
           </div>
           
           <div className="flex items-center gap-3">
-            {queue.some(item => 
-              (item.status === 'downloading' || item.status === 'pending') && 
-              item.startTime && 
+            {hasFailures && (
+              <button
+                onClick={retryAllFailures}
+                className="px-4 py-2 rounded-lg transition-all duration-200 backdrop-blur-sm hover:scale-105"
+                style={{
+                  background: 'rgba(16, 185, 129, 0.2)',
+                  color: 'rgba(110, 231, 183, 1)',
+                  border: '1px solid rgba(16, 185, 129, 0.4)'
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(16, 185, 129, 0.3)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(16, 185, 129, 0.2)'; }}
+                title="Re-tentar todas as faixas/itens que falharam (reaproveita o que já foi baixado)"
+              >
+                ↻ Tentar todas as falhas
+              </button>
+            )}
+            {queue.some(item =>
+              (item.status === 'downloading' || item.status === 'pending') &&
+              item.startTime &&
               (Date.now() - item.startTime > 5 * 60 * 1000)
             ) && (
               <button
@@ -928,90 +1073,151 @@ export default function DownloadQueue({ onClose }: DownloadQueueProps) {
           </div>
         </div>
 
-        {/* Filtros */}
-        <div 
-          className="flex items-center gap-2 p-4 border-b flex-shrink-0"
-          style={{ borderColor: 'rgba(16, 185, 129, 0.2)' }}
-        >
-          {[
-            { key: 'all', label: 'Todos', count: stats.total },
-            { key: 'active', label: 'Ativos', count: stats.active },
-            { key: 'completed', label: 'Concluídos', count: stats.completed },
-            { key: 'failed', label: 'Falharam', count: stats.failed },
-          ].map(({ key, label, count }) => (
-            <button
-              key={key}
-              onClick={() => setFilter(key as any)}
-              className="px-4 py-2 rounded-lg transition-all duration-200 backdrop-blur-sm"
-              style={
-                filter === key
-                  ? {
-                      background: 'rgba(16, 185, 129, 0.2)',
-                      color: 'rgba(110, 231, 183, 1)',
-                      border: '1px solid rgba(16, 185, 129, 0.4)',
-                      boxShadow: '0 2px 8px rgba(16, 185, 129, 0.2)'
-                    }
-                  : {
-                      background: 'rgba(16, 185, 129, 0.05)',
-                      color: 'rgba(156, 163, 175, 0.9)',
-                      border: '1px solid rgba(16, 185, 129, 0.2)'
-                    }
-              }
-              onMouseEnter={(e) => {
-                if (filter !== key) {
-                  e.currentTarget.style.background = 'rgba(16, 185, 129, 0.15)';
-                  e.currentTarget.style.color = 'rgba(110, 231, 183, 0.9)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (filter !== key) {
-                  e.currentTarget.style.background = 'rgba(16, 185, 129, 0.05)';
-                  e.currentTarget.style.color = 'rgba(156, 163, 175, 0.9)';
-                }
-              }}
+        {/* Corpo: dois painéis (lista compacta à esquerda, detalhe à direita) */}
+        <div className="flex-1 flex min-h-0">
+          {/* Painel esquerdo: filtros + lista compacta selecionável */}
+          <div
+            className="w-80 flex-shrink-0 border-r flex flex-col min-h-0"
+            style={{ borderColor: 'rgba(16, 185, 129, 0.2)' }}
+          >
+            {/* Filtros */}
+            <div
+              className="flex flex-wrap items-center gap-1.5 p-3 border-b flex-shrink-0"
+              style={{ borderColor: 'rgba(16, 185, 129, 0.2)' }}
             >
-              {label} {count > 0 && <span className="ml-1 opacity-70">({count})</span>}
-            </button>
-          ))}
-        </div>
-
-        {/* Lista de Downloads */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scroll">
-          {filteredDownloads.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full" style={{ color: 'rgba(156, 163, 175, 0.9)' }}>
-              <svg className="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-              </svg>
-              <p className="text-lg">Nenhum download encontrado</p>
-              <p className="text-sm opacity-70">
-                {filter === 'all' ? 'Inicie um download para vê-lo aqui' : `Nenhum download ${filter === 'active' ? 'ativo' : filter === 'completed' ? 'concluído' : 'com falha'}`}
-              </p>
+              {[
+                { key: 'all', label: 'Todos', count: stats.total },
+                { key: 'active', label: 'Ativos', count: stats.active },
+                { key: 'completed', label: 'Concluídos', count: stats.completed },
+                { key: 'failed', label: 'Falharam', count: stats.failed },
+              ].map(({ key, label, count }) => (
+                <button
+                  key={key}
+                  onClick={() => setFilter(key as any)}
+                  className="px-2.5 py-1 rounded-lg text-xs transition-all duration-200 backdrop-blur-sm"
+                  style={
+                    filter === key
+                      ? {
+                          background: 'rgba(16, 185, 129, 0.2)',
+                          color: 'rgba(110, 231, 183, 1)',
+                          border: '1px solid rgba(16, 185, 129, 0.4)',
+                        }
+                      : {
+                          background: 'rgba(16, 185, 129, 0.05)',
+                          color: 'rgba(156, 163, 175, 0.9)',
+                          border: '1px solid rgba(16, 185, 129, 0.2)',
+                        }
+                  }
+                >
+                  {label}{count > 0 && <span className="ml-1 opacity-70">({count})</span>}
+                </button>
+              ))}
             </div>
-          ) : (
-            <>
-              {/* Grupos de álbuns */}
-              {Array.from(groupedDownloads.groups.entries()).map(([albumKey, albumItems]) => (
-                <AlbumGroup 
-                  key={albumKey}
-                  albumKey={albumKey}
-                  albumItems={albumItems}
+
+            {/* Lista compacta */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scroll">
+              {filteredDownloads.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full px-4 text-center" style={{ color: 'rgba(156, 163, 175, 0.9)' }}>
+                  <svg className="w-12 h-12 mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  <p className="text-sm">Nenhum download</p>
+                </div>
+              ) : (
+                <>
+                  {/* Grupos de álbuns (cabeçalho de seção) */}
+                  {Array.from(groupedDownloads.groups.entries()).map(([albumKey, albumItems]) => (
+                    <div key={albumKey} className="pt-1">
+                      <div className="px-2 py-1 text-xs font-medium truncate" style={{ color: 'rgba(167, 139, 250, 0.9)' }}>
+                        💿 {albumKey.split('|||')[0]}
+                      </div>
+                      {albumItems.map((item) => (
+                        <CompactRow
+                          key={`${item.source}-${item.id}`}
+                          item={item}
+                          selected={selectedId === item.id}
+                          onSelect={() => setSelectedId(item.id)}
+                          miniStat={itemMiniStat(item)}
+                          hasFailure={itemHasFailure(item)}
+                        />
+                      ))}
+                    </div>
+                  ))}
+
+                  {/* Downloads não agrupados */}
+                  {groupedDownloads.ungrouped.map((item) => (
+                    <CompactRow
+                      key={`${item.source}-${item.id}`}
+                      item={item}
+                      selected={selectedId === item.id}
+                      onSelect={() => setSelectedId(item.id)}
+                      miniStat={itemMiniStat(item)}
+                      hasFailure={itemHasFailure(item)}
+                    />
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Painel direito: detalhe do download selecionado */}
+          <div className="flex-1 overflow-y-auto p-4 custom-scroll min-w-0">
+            {selectedItem ? (
+              <div className="space-y-3">
+                {/* Toolbar de ações do item */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {itemHasFailure(selectedItem) && (
+                    <button
+                      onClick={() => retryItem(selectedItem.id)}
+                      className="px-3 py-1.5 rounded-lg text-sm transition-all hover:scale-105"
+                      style={{ background: 'rgba(16, 185, 129, 0.2)', color: 'rgba(110, 231, 183, 1)', border: '1px solid rgba(16, 185, 129, 0.4)' }}
+                      title="Re-tentar as faixas que falharam (reaproveita o já baixado)"
+                    >
+                      ↻ Tentar falhas
+                    </button>
+                  )}
+                  {selectedItem.source === 'queue' && selectedItem.status !== 'completed' && (
+                    <button
+                      onClick={() => handleRemove(selectedItem)}
+                      className="px-3 py-1.5 rounded-lg text-sm transition-all hover:scale-105"
+                      style={{ background: 'rgba(239, 68, 68, 0.15)', color: 'rgba(252, 165, 165, 0.95)', border: '1px solid rgba(239, 68, 68, 0.3)' }}
+                    >
+                      {selectedItem.status === 'downloading' ? '⛔ Cancelar' : '🗑 Remover'}
+                    </button>
+                  )}
+                  {selectedItem.source === 'history' && (
+                    <button
+                      onClick={() => handleRetry(selectedItem)}
+                      className="px-3 py-1.5 rounded-lg text-sm transition-all hover:scale-105"
+                      style={{ background: 'rgba(16, 185, 129, 0.15)', color: 'rgba(110, 231, 183, 0.95)', border: '1px solid rgba(16, 185, 129, 0.3)' }}
+                    >
+                      ↻ Baixar novamente
+                    </button>
+                  )}
+                </div>
+
+                <DownloadItemComponent
+                  item={selectedItem}
                   handleRetry={handleRetry}
                   handleRemove={handleRemove}
                   getStatusText={getStatusText}
                   formatDate={formatDate}
                   formatDuration={formatDuration}
-                  getAlbumStats={getAlbumStats}
+                  detail
                 />
-              ))}
-              
-              {/* Downloads não agrupados (sem álbum) */}
-              {groupedDownloads.ungrouped.map((item) => (
-                <DownloadItemComponent key={`${item.source}-${item.id}`} item={item} handleRetry={handleRetry} handleRemove={handleRemove} getStatusText={getStatusText} formatDate={formatDate} formatDuration={formatDuration} />
-              ))}
-            </>
-          )}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full" style={{ color: 'rgba(156, 163, 175, 0.9)' }}>
+                <svg className="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+                <p className="text-lg">Selecione um download</p>
+                <p className="text-sm opacity-70">Escolha um item à esquerda para ver os detalhes</p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
   );
-} 
+}

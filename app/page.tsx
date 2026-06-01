@@ -9,6 +9,10 @@ const AudioPlayer = dynamic(() => import('./components/AudioPlayer'), {
   ssr: false,
   loading: () => null
 });
+const ArtistFeed = dynamic(() => import('./components/ArtistFeed'), {
+  ssr: false,
+  loading: () => null
+});
 import BeatportModal from './components/BeatportModal';
 import BeatportDownloaderModal from './components/BeatportDownloaderModal';
 import SettingsModal from './components/SettingsModal';
@@ -40,6 +44,7 @@ export default function Home() {
   const [downloadFormMinimized, setDownloadFormMinimized] = useState(true);
   const [showQueue, setShowQueue] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [view, setView] = useState<'library' | 'feed'>('library');
 
   // Carregar estados salvos do localStorage após montagem (client-side only)
   useEffect(() => {
@@ -100,10 +105,35 @@ export default function Home() {
           />
         </div>
 
-        {/* Container da lista de arquivos - ocupa todo espaço disponível menos o player */}
+        {/* Abas: Biblioteca | Novidades */}
+        <div className="flex-shrink-0 max-w-7xl mx-auto w-full px-6 md:px-4 sm:px-3">
+          <div className="flex items-center gap-1 border-b border-white/10">
+            {([
+              { key: 'library', label: 'Biblioteca' },
+              { key: 'feed', label: 'Novidades' },
+            ] as const).map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setView(tab.key)}
+                className={`px-4 py-2.5 text-sm font-semibold transition-colors border-b-2 -mb-px ${
+                  view === tab.key
+                    ? 'text-white border-emerald-500'
+                    : 'text-zinc-400 border-transparent hover:text-zinc-200'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Container da lista - ocupa todo espaço disponível menos o player */}
         <div className="flex-1 min-h-0 max-w-7xl mx-auto w-full px-6 md:px-4 sm:px-3 overflow-hidden">
           <div className="h-full overflow-y-auto pb-[200px] sm:pb-[90px]">
-            <FileList />
+            <div style={{ display: view === 'library' ? 'block' : 'none' }}>
+              <FileList />
+            </div>
+            {view === 'feed' && <ArtistFeed />}
           </div>
         </div>
 

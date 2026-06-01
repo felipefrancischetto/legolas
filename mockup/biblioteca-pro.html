@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Legolas · Biblioteca (redesign PRO)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --em:16,185,129;        /* emerald-500 */
+    --emd:5,150,105;
+    --amber:251,191,36;
+    --orange:249,115,22;
+    --blue:59,130,246;
+    --red:239,68,68;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{background:#000;font-family:'Inter',system-ui,sans-serif;color:#fff;-webkit-font-smoothing:antialiased;}
+  body{position:relative;}
+  body{
+    background:
+      radial-gradient(1100px 460px at 14% -10%, rgba(var(--em),.13), transparent 55%),
+      radial-gradient(900px 500px at 100% 0%, rgba(var(--blue),.06), transparent 50%),
+      linear-gradient(135deg, rgba(0,0,0,.96) 0%, rgba(15,23,42,.98) 50%, rgba(0,0,0,.96) 100%);
+    min-height:100vh;
+  }
+  .mono{font-family:'JetBrains Mono',ui-monospace,monospace;}
+  .app{max-width:1410px;margin:0 auto;padding:14px 22px 120px;}
+
+  /* ============ App bar ============ */
+  .appbar{display:flex;align-items:center;gap:12px;margin-bottom:16px;}
+  .logo{width:42px;height:42px;border-radius:13px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:21px;
+    background:radial-gradient(circle at 35% 28%, rgba(var(--em),.6), rgba(var(--emd),.22));
+    border:1px solid rgba(var(--em),.5);box-shadow:0 0 28px rgba(var(--em),.4), inset 0 1px 0 rgba(255,255,255,.2);}
+  .url{flex:1;height:46px;border-radius:13px;border:1px solid rgba(255,255,255,.10);
+    background:linear-gradient(135deg, rgba(var(--em),.06) 0%, rgba(var(--emd),.09) 30%, rgba(0,0,0,.6) 70%, rgba(15,23,42,.72) 100%);
+    color:#71717a;display:flex;align-items:center;padding:0 18px;font-size:14px;gap:10px;
+    box-shadow:0 8px 24px rgba(var(--em),.10), inset 0 1px 0 rgba(255,255,255,.06);}
+  .btn-dl{height:46px;padding:0 22px;border-radius:13px;border:1px solid rgba(255,255,255,.12);font-weight:700;font-size:14px;display:flex;align-items:center;gap:8px;
+    background:linear-gradient(135deg, rgba(var(--em),.9), rgba(var(--emd),.85));color:#04130d;box-shadow:0 8px 24px rgba(var(--em),.35);}
+  .ibtn{width:44px;height:44px;border-radius:13px;border:1px solid rgba(var(--em),.32);font-size:16px;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(135deg, rgba(var(--em),.13), rgba(var(--em),.04));color:rgb(var(--em));box-shadow:inset 0 1px 0 rgba(255,255,255,.08);}
+
+  /* ============ Tabs ============ */
+  .tabs{display:flex;gap:6px;border-bottom:1px solid rgba(255,255,255,.10);margin-bottom:18px;}
+  .tab{padding:11px 16px;font-size:14px;font-weight:700;color:#a1a1aa;border-bottom:2px solid transparent;margin-bottom:-1px;display:flex;align-items:center;gap:8px;}
+  .tab.active{color:#fff;border-color:rgb(var(--em));}
+  .cnt{font-size:10px;font-weight:800;border-radius:999px;padding:2px 8px;}
+  .cnt.em{color:rgb(var(--em));background:rgba(var(--em),.15);border:1px solid rgba(var(--em),.3);}
+  .cnt.or{color:#fdba74;background:rgba(var(--orange),.15);border:1px solid rgba(var(--orange),.3);}
+
+  /* ============ Toolbar ============ */
+  .toolbar{display:flex;align-items:center;gap:10px;margin-bottom:18px;}
+  .search{flex:1;min-width:200px;height:44px;position:relative;}
+  .search input{width:100%;height:100%;border-radius:13px;border:1px solid rgba(255,255,255,.10);color:#fff;padding:0 44px 0 16px;font-size:14px;
+    background:linear-gradient(135deg, rgba(var(--em),.06) 0%, rgba(var(--emd),.09) 30%, rgba(0,0,0,.6) 70%, rgba(15,23,42,.72) 100%);
+    box-shadow:0 8px 24px rgba(var(--em),.10), inset 0 1px 0 rgba(255,255,255,.06);}
+  .search input::placeholder{color:#71717a;}
+  .search .si{position:absolute;right:15px;top:50%;transform:translateY(-50%);color:rgb(var(--em));font-size:15px;}
+  .pill{height:44px;display:flex;align-items:center;gap:8px;padding:0 14px;border-radius:13px;font-size:13px;font-weight:700;white-space:nowrap;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.28);color:#e4e4e7;backdrop-filter:blur(10px);}
+  .pill .lbl{color:#9ca3af;font-weight:500;}
+  .pill.sel{color:#fff;background:linear-gradient(135deg, rgba(var(--em),.06) 0%, rgba(var(--emd),.09) 30%, rgba(0,0,0,.6) 70%, rgba(15,23,42,.72) 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.06);}
+  .pill.count b{color:#fff;}.pill.count{color:#9ca3af;}
+  .pill.midi{background:rgba(var(--em),.16);color:rgb(var(--em));border-color:rgba(var(--em),.34);}
+  .pill.warn{background:rgba(var(--orange),.18);color:#fdba74;border-color:rgba(var(--orange),.34);}
+  .pill.blue{background:rgba(var(--blue),.18);color:#93c5fd;border-color:rgba(var(--blue),.34);}
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 9px currentColor;}
+  .seg{display:flex;height:44px;border-radius:13px;overflow:hidden;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.28);}
+  .seg button{width:42px;border:none;background:transparent;color:#71717a;font-size:16px;display:flex;align-items:center;justify-content:center;}
+  .seg button.active{background:linear-gradient(135deg, rgba(var(--em),.24), rgba(var(--em),.08));color:rgb(var(--em));}
+
+  /* ============ Album group ============ */
+  .group{display:flex;align-items:center;gap:14px;padding:11px 16px;border-radius:16px;margin:22px 0 12px;
+    background:linear-gradient(90deg, rgba(var(--em),.12), rgba(0,0,0,.22) 55%);border:1px solid rgba(255,255,255,.08);backdrop-filter:blur(10px);}
+  .group .gcover{width:50px;height:50px;border-radius:11px;flex-shrink:0;overflow:hidden;box-shadow:0 6px 18px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.12);}
+  .group .gtitle{font-size:15.5px;font-weight:800;color:#fff;display:flex;align-items:center;gap:9px;}
+  .gtag{font-size:9.5px;font-weight:800;letter-spacing:.05em;color:#9ca3af;text-transform:uppercase;background:rgba(255,255,255,.07);border-radius:6px;padding:3px 8px;}
+  .group .gmeta{font-size:12px;color:#9ca3af;margin-top:3px;display:flex;gap:14px;}
+  .group .gmeta .mono{color:#d4d4d8;}
+  .gactions{margin-left:auto;display:flex;gap:8px;}
+  .gbtn{font-size:12.5px;font-weight:700;color:#d4d4d8;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.32);border-radius:10px;padding:8px 13px;display:flex;align-items:center;gap:6px;}
+  .gbtn.accent{color:#04130d;border-color:rgba(var(--em),.5);background:linear-gradient(135deg, rgba(var(--em),.92), rgba(var(--emd),.85));box-shadow:0 6px 18px rgba(var(--em),.28);}
+
+  /* ============ Track card ============ */
+  .card{position:relative;display:flex;border-radius:18px;overflow:hidden;margin-bottom:14px;border:1px solid rgba(255,255,255,.10);
+    background:linear-gradient(135deg, rgba(var(--em),.05) 0%, rgba(var(--emd),.08) 30%, rgba(0,0,0,.5) 70%, rgba(15,23,42,.62) 100%);
+    box-shadow:0 8px 26px rgba(0,0,0,.30);}
+  .card.playing{border-color:rgba(var(--em),.5);
+    background:linear-gradient(135deg, rgba(var(--em),.20) 0%, rgba(var(--em),.10) 32%, rgba(0,0,0,.55) 70%, rgba(15,23,42,.7) 100%);
+    box-shadow:0 14px 40px rgba(var(--em),.26), inset 0 1px 0 rgba(255,255,255,.1);}
+  .rail{position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg, rgba(var(--em),1), rgba(var(--em),.2));opacity:0;}
+  .card.playing .rail{opacity:1;}
+
+  .cover{position:relative;width:148px;min-width:148px;overflow:hidden;background:#0b0f19;}
+  .cover svg{display:block;width:100%;height:100%;}
+  .badge-bp{position:absolute;top:8px;left:8px;font-size:8px;font-weight:900;letter-spacing:.07em;color:#fff;text-transform:uppercase;background:rgb(var(--em));padding:3px 7px;border-radius:6px;box-shadow:0 3px 10px rgba(var(--em),.55);}
+  .cover .play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.32);opacity:0;transition:.2s;}
+  .cover .pbtn{width:48px;height:48px;border-radius:50%;background:rgba(var(--em),.96);color:#06281e;font-size:18px;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(var(--em),.6);}
+  .card:hover .cover .play{opacity:1;}
+  .cover .nowwave{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:3px;background:rgba(0,0,0,.5);}
+  .cover .nowwave span{width:4px;border-radius:3px;background:rgb(var(--em));box-shadow:0 0 11px rgba(var(--em),.85);}
+  .cover .dur{position:absolute;bottom:8px;right:8px;font-size:10px;font-weight:700;color:#fff;background:rgba(0,0,0,.65);padding:2px 7px;border-radius:6px;backdrop-filter:blur(4px);}
+
+  .body{flex:1;min-width:0;padding:14px 16px 12px;display:flex;flex-direction:column;}
+  .head{display:flex;align-items:flex-start;gap:12px;}
+  .titles{min-width:0;flex:1;}
+  .title{font-size:17px;font-weight:800;color:#fff;line-height:1.12;letter-spacing:-.01em;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
+  .title .mix{color:#86c5b0;font-weight:600;font-size:13px;}
+  .title .num{font-size:11px;color:#52525b;font-weight:700;}
+  .artist{font-size:14px;font-weight:700;color:rgb(var(--em));margin-top:3px;}
+  .artist .feat{color:#86c5b0;font-weight:500;}
+  .release{font-size:11.5px;color:#71717a;margin-top:5px;display:flex;flex-wrap:wrap;gap:4px 14px;}
+  .release b{color:#a1a1aa;font-weight:600;}
+  .release .none{color:#52525b;}
+
+  .actions{display:flex;align-items:center;gap:6px;flex-shrink:0;}
+  .act{height:31px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.34);color:#e4e4e7;display:flex;align-items:center;gap:6px;padding:0 10px;font-size:12px;font-weight:700;backdrop-filter:blur(6px);}
+  .act .ic{font-size:13px;line-height:1;}
+  .act.em{color:rgb(var(--em));border-color:rgba(var(--em),.42);background:linear-gradient(135deg, rgba(var(--em),.17), rgba(var(--em),.06));}
+  .act.amber{color:rgb(var(--amber));border-color:rgba(var(--amber),.42);background:rgba(var(--amber),.13);}
+  .act.yt{color:#fca5a5;border-color:rgba(var(--red),.42);background:rgba(var(--red),.12);}
+  .act.io{width:31px;justify-content:center;padding:0;}
+
+  /* waveform preview */
+  .wave{margin-top:11px;height:34px;width:100%;opacity:.92;}
+  .card.playing .wave .played{fill:rgb(var(--em));}
+
+  /* DJ stats */
+  .stats{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px;align-items:stretch;}
+  .stat{display:flex;align-items:center;gap:9px;height:38px;padding:0 12px;border-radius:11px;background:rgba(0,0,0,.32);border:1px solid rgba(255,255,255,.08);}
+  .stat .k{font-size:8.5px;letter-spacing:.09em;text-transform:uppercase;color:#71717a;font-weight:800;}
+  .stat .v{font-size:14.5px;font-weight:800;color:#fff;line-height:1.05;}
+  .stat .v.muted{color:#52525b;}
+  .stat.key .swatch{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#04140f;}
+  .stat.bpm .v{font-variant-numeric:tabular-nums;}
+  .stat.genre{max-width:240px;}
+  .stat.genre .v{font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .energy{display:flex;align-items:flex-end;gap:2px;height:20px;}
+  .energy i{width:3px;border-radius:2px;background:rgb(var(--em));display:block;}
+  .energy i.off{background:rgba(255,255,255,.13);}
+  /* harmonic compat mini wheel + matches */
+  .harm{display:flex;align-items:center;gap:9px;height:38px;padding:0 12px 0 10px;border-radius:11px;background:linear-gradient(135deg, rgba(var(--em),.10), rgba(0,0,0,.3));border:1px solid rgba(var(--em),.22);}
+  .harm .lab{font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:#86c5b0;font-weight:800;}
+  .harm .keys{display:flex;gap:4px;}
+  .harm .kk{font-size:11px;font-weight:800;padding:2px 7px;border-radius:7px;color:#04140f;}
+
+  .filemeta{margin-top:11px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07);display:flex;flex-wrap:wrap;gap:6px 18px;font-size:11.5px;color:#71717a;align-items:center;}
+  .fm{display:flex;align-items:center;gap:6px;}
+  .fm .lab{color:#52525b;}.fm .val{color:#a1a1aa;}.fm .val.hi{color:#fff;}
+  .chip{font-size:10px;font-weight:800;letter-spacing:.04em;border-radius:6px;padding:2px 8px;}
+  .chip.fmt{color:rgb(var(--em));border:1px solid rgba(var(--em),.36);background:rgba(var(--em),.10);}
+  .chip.flag{color:#fdba74;border:1px solid rgba(var(--orange),.36);background:rgba(var(--orange),.12);}
+  .chip.star{color:rgb(var(--amber));border:1px solid rgba(var(--amber),.36);background:rgba(var(--amber),.12);}
+
+  /* ============ Now-playing dock ============ */
+  .dock{position:absolute;left:0;right:0;bottom:0;height:78px;display:flex;align-items:center;gap:16px;padding:0 22px;z-index:50;
+    background:linear-gradient(180deg, rgba(8,12,12,.86), rgba(4,8,8,.96));border-top:1px solid rgba(var(--em),.25);backdrop-filter:blur(18px);box-shadow:0 -10px 40px rgba(0,0,0,.5);}
+  .dock .dcov{width:52px;height:52px;border-radius:11px;overflow:hidden;box-shadow:0 4px 14px rgba(0,0,0,.5);flex-shrink:0;}
+  .dock .dinfo{min-width:170px;}
+  .dock .dt{font-size:13.5px;font-weight:800;color:#fff;}
+  .dock .da{font-size:12px;color:rgb(var(--em));font-weight:600;}
+  .dock .dctrl{display:flex;align-items:center;gap:14px;color:#d4d4d8;font-size:18px;}
+  .dock .dplay{width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg, rgba(var(--em),.95), rgba(var(--emd),.9));color:#04130d;display:flex;align-items:center;justify-content:center;font-size:17px;box-shadow:0 6px 20px rgba(var(--em),.5);}
+  .dock .dwave{flex:1;height:46px;}
+  .dock .dmeta{display:flex;align-items:center;gap:10px;font-size:11px;color:#9ca3af;}
+  .dock .dkey{font-size:11px;font-weight:900;color:#04140f;background:#f0c548;border-radius:7px;padding:3px 8px;}
+  .dock .dtime{font-size:11px;color:#d4d4d8;font-variant-numeric:tabular-nums;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- App bar -->
+  <div class="appbar">
+    <div class="logo">🏹</div>
+    <div class="url">🔗 Cole a URL do YouTube / SoundCloud / Beatport aqui…</div>
+    <div class="btn-dl">⬇ Baixar</div>
+    <div class="ibtn">✨</div><div class="ibtn">🔍</div><div class="ibtn">📋</div><div class="ibtn">☰</div><div class="ibtn">★</div><div class="ibtn">⚙</div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active">Biblioteca <span class="cnt em">140</span></div>
+    <div class="tab">Novidades <span class="cnt or">12 novas</span></div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="search"><input placeholder="Buscar por título, artista, label, BPM ou key…" /><span class="si">🔍</span></div>
+    <div class="pill sel"><span class="lbl">Agrupar:</span> Álbum ▾</div>
+    <div class="pill sel"><span class="lbl">Ordenar:</span> Recentes ▾</div>
+    <div class="pill count">♫ <b>140</b> músicas · <b>11.4</b> GB</div>
+    <div class="pill midi"><span class="dot"></span> Pack MIDI</div>
+    <div class="pill warn"><span class="dot"></span> 1 fora do padrão Beatport</div>
+    <div class="pill blue">📁 Organizar não normalizados</div>
+    <div class="seg"><button>≣</button><button class="active">▦</button><button>▤</button></div>
+  </div>
+
+  <!-- ===== Group: Grand Illusions ===== -->
+  <div class="group">
+    <div class="gcover">
+      <svg viewBox="0 0 50 50"><defs><linearGradient id="gc1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0f766e"/><stop offset="1" stop-color="#052e2b"/></linearGradient></defs><rect width="50" height="50" fill="url(#gc1)"/><circle cx="25" cy="25" r="13" fill="none" stroke="#5eead4" stroke-width="1.4" opacity=".7"/><circle cx="25" cy="25" r="4" fill="#5eead4"/></svg>
+    </div>
+    <div>
+      <div class="gtitle">Grand Illusions (Club Edit) <span class="gtag">Álbum</span></div>
+      <div class="gmeta"><span>1 faixa</span><span class="mono">5:12</span><span class="mono">50.8 MB</span><span>Get Physical Music · 2022</span></div>
+    </div>
+    <div class="gactions"><div class="gbtn accent">▶ Tocar tudo</div><div class="gbtn">★ Favoritar</div><div class="gbtn">⋯</div></div>
+  </div>
+
+  <!-- Card 1 (playing) -->
+  <div class="card playing">
+    <div class="rail"></div>
+    <div class="cover">
+      <svg viewBox="0 0 148 148" preserveAspectRatio="xMidYMid slice"><defs><linearGradient id="c1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#134e4a"/><stop offset="1" stop-color="#0a1f2e"/></linearGradient></defs><rect width="148" height="148" fill="url(#c1)"/><g opacity=".85"><text x="14" y="58" font-family="JetBrains Mono" font-size="30" font-weight="800" fill="#5eead4">GET</text><text x="14" y="92" font-family="JetBrains Mono" font-size="30" font-weight="800" fill="#5eead4">PHY</text><text x="14" y="126" font-family="JetBrains Mono" font-size="30" font-weight="800" fill="#5eead4">SIC</text></g></svg>
+      <div class="badge-bp">Beatport</div>
+      <div class="nowwave"><span style="height:14px"></span><span style="height:28px"></span><span style="height:10px"></span><span style="height:34px"></span><span style="height:18px"></span><span style="height:24px"></span></div>
+    </div>
+    <div class="body">
+      <div class="head">
+        <div class="titles">
+          <div class="title">Grand Illusions <span class="mix">(Club Edit)</span></div>
+          <div class="artist">Daniel Dubb</div>
+          <div class="release"><span><b>Gravadora</b> Get Physical Music</span><span><b>Lançamento</b> 2022-03-18</span><span><b>Catálogo</b> <span class="mono">GPM612</span></span></div>
+        </div>
+        <div class="actions">
+          <div class="act amber"><span class="ic">★</span> Favorito</div>
+          <div class="act em"><span class="ic">♪</span> MIDI</div>
+          <div class="act yt io" title="YouTube"><span class="ic">▶</span></div>
+          <div class="act io" title="Beatport"><span class="ic">B</span></div>
+          <div class="act io" title="Mais"><span class="ic">⋯</span></div>
+        </div>
+      </div>
+      <svg class="wave" viewBox="0 0 1000 40" preserveAspectRatio="none"><g><rect class="played" x="0" width="4" y="14" height="12" fill="rgb(16,185,129)"/></g></svg>
+      <div class="stats">
+        <div class="stat key"><div class="swatch" style="background:#37e6b4">5A</div><div><div class="k">Key</div><div class="v">F Minor</div></div></div>
+        <div class="stat bpm"><div><div class="k">BPM</div><div class="v">122</div></div></div>
+        <div class="stat genre"><div><div class="k">Gênero</div><div class="v">Deep House</div></div></div>
+        <div class="stat"><div class="k">Energia</div><div class="energy"><i style="height:6px"></i><i style="height:9px"></i><i style="height:12px"></i><i style="height:16px"></i><i style="height:20px" class="off"></i></div></div>
+        <div class="harm"><span class="lab">Mixa com</span><div class="keys"><span class="kk" style="background:#37e6b4">5A</span><span class="kk" style="background:#5ce0c4">4A</span><span class="kk" style="background:#6ad0ec;color:#04140f">6A</span><span class="kk" style="background:#a7f3d0">5B</span></div></div>
+      </div>
+      <div class="filemeta">
+        <div class="fm"><span class="lab">Duração</span> <span class="val mono hi">5:12</span></div>
+        <div class="fm"><span class="lab">Tamanho</span> <span class="val mono">50.8 MB</span></div>
+        <div class="fm"><span class="lab">Formato</span> <span class="chip fmt">FLAC</span> <span class="val mono">44.1kHz · 16bit</span></div>
+        <div class="fm"><span class="lab">Baixado</span> <span class="val mono">31-05-2026</span></div>
+        <div class="fm"><span class="chip fmt">✓ Beatport</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Group: Connecting the Dots ===== -->
+  <div class="group">
+    <div class="gcover"><svg viewBox="0 0 50 50"><rect width="50" height="50" fill="#0b1430"/><g fill="#9db4ff">${''}</g><g fill="#cfe0ff"><rect x="6" y="6" width="5" height="5"/><rect x="16" y="6" width="5" height="5"/><rect x="32" y="11" width="5" height="5"/><rect x="11" y="18" width="5" height="5"/><rect x="27" y="22" width="5" height="5"/><rect x="38" y="27" width="5" height="5"/><rect x="8" y="32" width="5" height="5"/><rect x="22" y="34" width="5" height="5"/><rect x="34" y="38" width="5" height="5"/></g></svg></div>
+    <div>
+      <div class="gtitle">Connecting the Dots <span class="gtag">Álbum</span></div>
+      <div class="gmeta"><span>1 faixa</span><span class="mono">8:21</span><span class="mono">83.3 MB</span><span>2024</span></div>
+    </div>
+    <div class="gactions"><div class="gbtn accent">▶ Tocar tudo</div><div class="gbtn">★ Favoritar</div><div class="gbtn">⋯</div></div>
+  </div>
+
+  <!-- Card 2 (missing metadata) -->
+  <div class="card">
+    <div class="rail"></div>
+    <div class="cover">
+      <svg viewBox="0 0 148 148"><rect width="148" height="148" fill="#0b1430"/><g fill="#cfe0ff" opacity=".9"><rect x="18" y="18" width="14" height="14"/><rect x="48" y="18" width="14" height="14"/><rect x="96" y="32" width="14" height="14"/><rect x="32" y="54" width="14" height="14"/><rect x="80" y="64" width="14" height="14"/><rect x="112" y="80" width="14" height="14"/><rect x="24" y="96" width="14" height="14"/><rect x="66" y="100" width="14" height="14"/><rect x="100" y="112" width="14" height="14"/></g></svg>
+      <div class="play"><div class="pbtn">▶</div></div>
+      <div class="dur mono">8:21</div>
+    </div>
+    <div class="body">
+      <div class="head">
+        <div class="titles">
+          <div class="title">The Golden Age</div>
+          <div class="artist">HOSH, <span class="feat">Holger Behn</span></div>
+          <div class="release"><span><b>Gravadora</b> <span class="none">—</span></span><span><b>Lançamento</b> 2024-02-08</span><span><b>Catálogo</b> <span class="none">—</span></span></div>
+        </div>
+        <div class="actions">
+          <div class="act"><span class="ic">★</span> Favoritar</div>
+          <div class="act em"><span class="ic">♪</span> MIDI</div>
+          <div class="act yt io" title="YouTube"><span class="ic">▶</span></div>
+          <div class="act io" title="Beatport"><span class="ic">B</span></div>
+          <div class="act io" title="Mais"><span class="ic">⋯</span></div>
+        </div>
+      </div>
+      <svg class="wave" viewBox="0 0 1000 40" preserveAspectRatio="none"><g id="w2"></g></svg>
+      <div class="stats">
+        <div class="stat key"><div class="swatch" style="background:rgba(255,255,255,.1);color:#71717a">?</div><div><div class="k">Key</div><div class="v muted">—</div></div></div>
+        <div class="stat bpm"><div><div class="k">BPM</div><div class="v muted">—</div></div></div>
+        <div class="stat genre"><div><div class="k">Gênero</div><div class="v muted">—</div></div></div>
+        <div class="stat" style="border-color:rgba(var(--orange),.32);background:rgba(var(--orange),.09)"><span style="color:#fdba74;font-size:12.5px;font-weight:700">⟳ Buscar metadados no Beatport</span></div>
+      </div>
+      <div class="filemeta">
+        <div class="fm"><span class="lab">Duração</span> <span class="val mono hi">8:21</span></div>
+        <div class="fm"><span class="lab">Tamanho</span> <span class="val mono">83.3 MB</span></div>
+        <div class="fm"><span class="lab">Formato</span> <span class="chip fmt">FLAC</span></div>
+        <div class="fm"><span class="lab">Baixado</span> <span class="val mono">31-05-2026</span></div>
+        <div class="fm"><span class="chip flag">⚠ Sem dados Beatport</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Group: Repeat ===== -->
+  <div class="group">
+    <div class="gcover"><svg viewBox="0 0 50 50"><defs><radialGradient id="gc3"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#063a33"/></radialGradient></defs><rect width="50" height="50" fill="url(#gc3)"/><circle cx="25" cy="25" r="9" fill="none" stroke="#04140f" stroke-width="2"/></svg></div>
+    <div>
+      <div class="gtitle">Repeat <span class="gtag">Álbum</span></div>
+      <div class="gmeta"><span>1 faixa</span><span class="mono">4:34</span><span class="mono">47.7 MB</span><span>Truncate · 2020</span></div>
+    </div>
+    <div class="gactions"><div class="gbtn accent">▶ Tocar tudo</div><div class="gbtn">★ Favoritar</div><div class="gbtn">⋯</div></div>
+  </div>
+
+  <!-- Card 3 -->
+  <div class="card">
+    <div class="rail"></div>
+    <div class="cover">
+      <svg viewBox="0 0 148 148"><defs><radialGradient id="c3" cx="50%" cy="44%"><stop offset="0" stop-color="#19c2a3"/><stop offset="1" stop-color="#06322b"/></radialGradient></defs><rect width="148" height="148" fill="url(#c3)"/><circle cx="74" cy="65" r="30" fill="none" stroke="#04140f" stroke-width="3" opacity=".7"/><text x="74" y="128" text-anchor="middle" font-family="Inter" font-size="13" font-weight="800" fill="#04140f">TRUNCATE</text></svg>
+      <div class="badge-bp">Beatport</div>
+      <div class="play"><div class="pbtn">▶</div></div>
+      <div class="dur mono">4:34</div>
+    </div>
+    <div class="body">
+      <div class="head">
+        <div class="titles">
+          <div class="title">El Sonido</div>
+          <div class="artist">Truncate</div>
+          <div class="release"><span><b>Gravadora</b> Truncate</span><span><b>Lançamento</b> 2020-09-11</span><span><b>Catálogo</b> <span class="mono">TRUNCATE024</span></span></div>
+        </div>
+        <div class="actions">
+          <div class="act"><span class="ic">★</span> Favoritar</div>
+          <div class="act em"><span class="ic">♪</span> MIDI</div>
+          <div class="act yt io" title="YouTube"><span class="ic">▶</span></div>
+          <div class="act io" title="Beatport"><span class="ic">B</span></div>
+          <div class="act io" title="Mais"><span class="ic">⋯</span></div>
+        </div>
+      </div>
+      <svg class="wave" viewBox="0 0 1000 40" preserveAspectRatio="none"><g id="w3"></g></svg>
+      <div class="stats">
+        <div class="stat key"><div class="swatch" style="background:#5b8def;color:#fff">1A</div><div><div class="k">Key</div><div class="v">B Minor</div></div></div>
+        <div class="stat bpm"><div><div class="k">BPM</div><div class="v">134</div></div></div>
+        <div class="stat genre"><div><div class="k">Gênero</div><div class="v">Techno (Peak Time / Driving)</div></div></div>
+        <div class="stat"><div class="k">Energia</div><div class="energy"><i style="height:6px"></i><i style="height:9px"></i><i style="height:12px"></i><i style="height:16px"></i><i style="height:20px"></i></div></div>
+        <div class="harm"><span class="lab">Mixa com</span><div class="keys"><span class="kk" style="background:#5b8def;color:#fff">1A</span><span class="kk" style="background:#7aa5f5;color:#fff">12A</span><span class="kk" style="background:#8fb6f7;color:#04140f">2A</span><span class="kk" style="background:#aac8f9;color:#04140f">1B</span></div></div>
+      </div>
+      <div class="filemeta">
+        <div class="fm"><span class="lab">Duração</span> <span class="val mono hi">4:34</span></div>
+        <div class="fm"><span class="lab">Tamanho</span> <span class="val mono">47.7 MB</span></div>
+        <div class="fm"><span class="lab">Formato</span> <span class="chip fmt">FLAC</span> <span class="val mono">44.1kHz · 24bit</span></div>
+        <div class="fm"><span class="lab">Baixado</span> <span class="val mono">31-05-2026</span></div>
+        <div class="fm"><span class="chip fmt">✓ Beatport</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Group: Global Underground ===== -->
+  <div class="group">
+    <div class="gcover"><svg viewBox="0 0 50 50"><defs><linearGradient id="gc4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ef4444"/><stop offset="1" stop-color="#5a1410"/></linearGradient></defs><rect width="50" height="50" fill="url(#gc4)"/><text x="25" y="32" text-anchor="middle" font-family="Inter" font-size="20" font-weight="900" fill="#fff">GU</text></svg></div>
+    <div>
+      <div class="gtitle">Global Underground: Adapt #6 / Unmixed <span class="gtag">Álbum</span></div>
+      <div class="gmeta"><span>19 faixas</span><span class="mono">2h 14m</span><span class="mono">1.3 GB</span><span>Global Underground · 2023</span></div>
+    </div>
+    <div class="gactions"><div class="gbtn accent">▶ Tocar tudo</div><div class="gbtn">★ Favoritar</div><div class="gbtn">⋯</div></div>
+  </div>
+
+  <!-- Card 4 -->
+  <div class="card">
+    <div class="rail"></div>
+    <div class="cover">
+      <svg viewBox="0 0 148 148"><defs><linearGradient id="c4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#dc2626"/><stop offset="1" stop-color="#450a0a"/></linearGradient></defs><rect width="148" height="148" fill="url(#c4)"/><g stroke="#fca5a5" stroke-width="2" opacity=".5" fill="none"><path d="M0 110 Q37 80 74 110 T148 110"/><path d="M0 124 Q37 96 74 124 T148 124"/></g><text x="74" y="60" text-anchor="middle" font-family="Inter" font-size="24" font-weight="900" fill="#fff">GU</text></svg>
+      <div class="badge-bp">Beatport</div>
+      <div class="play"><div class="pbtn">▶</div></div>
+      <div class="dur mono">6:48</div>
+    </div>
+    <div class="body">
+      <div class="head">
+        <div class="titles">
+          <div class="title"><span class="num mono">01</span> Borboleta <span class="mix">(Original Mix)</span></div>
+          <div class="artist">Marsh</div>
+          <div class="release"><span><b>Gravadora</b> Global Underground</span><span><b>Lançamento</b> 2023-06-23</span><span><b>Catálogo</b> <span class="mono">GU045</span></span></div>
+        </div>
+        <div class="actions">
+          <div class="act"><span class="ic">★</span> Favoritar</div>
+          <div class="act em"><span class="ic">♪</span> MIDI</div>
+          <div class="act yt io" title="YouTube"><span class="ic">▶</span></div>
+          <div class="act io" title="Beatport"><span class="ic">B</span></div>
+          <div class="act io" title="Mais"><span class="ic">⋯</span></div>
+        </div>
+      </div>
+      <svg class="wave" viewBox="0 0 1000 40" preserveAspectRatio="none"><g id="w4"></g></svg>
+      <div class="stats">
+        <div class="stat key"><div class="swatch" style="background:#f0c548">9B</div><div><div class="k">Key</div><div class="v">A Major</div></div></div>
+        <div class="stat bpm"><div><div class="k">BPM</div><div class="v">120</div></div></div>
+        <div class="stat genre"><div><div class="k">Gênero</div><div class="v">Progressive House</div></div></div>
+        <div class="stat"><div class="k">Energia</div><div class="energy"><i style="height:6px"></i><i style="height:9px"></i><i style="height:12px"></i><i style="height:16px" class="off"></i><i style="height:20px" class="off"></i></div></div>
+        <div class="harm"><span class="lab">Mixa com</span><div class="keys"><span class="kk" style="background:#f0c548">9B</span><span class="kk" style="background:#f6d56e">10B</span><span class="kk" style="background:#f7dd86;color:#04140f">8B</span><span class="kk" style="background:#fbe9ad;color:#04140f">9A</span></div></div>
+      </div>
+      <div class="filemeta">
+        <div class="fm"><span class="lab">Duração</span> <span class="val mono hi">6:48</span></div>
+        <div class="fm"><span class="lab">Tamanho</span> <span class="val mono">71.2 MB</span></div>
+        <div class="fm"><span class="lab">Formato</span> <span class="chip fmt">FLAC</span> <span class="val mono">44.1kHz · 24bit</span></div>
+        <div class="fm"><span class="lab">Baixado</span> <span class="val mono">30-05-2026</span></div>
+        <div class="fm"><span class="chip star">★ Favorito</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Now playing dock -->
+<div class="dock">
+  <div class="dcov"><svg viewBox="0 0 52 52"><defs><linearGradient id="dk" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#dc2626"/><stop offset="1" stop-color="#450a0a"/></linearGradient></defs><rect width="52" height="52" fill="url(#dk)"/><text x="26" y="32" text-anchor="middle" font-family="Inter" font-size="15" font-weight="900" fill="#fff">GU</text></svg></div>
+  <div class="dinfo"><div class="dt">Borboleta (Original Mix)</div><div class="da">Marsh</div></div>
+  <div class="dctrl"><span>⏮</span><div class="dplay">⏸</div><span>⏭</span></div>
+  <span class="dtime">2:41</span>
+  <svg class="dwave" id="dwave" viewBox="0 0 1000 46" preserveAspectRatio="none"></svg>
+  <span class="dtime">6:48</span>
+  <div class="dmeta"><span class="dkey">9B</span><span class="mono">120 BPM</span><span>🔊</span></div>
+</div>
+
+<script>
+  function bars(el, n, played, color, base){
+    var g = document.getElementById(el); if(!g) return;
+    var W=1000, gap=2.2, bw=(W-(n-1)*gap)/n;
+    // deterministic pseudo-random heights
+    var seed=el.charCodeAt(1)||7;
+    function rnd(i){ var x=Math.sin(seed*12.9898 + i*78.233)*43758.5453; return x-Math.floor(x); }
+    for(var i=0;i<n;i++){
+      var env = 0.35 + 0.65*Math.sin((i/n)*Math.PI); // fade in/out envelope
+      var h = (4 + rnd(i)*30*env);
+      var y = (40-h)/2;
+      var r = document.createElementNS('http://www.w3.org/2000/svg','rect');
+      r.setAttribute('x', (i*(bw+gap)).toFixed(2));
+      r.setAttribute('width', bw.toFixed(2));
+      r.setAttribute('y', y.toFixed(2));
+      r.setAttribute('height', h.toFixed(2));
+      r.setAttribute('rx','1.2');
+      r.setAttribute('fill', (i/n)<played ? color : base);
+      g.appendChild(r);
+    }
+  }
+  // played-card wave handled inline; fill all
+  function fillWave(svg, played, color, base){
+    var g = svg.querySelector('g'); if(!g) return; g.innerHTML='';
+    var n=170, W=1000, gap=1.6, bw=(W-(n-1)*gap)/n, seed=played*100+3;
+    function rnd(i){ var x=Math.sin((seed+1)*12.9898 + i*78.233)*43758.5453; return x-Math.floor(x); }
+    for(var i=0;i<n;i++){
+      var env=0.4+0.6*Math.sin((i/n)*Math.PI);
+      var h=4+rnd(i)*30*env, y=(40-h)/2;
+      var r=document.createElementNS('http://www.w3.org/2000/svg','rect');
+      r.setAttribute('x',(i*(bw+gap)).toFixed(2)); r.setAttribute('width',bw.toFixed(2));
+      r.setAttribute('y',y.toFixed(2)); r.setAttribute('height',h.toFixed(2)); r.setAttribute('rx','1');
+      r.setAttribute('fill',(i/n)<played?color:base); g.appendChild(r);
+    }
+  }
+  document.querySelectorAll('.card').forEach(function(card,idx){
+    var svg=card.querySelector('.wave'); if(!svg) return;
+    var playing=card.classList.contains('playing');
+    fillWave(svg, playing?0.46:0, playing?'rgb(16,185,129)':'rgba(255,255,255,.16)','rgba(255,255,255,.10)');
+  });
+  // dock big wave
+  (function(){
+    var svg=document.getElementById('dwave'); var g=document.createElementNS('http://www.w3.org/2000/svg','g'); svg.appendChild(g);
+    var n=260,W=1000,gap=1.4,bw=(W-(n-1)*gap)/n,played=0.40;
+    function rnd(i){var x=Math.sin(9*12.9898+i*78.233)*43758.5453;return x-Math.floor(x);}
+    for(var i=0;i<n;i++){var env=0.4+0.6*Math.sin((i/n)*Math.PI);var h=5+rnd(i)*38*env,y=(46-h)/2;
+      var r=document.createElementNS('http://www.w3.org/2000/svg','rect');
+      r.setAttribute('x',(i*(bw+gap)).toFixed(2));r.setAttribute('width',bw.toFixed(2));
+      r.setAttribute('y',y.toFixed(2));r.setAttribute('height',h.toFixed(2));r.setAttribute('rx','1');
+      r.setAttribute('fill',(i/n)<played?'rgb(16,185,129)':'rgba(255,255,255,.18)');g.appendChild(r);}
+  })();
+</script>
+</body>
+</html>

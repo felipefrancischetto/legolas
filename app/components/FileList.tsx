@@ -393,28 +393,15 @@ const DynamicFileItem = memo(({
       >
         {/* Card principal - Design limpo inspirado na referência */}
         <div
-          className="relative backdrop-blur-xl rounded-xl overflow-hidden transition-all duration-300 cursor-pointer border"
-          style={{
-            borderColor: isPlaying ? itemColor.rgba(0.3) : 'rgba(255, 255, 255, 0.1)',
-            background: isPlaying 
-              ? `linear-gradient(135deg, ${itemColor.rgba(0.15)} 0%, ${itemColor.rgba(0.1)} 30%, rgba(0, 0, 0, 0.6) 70%, rgba(15, 23, 42, 0.7) 100%)`
-              : `linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(5, 150, 105, 0.08) 30%, rgba(0, 0, 0, 0.5) 70%, rgba(15, 23, 42, 0.6) 100%)`,
-            boxShadow: isPlaying
-              ? `0 8px 32px ${itemColor.rgba(0.2)}, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
-              : '0 4px 16px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)'
-          }}
-          onMouseEnter={(e) => {
-            if (!isPlaying) {
-              e.currentTarget.style.background = `linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(5, 150, 105, 0.12) 30%, rgba(0, 0, 0, 0.55) 70%, rgba(15, 23, 42, 0.65) 100%)`;
-              e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.08)';
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (!isPlaying) {
-              e.currentTarget.style.background = `linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(5, 150, 105, 0.08) 30%, rgba(0, 0, 0, 0.5) 70%, rgba(15, 23, 42, 0.6) 100%)`;
-              e.currentTarget.style.boxShadow = '0 4px 16px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)';
-            }
-          }}
+          className={`relative rounded-xl overflow-hidden cursor-pointer border transition-colors duration-200 ${
+            isPlaying
+              ? ''
+              : 'border-white/[0.06] bg-white/[0.025] hover:bg-white/[0.05] hover:border-white/10'
+          }`}
+          style={isPlaying ? {
+            borderColor: itemColor.rgba(0.35),
+            background: `linear-gradient(135deg, ${itemColor.rgba(0.12)} 0%, rgba(255, 255, 255, 0.02) 55%)`,
+          } : undefined}
         >
           <div className="flex flex-col sm:flex-row gap-0">
             {/* Capa do álbum - Ocupa toda a altura do card */}
@@ -441,11 +428,11 @@ const DynamicFileItem = memo(({
               {isPlaying && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-tl-xl rounded-bl-xl w-full sm:w-[130px]">
                   {isPlayerPlaying ? (
-                    <SoundWave 
+                    <SoundWave
                       color={`rgb(${itemColor.rgb})`}
                       size="large"
                       isPlaying={true}
-                      isLoading={isLoading}  
+                      isLoading={isLoading}
                     />
                   ) : (
                     <div className="w-8 h-8 rounded-full bg-black/70 flex items-center justify-center">
@@ -456,7 +443,7 @@ const DynamicFileItem = memo(({
                   )}
                 </div>
               )}
-              
+
               {/* Tag Beatport no canto superior direito */}
               {file.isBeatportFormat && (
                 <div className="absolute top-1 right-1 bg-emerald-500 px-1 py-0.5 rounded text-[8px] font-bold text-white uppercase tracking-wide shadow-lg z-10">
@@ -469,7 +456,7 @@ const DynamicFileItem = memo(({
             <div className="flex-1 p-3 flex flex-col min-w-0 relative">
 
               {/* Botões de ação - Canto superior direito */}
-              <div className="flex items-center gap-1.5 absolute top-3 right-3 z-10">
+              <div className="flex items-center gap-0.5 absolute top-2.5 right-2.5 z-10">
                 <StarButton file={file} size="sm" />
 
                 {onExtractMidi && (
@@ -479,30 +466,16 @@ const DynamicFileItem = memo(({
                       e.stopPropagation();
                       onExtractMidi(file);
                     }}
-                    className="w-7 h-7 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center"
-                    style={{
-                      background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%)',
-                      color: 'rgb(16, 185, 129)',
-                      border: '1px solid rgba(16, 185, 129, 0.4)',
-                      boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
-                      e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
-                    }}
+                    className="w-8 h-8 rounded-lg flex items-center justify-center text-zinc-400 hover:text-emerald-400 hover:bg-white/10 transition-colors"
                     title="Extrair MIDIs (bateria, bass, leads, synths...) para Ableton"
                     type="button"
                   >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
                     </svg>
                   </button>
                 )}
-                
+
                 <button
                   onClick={(e) => {
                     e.preventDefault();
@@ -511,29 +484,15 @@ const DynamicFileItem = memo(({
                     const youtubeMusicUrl = `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
                     window.open(youtubeMusicUrl, '_blank', 'noopener,noreferrer');
                   }}
-                  className="w-7 h-7 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center"
-                  style={{
-                    background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%)',
-                    color: 'rgb(16, 185, 129)',
-                    border: '1px solid rgba(16, 185, 129, 0.4)',
-                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
-                    e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
-                  }}
+                  className="w-8 h-8 rounded-lg flex items-center justify-center text-zinc-400 hover:text-white hover:bg-white/10 transition-colors"
                   title="Abrir no YouTube Music"
                   type="button"
                 >
-                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
                   </svg>
                 </button>
-                
+
                 <button
                   onClick={(e) => {
                     e.preventDefault();
@@ -542,28 +501,14 @@ const DynamicFileItem = memo(({
                     const beatportUrl = `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
                     window.open(beatportUrl, '_blank', 'noopener,noreferrer');
                   }}
-                  className="w-7 h-7 rounded-xl backdrop-blur-md transition-all duration-200 hover:scale-105 flex items-center justify-center font-bold"
-                  style={{
-                    background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.25) 100%)',
-                    color: 'rgb(16, 185, 129)',
-                    border: '1px solid rgba(16, 185, 129, 0.4)',
-                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-1px) scale(1.05)';
-                    e.currentTarget.style.boxShadow = '0 8px 24px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1)';
-                  }}
+                  className="w-8 h-8 rounded-lg flex items-center justify-center text-zinc-400 hover:text-emerald-400 hover:bg-white/10 transition-colors"
                   title="Abrir no Beatport"
                   type="button"
                 >
-                  <span className="text-[9px] font-extrabold">B</span>
+                  <span className="text-[11px] font-extrabold">B</span>
                 </button>
-                
-                <ActionMenu 
+
+                <ActionMenu
                   file={file} 
                   onUpdate={onUpdate} 
                   onEdit={onEdit} 
@@ -598,14 +543,14 @@ const DynamicFileItem = memo(({
               )}
               
               {/* Título e Artista */}
-              <div className="mb-2 pr-28">
+              <div className="mb-2 pr-40">
                 <h3 className="text-white font-bold text-base sm:text-sm leading-tight mb-0.5 line-clamp-2">
                   {file.title || file.displayName}
                 </h3>
                 <p className="text-zinc-400 text-sm leading-tight truncate mb-1.5" style={{ color: `rgb(${itemColor.rgb})` }}>
                   {file.artist || 'Artista desconhecido'}
                 </p>
-                
+
                 {/* Metadados principais - Texto simples */}
                 <div className="space-y-0 text-xs text-zinc-500">
                   {((file as any).ano || (file as any).publishedDate) && (

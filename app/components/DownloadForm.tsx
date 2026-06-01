@@ -6,6 +6,7 @@ import { useDownload } from '../contexts/DownloadContext';
 import { useFile } from '../contexts/FileContext';
 import { usePlayer } from '../contexts/PlayerContext';
 import DownloadQueue from './DownloadQueue';
+import DownloadToasts from './DownloadToasts';
 import PlaylistTextModal from './PlaylistTextModal';
 import YouTubeSearchModal from './YouTubeSearchModal';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -50,6 +51,7 @@ interface SavedDownloadFormState {
   format: string;
   enrichWithBeatport: boolean;
   showBeatportPage: boolean;
+  maxConcurrent: number;
   showPlaylistModal: boolean;
   showYouTubeSearchModal: boolean;
   showQuickPlaylist: boolean;
@@ -65,6 +67,7 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
   const [format, setFormat] = useState('flac');
   const [enrichWithBeatport, setEnrichWithBeatport] = useState(true);
   const [showBeatportPage, setShowBeatportPage] = useState(false);
+  const [maxConcurrent, setMaxConcurrent] = useState(3); // Concorrência entre faixas (playlists)
   const [currentDownloadId, setCurrentDownloadId] = useState<string | null>(null);
   const [toastDismissed, setToastDismissed] = useState<Set<string>>(new Set());
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
@@ -88,8 +91,6 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
     getPlaylistProgressData,
     downloadStatus,
     setDownloadStatus,
-    toasts,
-    removeToast
   } = useDownload();
   const { selectDownloadsFolder, customDownloadsPath } = useFile();
   const { playerState } = usePlayer();
@@ -109,6 +110,9 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
       setFormat(saved.format);
       setEnrichWithBeatport(saved.enrichWithBeatport);
       setShowBeatportPage(saved.showBeatportPage);
+      if (typeof saved.maxConcurrent === 'number') {
+        setMaxConcurrent(Math.max(2, Math.min(saved.maxConcurrent, 5)));
+      }
       setShowPlaylistModal(saved.showPlaylistModal);
       setShowYouTubeSearchModal(saved.showYouTubeSearchModal);
       setShowQuickPlaylist(saved.showQuickPlaylist);
@@ -199,6 +203,7 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
       format,
       enrichWithBeatport,
       showBeatportPage,
+      maxConcurrent,
       showPlaylistModal,
       showYouTubeSearchModal,
       showQuickPlaylist
@@ -209,7 +214,7 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         console.warn('⚠️ Erro ao salvar estado do formulário:', err.message);
       }
     });
-  }, [url, format, enrichWithBeatport, showBeatportPage, showPlaylistModal, showYouTubeSearchModal, showQuickPlaylist, isInitialized]);
+  }, [url, format, enrichWithBeatport, showBeatportPage, maxConcurrent, showPlaylistModal, showYouTubeSearchModal, showQuickPlaylist, isInitialized]);
 
   // Calcular downloads ativos
   const activeDownloadsCount = useMemo(() => {
@@ -481,6 +486,7 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         format,
         enrichWithBeatport,
         showBeatportPage,
+        maxConcurrent,
         status: 'pending' as const,
         steps: [] as any[],
         playlistItems: videoInfo?.videos?.map(v => ({
@@ -524,15 +530,17 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
 
   return (
     <div className="w-full transition-all duration-300">
-      {/* Toast de download atual - fixo acima do header */}
+      {/* Banner inline desativado: substituído pelo DownloadToasts flutuante (cards por
+          download + resumo, com ações). O guard abaixo o mantém oculto sem remover o código. */}
       {(() => {
+        const bannerDisabled: boolean = true;
         const displayDownload = currentDownload || activeDownload;
         const isActive = displayDownload && (displayDownload.status === 'downloading' || displayDownload.status === 'pending');
         
         // Verificar se o toast foi fechado manualmente para este download
         const isDismissed = displayDownload && toastDismissed.has(displayDownload.id);
         
-        if (!displayDownload || !isActive || isDismissed) return null;
+        if (bannerDisabled || !displayDownload || !isActive || isDismissed) return null;
         
         return (
           <div className="mb-4 mt-4 max-w-7xl mx-auto px-3 md:px-2 sm:px-2">
@@ -627,24 +635,8 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
         );
       })()}
 
-      {/* Toasts de notificação (conclusão/erro) */}
-      {toasts.length > 0 && (
-        <div className="fixed top-4 right-4 z-50 space-y-2">
-          {toasts.map((toast) => (
-            <div
-              key={toast.id}
-              className="backdrop-blur-md border rounded-xl p-4 shadow-lg animate-slide-down"
-              style={{
-                background: `linear-gradient(135deg, ${themeColors.background} 0%, ${themeColors.background.replace('0.15', '0.25')} 100%)`,
-                border: `1px solid ${themeColors.border}`,
-                boxShadow: `0 8px 32px ${themeColors.primary}20, inset 0 1px 0 rgba(255, 255, 255, 0.1)`
-              }}
-            >
-              <p className="text-white text-sm font-medium">{toast.title}</p>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Toasts de downloads (cards por download + resumo, com ações) */}
+      <DownloadToasts setShowQueue={setShowQueue} />
 
       {/* Container principal ocupando toda largura */}
       <div 
@@ -1248,6 +1240,40 @@ export default function DownloadForm({ minimized, setMinimized, showQueue, setSh
                         Exibir página beatport
                       </span>
                     </label>
+                  </div>
+                </div>
+
+                {/* Concorrência entre faixas (playlists) */}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-col">
+                    <span className="text-sm font-medium text-white">Downloads simultâneos</span>
+                    <span className="text-xs text-white/50">
+                      Faixas baixadas em paralelo. Valores altos aceleram, mas aumentam o risco de bloqueio.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5" suppressHydrationWarning>
+                    {[2, 3, 4, 5].map((n) => {
+                      const active = maxConcurrent === n;
+                      return (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setMaxConcurrent(n)}
+                          className="w-8 h-8 rounded-md text-sm font-semibold transition-all"
+                          style={{
+                            background: active
+                              ? `linear-gradient(135deg, ${themeColors.primary} 0%, ${themeColors.primaryDark} 100%)`
+                              : 'rgba(63, 63, 70, 0.6)',
+                            border: `1px solid ${active ? themeColors.border : 'rgba(82, 82, 91, 0.5)'}`,
+                            color: active ? '#fff' : 'rgba(255,255,255,0.7)',
+                            boxShadow: active ? `0 2px 8px ${themeColors.primary}30` : 'none',
+                          }}
+                          suppressHydrationWarning
+                        >
+                          {n}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               </form>

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Felipe Francischetto\\.claude\\projects\\c--Users-Felipe-Francischetto-Workspace-legolas\\memory"
+    ]
+  }
+}

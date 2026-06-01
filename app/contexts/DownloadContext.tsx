@@ -31,13 +31,16 @@ interface DownloadItem {
   format?: string;
   enrichWithBeatport?: boolean;
   showBeatportPage?: boolean;
+  maxConcurrent?: number; // Concorrência entre faixas (playlists)
   albumName?: string; // Nome do álbum para agrupamento
   albumArtist?: string; // Artista do álbum para agrupamento
   playlistItems?: Array<{
     title: string;
     status: 'pending' | 'downloading' | 'completed' | 'error';
+    trackState?: 'queued' | 'downloading' | 'converting' | 'enriching' | 'done' | 'failed';
     progress?: number;
     error?: string;
+    reason?: string;
     steps: DownloadStep[];
   }>;
 }
@@ -52,7 +55,11 @@ interface DownloadContextType {
   activeDownloads: number;
   maxConcurrentDownloads: number;
   retryDownload: (id: string, playlistIndex?: number) => void;
+  retryItem: (id: string) => void;
+  retryAllFailures: () => void;
   cancelDownload: (id: string, playlistIndex?: number) => void;
+  focusDownloadId: string | null;
+  setFocusDownloadId: (id: string | null) => void;
   downloadStatus: {
     loading: boolean;
     error: string | null;
@@ -80,6 +87,8 @@ const DownloadContext = createContext<DownloadContextType | undefined>(undefined
 export function DownloadProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<DownloadItem[]>([]);
   const [history, setHistory] = useState<DownloadItem[]>([]);
+  // Download que o toast pediu para "abrir no item X" — o modal pré-seleciona ao abrir.
+  const [focusDownloadId, setFocusDownloadId] = useState<string | null>(null);
   const maxConcurrentDownloads = 3;
   
   // Refs para batching de updates e controle de estado
@@ -492,6 +501,42 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Atualização EXPLÍCITA do estado de uma faixa (ambiente concorrente).
+  // Não infere nada sobre as demais faixas — corrige a lógica sequencial antiga
+  // que marcava todas as faixas anteriores como concluídas.
+  const updateTrackState = useCallback((
+    downloadId: string,
+    playlistIndex: number,
+    trackState: 'queued' | 'downloading' | 'converting' | 'enriching' | 'done' | 'failed',
+    opts?: { reason?: string; detail?: string; title?: string }
+  ) => {
+    const statusMap: Record<typeof trackState, 'pending' | 'downloading' | 'completed' | 'error'> = {
+      queued: 'pending',
+      downloading: 'downloading',
+      converting: 'downloading',
+      enriching: 'downloading',
+      done: 'completed',
+      failed: 'error',
+    } as const;
+
+    setQueue(prev => prev.map(item => {
+      if (item.id !== downloadId || !item.playlistItems) return item;
+      const updatedPlaylistItems = item.playlistItems.map((plItem, idx) => {
+        if (idx !== playlistIndex) return plItem;
+        return {
+          ...plItem,
+          title: opts?.title || plItem.title,
+          status: statusMap[trackState],
+          trackState,
+          progress: trackState === 'done' ? 100 : plItem.progress,
+          reason: trackState === 'failed' ? (opts?.reason || opts?.detail) : plItem.reason,
+          error: trackState === 'failed' ? (opts?.detail || opts?.reason || 'Falhou') : plItem.error,
+        };
+      });
+      return { ...item, playlistItems: updatedPlaylistItems };
+    }));
+  }, []);
+
   const addStep = useCallback((downloadId: string, step: DownloadStep & { playlistIndex?: number }) => {
     const { playlistIndex, ...stepData } = step;
     
@@ -580,10 +625,94 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     console.log('🔄 Retry iniciado para:', id, playlistIndex);
   }, []);
 
+  // Re-tenta um download inteiro que falhou. Para playlists, reseta APENAS as faixas
+  // falhas e re-enfileira o item; o auto-processador re-roda e o resume do servidor
+  // pula as faixas já baixadas, re-baixando só as que faltam.
+  const retryItem = useCallback((id: string) => {
+    setQueue(prev => {
+      const item = prev.find(q => q.id === id);
+
+      // Item de histórico: re-adicionar à fila (mesmo padrão do handleRetry do modal).
+      if (!item) {
+        const histItem = historyRef.current.find(h => h.id === id);
+        if (histItem) {
+          const newId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+          const requeued: DownloadItem = {
+            ...histItem,
+            id: newId,
+            status: 'pending',
+            progress: 0,
+            error: undefined,
+            currentStep: undefined,
+            startTime: Date.now(),
+            endTime: undefined,
+            steps: [],
+            playlistItems: histItem.playlistItems?.map(t => ({
+              ...t,
+              status: 'pending' as const,
+              trackState: undefined,
+              progress: 0,
+              error: undefined,
+              reason: undefined,
+              steps: [],
+            })),
+          };
+          return [...prev, requeued];
+        }
+        return prev;
+      }
+
+      return prev.map(q => {
+        if (q.id !== id) return q;
+        const playlistItems = q.playlistItems?.map(t =>
+          (t.status === 'error' || t.trackState === 'failed')
+            ? { ...t, status: 'pending' as const, trackState: undefined, error: undefined, reason: undefined }
+            : t
+        );
+        return {
+          ...q,
+          status: 'pending' as const,
+          progress: 0,
+          error: undefined,
+          currentStep: undefined,
+          endTime: undefined,
+          playlistItems,
+        };
+      });
+    });
+    // Permitir que o auto-processador re-processe este id.
+    processingIdsRef.current.delete(id);
+    console.log('🔁 Retry de item iniciado para:', id);
+  }, []);
+
+  // Re-tenta TODAS as falhas: itens com erro + playlists com qualquer faixa falha.
+  const retryAllFailures = useCallback(() => {
+    const failedIds = [
+      ...queueRef.current
+        .filter(item =>
+          item.status === 'error' ||
+          (item.isPlaylist && item.playlistItems?.some(t => t.status === 'error' || t.trackState === 'failed'))
+        )
+        .map(item => item.id),
+      ...historyRef.current.filter(item => item.status === 'error').map(item => item.id),
+    ];
+    failedIds.forEach(id => retryItem(id));
+    console.log(`🔁 Tentando novamente ${failedIds.length} download(s) com falha`);
+  }, [retryItem]);
+
   const cancelDownload = useCallback((id: string, playlistIndex?: number) => {
     // Remover do conjunto de processamento
     processingIdsRef.current.delete(id);
-    
+
+    // Cancelar no servidor (aborta downloads pendentes da playlist). Best-effort.
+    if (typeof playlistIndex !== 'number') {
+      fetch('/api/download/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ downloadId: id }),
+      }).catch(() => {});
+    }
+
     // Fechar conexão SSE se existir
     const eventSource = eventSourcesRef.current.get(id);
     if (eventSource) {
@@ -700,6 +829,12 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     queueRef.current = queue;
   }, [queue]);
 
+  // Ref para acessar o histórico atual sem causar re-renders (usado em retryItem/retryAllFailures)
+  const historyRef = useRef<DownloadItem[]>([]);
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
   // Função para processar download real
   const processRealDownload = useCallback(async (item: DownloadItem) => {
     // Verificar se já está sendo processado (evitar duplicatas) - verificação primeiro
@@ -744,6 +879,18 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
             // Ignorar heartbeats
             if (data.type === 'heartbeat') return;
 
+            // Evento estruturado por faixa (concorrente): atualiza SOMENTE aquela faixa.
+            // A barra global é dirigida exclusivamente pelos eventos agregados (type:'download'),
+            // que são monotônicos — evita oscilação com faixas concluindo fora de ordem.
+            if (data.type === 'track' && typeof data.playlistIndex === 'number' && data.trackState) {
+              updateTrackState(item.id, data.playlistIndex, data.trackState, {
+                reason: data.trackReason,
+                detail: data.detail,
+                title: data.trackTitle,
+              });
+              return;
+            }
+
             if (typeof data.progress === 'number') {
               updateProgress(item.id, data.progress, data.step, data.substep, data.detail, data.playlistIndex);
             }
@@ -785,13 +932,14 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           url: item.url,
           downloadId: item.id,
           format: item.format || 'flac',
           useBeatport: item.enrichWithBeatport || false,
           showBeatportPage: item.showBeatportPage || false,
-          isPlaylist: item.isPlaylist || false
+          isPlaylist: item.isPlaylist || false,
+          maxConcurrent: item.maxConcurrent || 3
         }),
       });
 
@@ -849,7 +997,7 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       // Sempre remover do conjunto de processamento quando terminar (sucesso ou erro)
       processingIdsRef.current.delete(item.id);
     }
-  }, [updateQueueItem, updateProgress, addStep]);
+  }, [updateQueueItem, updateProgress, addStep, updateTrackState]);
 
   // Auto-processar fila quando há downloads pendentes
   useEffect(() => {
@@ -973,7 +1121,11 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     activeDownloads,
     maxConcurrentDownloads,
     retryDownload,
+    retryItem,
+    retryAllFailures,
     cancelDownload,
+    focusDownloadId,
+    setFocusDownloadId,
     downloadStatus,
     setDownloadStatus,
     toasts,
@@ -994,7 +1146,10 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     activeDownloads,
     maxConcurrentDownloads,
     retryDownload,
+    retryItem,
+    retryAllFailures,
     cancelDownload,
+    focusDownloadId,
     downloadStatus,
     setDownloadStatus,
     toasts,
@@ -1032,7 +1187,11 @@ export function useDownload() {
       updateQueueItem: () => {},
       clearHistory: () => {},
       retryDownload: () => {},
+      retryItem: () => {},
+      retryAllFailures: () => {},
       cancelDownload: () => {},
+      focusDownloadId: null,
+      setFocusDownloadId: () => {},
       downloadStatus: { loading: false, error: null, success: false },
       setDownloadStatus: () => {},
       toasts: [],
