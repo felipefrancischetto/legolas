@@ -953,34 +953,27 @@ export function setMidiDragTransfer(
   clip: MidiClip,
   trackName?: string
 ): void {
-  const { url, filename } = createMidiObjectUrl(clip);
-  const finalName = trackName ? getMidiFilename(clip, trackName) : filename;
+  const finalName = getMidiFilename(clip, trackName);
   const dt = event.dataTransfer;
   if (!dt) return;
 
   dt.effectAllowed = 'copy';
   dt.setData('text/plain', finalName);
 
-  // Chrome/Edge: solta como arquivo .mid no destino (Ableton, Explorer, etc.)
+  // data: URL (conteúdo embutido) é muito mais confiável que blob: para drag-out
+  // para o Ableton/Explorer, e não precisa ser revogado (evita o arquivo "sumir"
+  // antes do destino materializá-lo).
+  const dataUrl = midiClipToDataUrl(clip);
   try {
-    dt.setData('DownloadURL', `audio/midi:${finalName}:${url}`);
+    dt.setData('DownloadURL', `audio/midi:${finalName}:${dataUrl}`);
   } catch {
     /* Safari/Firefox: sem DownloadURL */
   }
-
   try {
-    dt.setData('text/uri-list', url);
+    dt.setData('text/uri-list', dataUrl);
   } catch {
     /* ignore */
   }
-
-  // Revoga após o drag terminar
-  const target = event.currentTarget as HTMLElement;
-  const cleanup = () => {
-    revokeMidiObjectUrl(url);
-    target.removeEventListener('dragend', cleanup);
-  };
-  target.addEventListener('dragend', cleanup);
 }
 
 export interface MidiDragFileEntry {
@@ -1001,28 +994,22 @@ export function setAllMidiDragTransfer(
   const dt = event.dataTransfer;
   if (!dt || clips.length === 0) return false;
 
-  const entries: MidiDragFileEntry[] = clips.map((clip) => {
-    const { url, filename, bytes } = createMidiObjectUrl(clip);
-    const finalName = trackName ? getMidiFilename(clip, trackName) : filename;
-    return { url, filename: finalName, bytes };
-  });
-
   dt.effectAllowed = 'copy';
-  dt.setData('text/plain', entries.map((e) => e.filename).join('\n'));
 
+  // Cria File objects diretamente dos bytes (sem blob URL revogável — o bug
+  // anterior revogava no dragend, antes do destino materializar os arquivos).
+  const names: string[] = [];
   let filesAdded = 0;
-  for (const entry of entries) {
+  for (const clip of clips) {
+    const finalName = getMidiFilename(clip, trackName);
+    names.push(finalName);
     try {
-      const blob = new Blob(
-        [
-          entry.bytes.buffer.slice(
-            entry.bytes.byteOffset,
-            entry.bytes.byteOffset + entry.bytes.byteLength
-          ) as ArrayBuffer,
-        ],
+      const bytes = midiClipToBytes(clip);
+      const file = new File(
+        [bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer],
+        finalName,
         { type: 'audio/midi' }
       );
-      const file = new File([blob], entry.filename, { type: 'audio/midi' });
       if (dt.items?.add) {
         dt.items.add(file);
         filesAdded++;
@@ -1032,28 +1019,25 @@ export function setAllMidiDragTransfer(
     }
   }
 
-  // Fallback: primeiro arquivo via DownloadURL (Safari / drag único)
-  if (filesAdded === 0 && entries[0]) {
+  dt.setData('text/plain', names.join('\n'));
+
+  // Fallback (Safari / quando items.add não materializa): primeiro arquivo via
+  // DownloadURL com data: URL (conteúdo embutido, não precisa de revogação).
+  if (filesAdded === 0 && clips[0]) {
+    const dataUrl = midiClipToDataUrl(clips[0]);
     try {
-      dt.setData('DownloadURL', `audio/midi:${entries[0].filename}:${entries[0].url}`);
+      dt.setData('DownloadURL', `audio/midi:${names[0]}:${dataUrl}`);
     } catch {
       /* ignore */
     }
     try {
-      dt.setData('text/uri-list', entries[0].url);
+      dt.setData('text/uri-list', dataUrl);
     } catch {
       /* ignore */
     }
   }
 
-  const target = event.currentTarget as HTMLElement;
-  const cleanup = () => {
-    for (const entry of entries) revokeMidiObjectUrl(entry.url);
-    target.removeEventListener('dragend', cleanup);
-  };
-  target.addEventListener('dragend', cleanup);
-
-  return filesAdded > 0 || entries.length > 0;
+  return filesAdded > 0 || clips.length > 0;
 }
 
 /** Salvar .mid com diálogo do sistema (Chrome/Edge) — melhor para importar no Ableton */
@@ -1356,11 +1340,12 @@ export function downloadClipsAsZip(
 
   for (const clip of clips) {
     const bytes = midiClipToBytes(clip);
-    let safeName = clip.stem.replace(/[^a-zA-Z0-9_-]/g, '_');
-    let candidate = `${safeName}_${clip.bpm}bpm_${clip.bars}bar.mid`;
+    // Nome = elemento (limpo). Todos os arquivos na mesma pasta (raiz do ZIP).
+    const safeName = clip.stem.replace(/[^a-zA-Z0-9_\- ]/g, '').replace(/\s+/g, ' ').trim() || 'Stem';
+    let candidate = `${safeName}.mid`;
     let n = 2;
     while (usedNames.has(candidate.toLowerCase())) {
-      candidate = `${safeName}_${clip.bpm}bpm_${clip.bars}bar_${n}.mid`;
+      candidate = `${safeName} ${n}.mid`;
       n++;
     }
     usedNames.add(candidate.toLowerCase());

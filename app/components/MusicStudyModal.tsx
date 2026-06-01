@@ -10,8 +10,10 @@ import { useSettings } from '../hooks/useSettings';
 import LoadingSpinner from './LoadingSpinner';
 import {
   generateAndDownloadMidi,
+  generateMidiClip,
   downloadClipsAsZip,
   setAllMidiDragTransfer,
+  setMidiDragTransfer,
   type MidiClip,
 } from '../utils/midiGenerator';
 import {
@@ -301,12 +303,14 @@ function FidelityBadge({ fidelity }: { fidelity: StemFidelityInfo | null }) {
   );
 }
 
-function DrumRow({ name, detail, themeColors, onMidiClick, fidelity }: { name: string; detail: DrumElementDetail; themeColors: { primary: string; background: string; border: string }; onMidiClick?: () => void; fidelity?: StemFidelityInfo | null }) {
+function DrumRow({ name, detail, themeColors, onMidiClick, onMidiDrag, fidelity }: { name: string; detail: DrumElementDetail; themeColors: { primary: string; background: string; border: string }; onMidiClick?: () => void; onMidiDrag?: (e: React.DragEvent) => void; fidelity?: StemFidelityInfo | null }) {
   return (
     <div
-      className={`p-3 rounded-lg border ${detail.present ? 'opacity-100 cursor-pointer hover:brightness-110 transition-all' : 'opacity-40'}`}
+      className={`p-3 rounded-lg border ${detail.present ? 'opacity-100 cursor-grab active:cursor-grabbing hover:brightness-110 transition-all' : 'opacity-40'}`}
       style={{ backgroundColor: detail.present ? themeColors.background : 'rgba(63, 63, 70, 0.3)', borderColor: themeColors.border }}
-      title={detail.present ? '🎹 Clique para baixar .mid (arraste para o Ableton)' : undefined}
+      title={detail.present ? '🎹 Arraste para o Ableton, ou clique para baixar .mid' : undefined}
+      draggable={detail.present && !!onMidiDrag}
+      onDragStart={detail.present ? onMidiDrag : undefined}
       onClick={detail.present ? onMidiClick : undefined}
     >
       <div className="flex items-center justify-between mb-2">
@@ -450,6 +454,21 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
     setMidiDownloaded(element);
     setTimeout(() => setMidiDownloaded(null), 2500);
   }, [midiAnalysis, currentFile, quantizeMode]);
+
+  // ── Arrastar um stem direto para o Ableton (data URL, confiável p/ 1 arquivo) ──
+  const handleStemMidiDrag = useCallback(
+    (e: React.DragEvent, element: string, category: string, role: string, intensity: number) => {
+      if (!midiAnalysis) return;
+      const trackName = currentFile?.title || currentFile?.displayName;
+      const ctx = buildMidiGenerationContext(
+        midiAnalysis,
+        { element, category, role, intensity },
+        { quantize: quantizeMode }
+      );
+      setMidiDragTransfer(e.nativeEvent, generateMidiClip(ctx), trackName);
+    },
+    [midiAnalysis, currentFile, quantizeMode]
+  );
 
   // Extrair cor dominante
   useEffect(() => {
@@ -865,12 +884,12 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                       themeColors={themeColors}
                     />
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                      <DrumRow name="Kick" detail={analysis.drumElements.kick} themeColors={themeColors} fidelity={stemFidelity('Kick', 'Drums')} onMidiClick={() => handleStemMidiDownload('Kick', 'Drums', analysis.drumElements!.kick.role, analysis.drumElements!.kick.energy)} />
-                      <DrumRow name="Snare / Clap" detail={analysis.drumElements.snareClap} themeColors={themeColors} fidelity={stemFidelity('Snare/Clap', 'Drums')} onMidiClick={() => handleStemMidiDownload('Snare/Clap', 'Drums', analysis.drumElements!.snareClap.role, analysis.drumElements!.snareClap.energy)} />
-                      <DrumRow name="Hi-Hats" detail={analysis.drumElements.hihats} themeColors={themeColors} fidelity={stemFidelity('Hi-Hats', 'Drums')} onMidiClick={() => handleStemMidiDownload('Hi-Hats', 'Drums', analysis.drumElements!.hihats.role, analysis.drumElements!.hihats.energy)} />
-                      <DrumRow name="Cymbals / Rides" detail={analysis.drumElements.cymbalsRides} themeColors={themeColors} fidelity={stemFidelity('Cymbals/Rides', 'Drums')} onMidiClick={() => handleStemMidiDownload('Cymbals/Rides', 'Drums', analysis.drumElements!.cymbalsRides.role, analysis.drumElements!.cymbalsRides.energy)} />
-                      <DrumRow name="Percussões" detail={analysis.drumElements.percussion} themeColors={themeColors} fidelity={stemFidelity('Percussion', 'Drums')} onMidiClick={() => handleStemMidiDownload('Percussion', 'Drums', analysis.drumElements!.percussion.role, analysis.drumElements!.percussion.energy)} />
-                      <DrumRow name="Fills / Transições" detail={analysis.drumElements.fills} themeColors={themeColors} fidelity={stemFidelity('Fills', 'Drums')} onMidiClick={() => handleStemMidiDownload('Fills', 'Drums', analysis.drumElements!.fills.role, analysis.drumElements!.fills.energy)} />
+                      <DrumRow name="Kick" detail={analysis.drumElements.kick} themeColors={themeColors} fidelity={stemFidelity('Kick', 'Drums')} onMidiClick={() => handleStemMidiDownload('Kick', 'Drums', analysis.drumElements!.kick.role, analysis.drumElements!.kick.energy)} onMidiDrag={(e) => handleStemMidiDrag(e, 'Kick', 'Drums', analysis.drumElements!.kick.role, analysis.drumElements!.kick.energy)} />
+                      <DrumRow name="Snare / Clap" detail={analysis.drumElements.snareClap} themeColors={themeColors} fidelity={stemFidelity('Snare/Clap', 'Drums')} onMidiClick={() => handleStemMidiDownload('Snare/Clap', 'Drums', analysis.drumElements!.snareClap.role, analysis.drumElements!.snareClap.energy)} onMidiDrag={(e) => handleStemMidiDrag(e, 'Snare/Clap', 'Drums', analysis.drumElements!.snareClap.role, analysis.drumElements!.snareClap.energy)} />
+                      <DrumRow name="Hi-Hats" detail={analysis.drumElements.hihats} themeColors={themeColors} fidelity={stemFidelity('Hi-Hats', 'Drums')} onMidiClick={() => handleStemMidiDownload('Hi-Hats', 'Drums', analysis.drumElements!.hihats.role, analysis.drumElements!.hihats.energy)} onMidiDrag={(e) => handleStemMidiDrag(e, 'Hi-Hats', 'Drums', analysis.drumElements!.hihats.role, analysis.drumElements!.hihats.energy)} />
+                      <DrumRow name="Cymbals / Rides" detail={analysis.drumElements.cymbalsRides} themeColors={themeColors} fidelity={stemFidelity('Cymbals/Rides', 'Drums')} onMidiClick={() => handleStemMidiDownload('Cymbals/Rides', 'Drums', analysis.drumElements!.cymbalsRides.role, analysis.drumElements!.cymbalsRides.energy)} onMidiDrag={(e) => handleStemMidiDrag(e, 'Cymbals/Rides', 'Drums', analysis.drumElements!.cymbalsRides.role, analysis.drumElements!.cymbalsRides.energy)} />
+                      <DrumRow name="Percussões" detail={analysis.drumElements.percussion} themeColors={themeColors} fidelity={stemFidelity('Percussion', 'Drums')} onMidiClick={() => handleStemMidiDownload('Percussion', 'Drums', analysis.drumElements!.percussion.role, analysis.drumElements!.percussion.energy)} onMidiDrag={(e) => handleStemMidiDrag(e, 'Percussion', 'Drums', analysis.drumElements!.percussion.role, analysis.drumElements!.percussion.energy)} />
+                      <DrumRow name="Fills / Transições" detail={analysis.drumElements.fills} themeColors={themeColors} fidelity={stemFidelity('Fills', 'Drums')} onMidiClick={() => handleStemMidiDownload('Fills', 'Drums', analysis.drumElements!.fills.role, analysis.drumElements!.fills.energy)} onMidiDrag={(e) => handleStemMidiDrag(e, 'Fills', 'Drums', analysis.drumElements!.fills.role, analysis.drumElements!.fills.energy)} />
                     </div>
                   </div>
                 )}
@@ -887,7 +906,9 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                     <div
                       className={`p-4 rounded-lg border ${analysis.bassElements.subBass.present ? 'cursor-pointer hover:brightness-110 transition-all' : ''}`}
                       style={{ backgroundColor: themeColors.background, borderColor: themeColors.border }}
-                      title={analysis.bassElements.subBass.present ? '🎹 Clique para baixar MIDI' : undefined}
+                      title={analysis.bassElements.subBass.present ? '🎹 Arraste para o Ableton, ou clique para baixar' : undefined}
+                      draggable={analysis.bassElements.subBass.present}
+                      onDragStart={analysis.bassElements.subBass.present ? (e) => handleStemMidiDrag(e, 'Sub Bass', 'Bass', 'base', analysis.bassElements!.subBass.energy) : undefined}
                       onClick={analysis.bassElements.subBass.present ? () => handleStemMidiDownload('Sub Bass', 'Bass', 'base', analysis.bassElements!.subBass.energy) : undefined}
                     >
                       <div className="flex items-center justify-between mb-2">
@@ -912,7 +933,9 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                     <div
                       className={`p-4 rounded-lg border ${analysis.bassElements.midBass.present ? 'cursor-pointer hover:brightness-110 transition-all' : ''}`}
                       style={{ backgroundColor: themeColors.background, borderColor: themeColors.border }}
-                      title={analysis.bassElements.midBass.present ? '🎹 Clique para baixar MIDI' : undefined}
+                      title={analysis.bassElements.midBass.present ? '🎹 Arraste para o Ableton, ou clique para baixar' : undefined}
+                      draggable={analysis.bassElements.midBass.present}
+                      onDragStart={analysis.bassElements.midBass.present ? (e) => handleStemMidiDrag(e, 'Mid Bass', 'Bass', 'groove', analysis.bassElements!.midBass.energy) : undefined}
                       onClick={analysis.bassElements.midBass.present ? () => handleStemMidiDownload('Mid Bass', 'Bass', 'groove', analysis.bassElements!.midBass.energy) : undefined}
                     >
                       <div className="flex items-center justify-between mb-2">
@@ -936,7 +959,9 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                     <div
                       className={`p-4 rounded-lg border ${analysis.bassElements.bassline.present ? 'cursor-pointer hover:brightness-110 transition-all' : ''}`}
                       style={{ backgroundColor: themeColors.background, borderColor: themeColors.border }}
-                      title={analysis.bassElements.bassline.present ? '🎹 Clique para baixar MIDI' : undefined}
+                      title={analysis.bassElements.bassline.present ? '🎹 Arraste para o Ableton, ou clique para baixar' : undefined}
+                      draggable={analysis.bassElements.bassline.present}
+                      onDragStart={analysis.bassElements.bassline.present ? (e) => handleStemMidiDrag(e, 'Bassline', 'Bass', 'groove', analysis.bassElements!.bassline.energy) : undefined}
                       onClick={analysis.bassElements.bassline.present ? () => handleStemMidiDownload('Bassline', 'Bass', 'groove', analysis.bassElements!.bassline.energy) : undefined}
                     >
                       <div className="flex items-center justify-between mb-2">
@@ -971,9 +996,11 @@ export default function MusicStudyModal({ isOpen, onClose }: MusicStudyModalProp
                     {analysis.synthLayers.map((layer, i) => (
                       <div
                         key={i}
-                        className="p-4 rounded-lg border cursor-pointer hover:brightness-110 transition-all"
+                        className="p-4 rounded-lg border cursor-grab active:cursor-grabbing hover:brightness-110 transition-all"
                         style={{ backgroundColor: themeColors.background, borderColor: themeColors.border }}
-                        title="🎹 Clique para baixar MIDI"
+                        title="🎹 Arraste para o Ableton, ou clique para baixar"
+                        draggable
+                        onDragStart={(e) => handleStemMidiDrag(e, layer.name, 'Synths', layer.function, layer.energy)}
                         onClick={() => handleStemMidiDownload(layer.name, 'Synths', layer.function, layer.energy)}
                       >
                         <div className="flex items-center justify-between mb-2">

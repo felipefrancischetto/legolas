@@ -299,6 +299,45 @@ def detect_bpm(y, sr):
         return None
 
 
+def _bpm_from_filename(file_path):
+    """Extrai o BPM do nome no padrão Beatport ' (NNN) ' (ex.: '... (125) [Tech House]').
+
+    O BPM do nome vem do Beatport e é muito mais confiável que a detecção,
+    que sofre erros de oitava (ex.: 95.7 numa faixa de 125).
+    """
+    try:
+        import re
+        name = os.path.basename(file_path)
+        for m in re.findall(r'\((\d{2,3})\)', name):
+            val = int(m)
+            if 50 <= val <= 220:
+                return float(val)
+    except Exception:
+        pass
+    return None
+
+
+def _reconcile_bpm(detected, hint):
+    """Concilia o BPM detectado com o hint do nome (Beatport).
+
+    Corrige erros de oitava/relação (½×, 2×, ⅔×, 1.5×) usando o hint como verdade.
+    Sem hint, devolve o detectado.
+    """
+    if not hint or hint <= 0:
+        return detected
+    if not detected or detected <= 0:
+        return hint
+    # Já batem (até 2.5%): mantém o detectado (mais preciso na casa decimal)
+    if abs(detected - hint) / hint <= 0.025:
+        return detected
+    # Erro de relação comum: detecção é múltiplo/fração do real → usa o hint
+    for ratio in (0.5, 2.0, 2.0 / 3.0, 1.5, 4.0 / 3.0, 0.75):
+        if abs(detected * ratio - hint) / hint <= 0.03:
+            return hint
+    # Divergência grande sem relação limpa: Beatport é confiável → usa o hint
+    return hint
+
+
 def analyze_groove_and_rhythm(y, sr, bpm, y_perc=None):
     """
     Analisa groove, swing e complexidade rítmica.
@@ -2519,6 +2558,116 @@ def _bandpass_istft(y, sr, fmin, fmax):
     return y_out / peak
 
 
+def _build_beat_grid(y_perc, sr, bpm, max_beats):
+    """Grade de beats ancorada ao BPM conhecido — corrige o drift que a
+    quantização por BPM constante acumula ao longo da faixa."""
+    try:
+        _t, beat_frames = librosa.beat.beat_track(y=y_perc, sr=sr, bpm=float(bpm), trim=False)
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+        if len(beat_times) >= 4:
+            return np.asarray(beat_times, dtype=float)
+    except Exception:
+        pass
+    # Grade sintética a partir do BPM (offset 0)
+    beat_dur = 60.0 / float(bpm) if bpm and bpm > 0 else 0.5
+    return np.arange(int(max_beats) + 2, dtype=float) * beat_dur
+
+
+def _align_grid_phase(beat_times, onset_times):
+    """Desloca a grade para alinhar a fase ao kick — faz o kick cair em beats
+    inteiros (downbeat). Só aplica quando há fase clara (kicks concentrados).
+    """
+    if beat_times is None or len(beat_times) < 4 or onset_times is None or len(onset_times) < 4:
+        return beat_times
+    try:
+        fracs = np.array([_beat_position(t, beat_times) % 1.0 for t in onset_times])
+        ang = fracs * 2 * np.pi
+        c, s = float(np.mean(np.cos(ang))), float(np.mean(np.sin(ang)))
+        R = (c * c + s * s) ** 0.5  # concentração 0–1
+        if R < 0.35:
+            return beat_times  # sem fase definida → não mexe
+        phase = (np.arctan2(s, c) / (2 * np.pi)) % 1.0
+        # phase próximo de 0 ou 1 = já alinhado
+        if phase > 0.5:
+            phase -= 1.0
+        bd = float(np.median(np.diff(beat_times)))
+        return beat_times + phase * bd
+    except Exception:
+        return beat_times
+
+
+def _beat_position(t, beat_times):
+    """Tempo (s) → posição em beats usando a grade real (interpola entre beats)."""
+    n = len(beat_times)
+    if n == 0:
+        return 0.0
+    i = int(np.searchsorted(beat_times, t))
+    if i <= 0:
+        bd = (beat_times[1] - beat_times[0]) if n >= 2 else 0.5
+        return (t - beat_times[0]) / (bd + 1e-9)
+    if i >= n:
+        bd = (beat_times[-1] - beat_times[-2]) if n >= 2 else 0.5
+        return (n - 1) + (t - beat_times[-1]) / (bd + 1e-9)
+    b0, b1 = beat_times[i - 1], beat_times[i]
+    return (i - 1) + (t - b0) / (b1 - b0 + 1e-9)
+
+
+def _quantize_events_to_grid(onset_times, strengths, beat_times, max_beats, grid_div=4):
+    """Quantiza onsets ao grid real de beats, com velocidade derivada do onset strength."""
+    events = []
+    last_q = -99.0
+    smax = float(np.max(strengths)) if strengths is not None and len(strengths) else 1.0
+    min_gap = (1.0 / grid_div) * 0.5
+    for i, t in enumerate(onset_times):
+        pos = _beat_position(t, beat_times)
+        if pos < -0.25 or pos >= max_beats:
+            continue
+        q = max(0.0, round(pos * grid_div) / grid_div)
+        if abs(q - last_q) < min_gap:
+            continue
+        last_q = q
+        if strengths is not None and i < len(strengths):
+            s = float(strengths[i]) / (smax + 1e-9)
+        else:
+            s = 0.6
+        vel = int(np.clip(45 + s * 80, 35, 127))
+        events.append({
+            "beat": round(float(q), 4),
+            "duration_beats": round(1.0 / grid_div, 4),
+            "velocity": vel,
+        })
+    return events
+
+
+def _extract_drum_stem_events_v2(y_band, sr, beat_times, max_beats, grid_div=4,
+                                 delta=0.07, wait=2, strength_pct=0.0):
+    """Detecta onsets numa banda (aggregate=mean) e quantiza ao grid real.
+
+    Usa mean (não median): no sinal bandpass a maioria dos bins é zero, então a
+    mediana zera o envelope e nenhum onset é detectado (bug que jogava tudo no fallback).
+
+    strength_pct: descarta onsets cuja força está abaixo do percentil dado — remove o
+    ruído de fundo/vazamento entre bandas, mantendo só os hits reais do elemento.
+    """
+    try:
+        env = librosa.onset.onset_strength(y=y_band, sr=sr)
+        frames = librosa.onset.onset_detect(
+            onset_envelope=env, sr=sr, units='frames', backtrack=True, delta=delta, wait=wait
+        )
+        if len(frames) < 2:
+            return []
+        times = librosa.frames_to_time(frames, sr=sr)
+        strengths = env[frames]
+        if strength_pct > 0 and len(strengths) > 4:
+            thresh = float(np.percentile(strengths, strength_pct))
+            keep = strengths >= thresh
+            times = times[keep]
+            strengths = strengths[keep]
+        return _quantize_events_to_grid(times, strengths, beat_times, max_beats, grid_div)
+    except Exception:
+        return []
+
+
 def _stem_confidence_from_coverage(events, max_beats, grid_div=4, ceiling=0.9):
     """Estima confiança (0–1) de um stem a partir da cobertura e densidade dos eventos.
 
@@ -2649,53 +2798,59 @@ def _hz_to_midi_note(hz):
     return int(np.clip(midi, 24, 84))
 
 
-def _extract_bass_pitch_events(y_harm, sr, bpm, key, max_beats=32):
-    """Extrai contorno de pitch do baixo com pyin.
+def _extract_bass_pitch_events(y_harm, sr, bpm, key, beat_times, max_beats=32, grid_div=2):
+    """Extrai a bassline com pyin, segmentada por slot do beat grid.
 
-    Retorna (events, confidence). A confiança vem da própria pyin
-    (voiced_prob média nos frames usados) — não inventada.
+    Para cada slot (colcheia por padrão) coleta os f0 vozeados e usa a MEDIANA —
+    robusto a outliers, evita os pulos do método frame-a-frame. Notas iguais
+    consecutivas são sustentadas. Retorna (events, confidence), confiança = voiced_prob.
     """
     try:
         y_bass = _bandpass_istft(y_harm, sr, 35, 280)
+        hop = 512
         f0, voiced_flag, voiced_prob = librosa.pyin(
             y_bass, fmin=librosa.note_to_hz('C1'), fmax=librosa.note_to_hz('C3'),
-            sr=sr, fill_na=np.nan
+            sr=sr, fill_na=np.nan, hop_length=hop
         )
-        hop = 512
         times = librosa.frames_to_time(np.arange(len(f0)), sr=sr, hop_length=hop)
-        beat_dur = 60.0 / float(bpm) if bpm and bpm > 0 else 0.5
-        step = beat_dur / 4  # semicolcheias
+        positions = np.array([_beat_position(t, beat_times) for t in times])
+        voiced = np.asarray(voiced_flag, dtype=bool) & ~np.isnan(f0)
 
+        step = 1.0 / grid_div
+        n_slots = int(max_beats * grid_div)
         events = []
         used_probs = []
-        last_beat = -1.0
         last_midi = None
+        last_ev = None
 
-        for i, (t, hz, voiced) in enumerate(zip(times, f0, voiced_flag)):
-            if not voiced or np.isnan(hz):
+        for s in range(n_slots):
+            b0 = s * step
+            b1 = b0 + step
+            mask = voiced & (positions >= b0) & (positions < b1)
+            if not np.any(mask):
+                last_midi = None  # silêncio corta o sustain
                 continue
-            beat = t / beat_dur
-            if beat >= max_beats:
-                break
-            q_beat = round(beat * 4) / 4
-            if q_beat == last_beat:
-                continue
-            midi = _hz_to_midi_note(hz)
+            midi = _hz_to_midi_note(float(np.median(f0[mask])))
             if midi is None:
+                last_midi = None
                 continue
-            # Evita saltos enormes (artefatos)
-            if last_midi is not None and abs(midi - last_midi) > 12:
-                continue
-            last_beat = q_beat
-            last_midi = midi
-            if voiced_prob is not None and i < len(voiced_prob) and not np.isnan(voiced_prob[i]):
-                used_probs.append(float(voiced_prob[i]))
-            events.append({
-                "beat": round(float(q_beat), 4),
-                "duration_beats": 0.5,
-                "midi": midi,
-                "velocity": 88,
-            })
+            if voiced_prob is not None:
+                pr = float(np.nanmean(voiced_prob[mask]))
+                if not np.isnan(pr):
+                    used_probs.append(pr)
+            else:
+                pr = 0.6
+            if last_midi == midi and last_ev is not None:
+                last_ev["duration_beats"] = round(b1 - last_ev["beat"], 4)
+            else:
+                last_ev = {
+                    "beat": round(b0, 4),
+                    "duration_beats": round(step, 4),
+                    "midi": midi,
+                    "velocity": int(np.clip(70 + pr * 45, 60, 120)),
+                }
+                events.append(last_ev)
+                last_midi = midi
 
         confidence = round(float(np.mean(used_probs)), 2) if used_probs else 0.0
         return events, confidence
@@ -2811,6 +2966,69 @@ def _extract_pad_chroma_events(y_harm, sr, bpm, key, max_beats):
     except Exception as e:
         sys.stderr.write(f"[Warning] extração pad/chroma falhou: {e}\n")
         return []
+
+
+def _extract_lead_pitch_events(y_harm, sr, key, beat_times, max_beats, grid_div=2):
+    """Lead/melodia via pyin na região média-aguda, segmentado por slot do grid.
+
+    Mais fiel que o argmax do cromagrama para uma melodia monofônica. A polifonia
+    ainda limita a precisão, por isso o stem é marcado como 'estimated'.
+    Retorna (events, confidence).
+    """
+    try:
+        y_mid = _bandpass_istft(y_harm, sr, 250, 2500)
+        hop = 512
+        f0, voiced_flag, voiced_prob = librosa.pyin(
+            y_mid, fmin=librosa.note_to_hz('C3'), fmax=librosa.note_to_hz('C6'),
+            sr=sr, fill_na=np.nan, hop_length=hop
+        )
+        times = librosa.frames_to_time(np.arange(len(f0)), sr=sr, hop_length=hop)
+        positions = np.array([_beat_position(t, beat_times) for t in times])
+        voiced = np.asarray(voiced_flag, dtype=bool) & ~np.isnan(f0)
+        root, is_minor = _parse_key_root(key)
+
+        step = 1.0 / grid_div
+        n_slots = int(max_beats * grid_div)
+        events = []
+        used_probs = []
+        last_midi = None
+        last_ev = None
+
+        for s in range(n_slots):
+            b0 = s * step
+            mask = voiced & (positions >= b0) & (positions < b0 + step)
+            if not np.any(mask):
+                last_midi = None
+                continue
+            hz = float(np.median(f0[mask]))
+            if hz <= 0 or np.isnan(hz):
+                last_midi = None
+                continue
+            midi = int(round(69 + 12 * np.log2(hz / 440.0)))
+            # snap suave à escala da tonalidade (reduz notas fora do tom)
+            pc = _snap_pc_to_scale(midi % 12, root, is_minor)
+            midi = (midi // 12) * 12 + pc
+            midi = int(np.clip(midi, 48, 96))
+            pr = float(np.nanmean(voiced_prob[mask])) if voiced_prob is not None else 0.5
+            if not np.isnan(pr):
+                used_probs.append(pr)
+            if last_midi == midi and last_ev is not None:
+                last_ev["duration_beats"] = round(b0 + step - last_ev["beat"], 4)
+            else:
+                last_ev = {
+                    "beat": round(b0, 4),
+                    "duration_beats": round(step, 4),
+                    "midi": midi,
+                    "velocity": int(np.clip(70 + pr * 45, 60, 120)),
+                }
+                events.append(last_ev)
+                last_midi = midi
+
+        conf = round(float(np.mean(used_probs)), 2) if used_probs else 0.0
+        return events, conf
+    except Exception as e:
+        sys.stderr.write(f"[Warning] extração lead/pyin falhou: {e}\n")
+        return [], 0.0
 
 
 def _extract_lead_chroma_events(y_harm, sr, bpm, key, max_beats):
@@ -2958,12 +3176,24 @@ def _extract_texture_chroma_events(y_harm, sr, bpm, key, max_beats):
         return []
 
 
-def _extract_synth_layers_chroma(y_harm, sr, bpm, key, max_beats, synth_layers):
-    """Extrai MIDI de pads/leads/arps/texturas via cromagrama por camada detectada."""
+def _extract_synth_layers_chroma(y_harm, sr, bpm, key, max_beats, synth_layers, beat_times=None):
+    """Extrai MIDI de pads/leads/arps/texturas via cromagrama por camada detectada.
+
+    O lead usa pyin (melodia monofônica, mais fiel) quando há beat grid,
+    caindo no cromagrama quando a melodia não é confiável.
+    """
     stems = {}
+
+    def _lead_extractor(yh, s, b, k, mb):
+        if beat_times is not None:
+            ev, _conf = _extract_lead_pitch_events(yh, s, k, beat_times, mb)
+            if len(ev) >= 3:
+                return ev
+        return _extract_lead_chroma_events(yh, s, b, k, mb)
+
     extractors = {
         "synth_pad": _extract_pad_chroma_events,
-        "synth_lead": _extract_lead_chroma_events,
+        "synth_lead": _lead_extractor,
         "synth_arp": _extract_arp_chroma_events,
         "synth_texture": _extract_texture_chroma_events,
         "synth_fx": _extract_texture_chroma_events,
@@ -3013,6 +3243,19 @@ def extract_midi_from_audio(y, sr, duration, bpm, key, drums, bass, synth_layers
 
         y_harm, y_perc = librosa.effects.hpss(y)
 
+        # Grade de beats ancorada ao BPM (corrige drift na quantização)
+        beat_times = _build_beat_grid(y_perc, sr, bpm, max_beats)
+        # Alinhar a fase da grade ao kick para o groove cair no downbeat correto
+        try:
+            _y_kick = _bandpass_istft(y_perc, sr, 20, 120)
+            _kf = librosa.onset.onset_detect(
+                onset_envelope=librosa.onset.onset_strength(y=_y_kick, sr=sr),
+                sr=sr, backtrack=True, delta=0.10, wait=4
+            )
+            beat_times = _align_grid_phase(beat_times, librosa.frames_to_time(_kf, sr=sr))
+        except Exception:
+            pass
+
         # GM drum note numbers
         GM = {
             "kick": 36, "snare_clap": 38, "hihats": 42,
@@ -3023,34 +3266,58 @@ def extract_midi_from_audio(y, sr, duration, bpm, key, drums, bass, synth_layers
         # Metadados de fidelidade por stem: {"confidence": 0–1, "method": "detected"|"estimated"}
         stem_meta = {}
 
+        # banda (fmin, fmax), grid_div, delta, wait, strength_pct (filtro de força)
+        # Bandas estreitas e pouco sobrepostas + filtro de força evitam que um
+        # elemento capte os hits dos outros (que gerava stems densos = ruído).
         drum_bands = {
-            "kick": (20, 120, 4),
-            "snare_clap": (150, 600, 4),
-            "hihats": (5000, 12000, 8),
-            "cymbals_rides": (8000, 18000, 4),
-            "percussion": (300, 3000, 4),
-            "fills": (200, 8000, 8),
+            "kick": (30, 110, 4, 0.12, 5, 35),
+            "snare_clap": (180, 450, 4, 0.10, 4, 65),
+            "hihats": (7000, 13000, 8, 0.06, 2, 45),
+            "cymbals_rides": (9000, 18000, 8, 0.08, 6, 70),
+            "percussion": (1000, 4000, 8, 0.10, 3, 70),
+            "fills": (250, 2500, 16, 0.12, 2, 85),
         }
 
         def _band_has_signal(y_band, floor=0.025):
             return float(np.max(np.abs(y_band))) > floor
 
-        for stem_key, (fmin, fmax, grid) in drum_bands.items():
+        # Nyquist do sr (adaptativo): faixas longas usam sr baixo (ex. 11025 → 5512 Hz),
+        # então bandas de hihat/cymbal acima disso precisam ser rebaixadas, senão somem.
+        nyq = sr * 0.48
+
+        for stem_key, (fmin, fmax, grid, delta, wait, spct) in drum_bands.items():
             flagged = drums.get(stem_key, {}).get("present", False)
-            y_band = _bandpass_istft(y_perc, sr, fmin, fmax)
+            fmax_eff = min(float(fmax), nyq)
+            fmin_eff = float(fmin)
+            if fmin_eff >= fmax_eff - 200:
+                # Banda inteira acima do Nyquist (sr baixo de faixa longa).
+                # Cymbals não se distinguem de hi-hats nesse caso → não duplica.
+                if stem_key == "cymbals_rides":
+                    continue
+                # Hi-hats: rebaixa para captar o corpo do som no topo do espectro.
+                fmin_eff = max(2500.0, nyq * 0.6)
+                fmax_eff = nyq
+            y_band = _bandpass_istft(y_perc, sr, fmin_eff, fmax_eff)
             if not flagged and not _band_has_signal(y_band):
                 continue
             method = "detected"
-            raw_events = _extract_drum_stem_events(y_band, sr, bpm, max_beats, grid_div=grid)
+            raw_events = _extract_drum_stem_events_v2(
+                y_band, sr, beat_times, max_beats, grid_div=grid, delta=delta, wait=wait,
+                strength_pct=spct
+            )
+            # Fallbacks só quando a detecção real falha de vez (marcados como estimados)
             if len(raw_events) < 2 and stem_key == "kick":
                 raw_events = _extract_kick_from_beats(y_perc, sr, bpm, max_beats)
-                method = "estimated"  # alinhado à grade de beats, não a onsets do kick
+                method = "estimated"
             elif len(raw_events) < 2 and stem_key == "snare_clap":
                 raw_events = _extract_backbeat_snare(y_perc, sr, bpm, max_beats)
-                method = "estimated"  # backbeat assumido nos tempos 2 e 4
+                method = "estimated"
             elif len(raw_events) < 2 and stem_key == "hihats":
                 y_wide = _bandpass_istft(y_perc, sr, 2000, 16000)
-                raw_events = _extract_drum_stem_events(y_wide, sr, bpm, max_beats, grid_div=grid)
+                raw_events = _extract_drum_stem_events_v2(
+                    y_wide, sr, beat_times, max_beats, grid_div=grid, delta=0.05, wait=2,
+                    strength_pct=40
+                )
             if len(raw_events) < 2:
                 continue
             midi_num = GM.get(stem_key, 36)
@@ -3060,11 +3327,11 @@ def extract_midi_from_audio(y, sr, duration, bpm, key, drums, bass, synth_layers
             if method == "estimated":
                 conf = 0.4
             else:
-                conf = _stem_confidence_from_coverage(raw_events, max_beats, grid, ceiling=0.9)
+                conf = _stem_confidence_from_coverage(raw_events, max_beats, grid, ceiling=0.92)
             stem_meta[stem_key] = {"confidence": conf, "method": method}
 
         # Baixo: sempre tentar extrair pitch; usar flags só para variantes sub/mid
-        bass_events, bass_conf = _extract_bass_pitch_events(y_harm, sr, bpm, key, max_beats)
+        bass_events, bass_conf = _extract_bass_pitch_events(y_harm, sr, bpm, key, beat_times, max_beats)
         if len(bass_events) >= 2:
             stems["bassline"] = bass_events
             stem_meta["bassline"] = {"confidence": bass_conf, "method": "detected"}
@@ -3087,9 +3354,9 @@ def extract_midi_from_audio(y, sr, duration, bpm, key, drums, bass, synth_layers
                 ]
                 stem_meta["sub_bass"] = {"confidence": round(bass_conf * 0.85, 2), "method": "detected"}
 
-        # Synths: pads, leads, arps, texturas via cromagrama harmônico
+        # Synths: pads, leads, arps, texturas via cromagrama harmônico (lead via pyin)
         synth_stems = _extract_synth_layers_chroma(
-            y_harm, sr, bpm, key, max_beats, synth_layers
+            y_harm, sr, bpm, key, max_beats, synth_layers, beat_times=beat_times
         )
         stems.update(synth_stems)
         # Synths vêm do cromagrama (classe de altura, não nota real) → método "estimated",
@@ -3176,6 +3443,11 @@ def analyze_audio(file_path):
 
         # 1. Dados básicos
         bpm = detect_bpm(y, sr)
+        bpm_hint = _bpm_from_filename(file_path)
+        bpm_reconciled = _reconcile_bpm(bpm, bpm_hint)
+        if bpm_hint and bpm_reconciled != bpm:
+            sys.stderr.write(f"[Info] BPM detectado={bpm} corrigido para {bpm_reconciled} (nome Beatport)\n")
+        bpm = bpm_reconciled
         key = detect_key(y, sr)
         frequency_analysis = analyze_frequency_bands(y, sr)
         loudness = analyze_loudness(y, sr)
