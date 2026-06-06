@@ -815,6 +815,20 @@ wave canvas {
   }
 }
 
+/* Windowing por CSS para listas longas (feed de Novidades).
+   content-visibility:auto faz o navegador PULAR layout/paint dos itens fora da
+   viewport — só o visível é renderizado. Zero dependência e sem virtualização
+   manual. contain-intrinsic-size: auto <h> reserva a altura aproximada (e guarda
+   a última medida real) para o scrollbar não "pular". */
+.cv-auto-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 84px;
+}
+.cv-auto-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 248px;
+}
+
 /* Animação de pulse lenta para badges */
 @keyframes pulse-slow {
   0%, 100% {

@@ -1,9 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import { useState, useEffect, useCallback, useMemo, memo, useRef } from 'react';
 import { useDownload } from '../contexts/DownloadContext';
 import { usePlayer } from '../contexts/PlayerContext';
+import { useUI } from '../contexts/UIContext';
 import { safeGetItem, safeSetItem } from '../utils/localStorage';
+import { FOCUS_ARTIST_EVENT, consumePendingArtistFocus, type FocusArtistDetail } from '../utils/focusArtist';
+import { LIBRARY_UPDATED_EVENT, consumeLibraryDirty } from '../utils/libraryEvents';
+import ManageArtistsModal from './ManageArtistsModal';
 
 interface FeedTrack {
   title: string;
@@ -28,6 +32,7 @@ interface FeedRelease {
 
 interface FeedGroup {
   artist: string;
+  image?: string;
   lastSeen?: string;
   releases: FeedRelease[];
   tracks: FeedTrack[];
@@ -600,8 +605,15 @@ const SkeletonCard = () => (
 
 // Normaliza um título de faixa para casar com a biblioteca ("já tenho").
 // Espelha o normalizeTitle do servidor (remove feat./pontuação/acentos).
+// Memoizado: a normalização (NFD + várias regex) é cara e é chamada para cada
+// faixa em cada render — durante a prévia o feed re-renderiza ~4×/s. O cache
+// transforma chamadas repetidas com o mesmo título numa simples leitura de Map.
+const normTitleCache = new Map<string, string>();
 function normTitleKey(value: string): string {
-  return (value || '')
+  const input = value || '';
+  const cached = normTitleCache.get(input);
+  if (cached !== undefined) return cached;
+  const out = input
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .toLowerCase()
     .replace(/\((feat|ft|featuring)[^)]*\)/g, '')
@@ -610,6 +622,10 @@ function normTitleKey(value: string): string {
     .replace(/\b(remaster(ed)?|official\s+(video|audio|music\s+video)|lyric\s+video|hd|hq)\b/g, '')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ').trim();
+  // Limite defensivo para não crescer sem fim numa sessão muito longa.
+  if (normTitleCache.size > 5000) normTitleCache.clear();
+  normTitleCache.set(input, out);
+  return out;
 }
 
 // Normaliza grupos vindos da API/cache: garante `releases` (envolve faixas soltas
@@ -624,14 +640,15 @@ function normalizeGroups(raw: any): FeedGroup[] {
         releases = [{ album: 'Lançamentos recentes', artist: g.artist, type: 'Single', totalTracks: flatTracks.length, tracks: flatTracks }];
       }
       const tracks = flatTracks.length > 0 ? flatTracks : releases.flatMap((r) => r.tracks || []);
-      return { artist: g?.artist, lastSeen: g?.lastSeen, releases, tracks };
+      return { artist: g?.artist, image: g?.image, lastSeen: g?.lastSeen, releases, tracks };
     })
     .filter((g) => g.artist && (g.tracks.length > 0 || g.releases.length > 0));
 }
 
 export default function ArtistFeed() {
   const { addToQueue, addToast } = useDownload();
-  const { playerState, play, pause, resume } = usePlayer();
+  const { playerState, play, playQueue, pause, resume } = usePlayer();
+  const { setPlayerMinimized } = useUI();
 
   const [groups, setGroups] = useState<FeedGroup[]>([]);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
@@ -646,13 +663,10 @@ export default function ArtistFeed() {
   const [view, setView] = useState<ViewMode>('grouped');
   const [selectedArtist, setSelectedArtist] = useState<string | null>(null);
 
-  // Prévia: aquecer cache no servidor ao passar o mouse (play percebido instantâneo).
-  const prefetched = useState(() => new Set<string>())[0];
-  const prefetchPreview = useCallback((videoId: string) => {
-    if (prefetched.has(videoId)) return;
-    prefetched.add(videoId);
-    fetch(`/api/preview-stream?videoId=${encodeURIComponent(videoId)}`, { headers: { Range: 'bytes=0-1' } }).catch(() => {});
-  }, [prefetched]);
+  // A prévia agora toca direto do YouTube (IFrame) no player — não há mais cache de
+  // servidor para aquecer no hover. Mantido como no-op para preservar as chamadas
+  // onMouseEnter dos cards sem disparar downloads desnecessários via yt-dlp.
+  const prefetchPreview = useCallback((_videoId: string) => { /* no-op */ }, []);
 
   // Gerenciar artistas
   const [manageOpen, setManageOpen] = useState(false);
@@ -684,6 +698,60 @@ export default function ArtistFeed() {
   }, []);
   const isOwned = useCallback((t: FeedTrack) => ownedKeys.size > 0 && ownedKeys.has(normTitleKey(t.title)), [ownedKeys]);
   const newCountOf = useCallback((r: FeedRelease) => r.tracks.reduce((n, t) => (isOwned(t) ? n : n + 1), 0), [isOwned]);
+
+  // ---- Auto-atualização ao baixar para a biblioteca ----
+  // Quando um download conclui (evento LIBRARY_UPDATED_EVENT), sincronizamos os
+  // artistas (barato) e, para os que ENTRARAM agora, buscamos o feed só deles
+  // (incremental) e mesclamos — sem re-buscar toda a coleção no YouTube.
+  const groupsRef = useRef<FeedGroup[]>(groups);
+  const fetchedAtRef = useRef<string | null>(fetchedAt);
+  useEffect(() => { groupsRef.current = groups; }, [groups]);
+  useEffect(() => { fetchedAtRef.current = fetchedAt; }, [fetchedAt]);
+
+  const syncNewArtistsIntoFeed = useCallback(async () => {
+    try {
+      const res = await fetch('/api/artists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'sync' }),
+      });
+      const data = await res.json();
+      if (!res.ok) return;
+      if (Array.isArray(data.artists)) setArtists(data.artists);
+      // Atualiza as marcas "já tenho" com as faixas recém-baixadas.
+      loadOwned();
+
+      const added: string[] = Array.isArray(data.added) ? data.added : [];
+      if (added.length === 0) return;
+
+      // Busca incremental SÓ dos artistas novos e mescla no feed atual.
+      const r2 = await fetch(`/api/artist-feed?artists=${encodeURIComponent(added.join(','))}`, { cache: 'no-store' });
+      const d2 = await r2.json();
+      if (!r2.ok || !Array.isArray(d2.groups) || d2.groups.length === 0) return;
+
+      const norm = (s: string) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+      const byKey = new Map(groupsRef.current.map((g) => [norm(g.artist), g]));
+      for (const g of normalizeGroups(d2.groups)) byKey.set(norm(g.artist), g);
+      const next = Array.from(byKey.values());
+      setGroups(next);
+      safeSetItem(FEED_CACHE_KEY, { groups: next, fetchedAt: fetchedAtRef.current }, { maxSize: 2 * 1024 * 1024, onError: () => {} });
+      addToast({ title: `✨ ${added.length} novo${added.length !== 1 ? 's' : ''} artista${added.length !== 1 ? 's' : ''} no radar de Novidades` });
+    } catch { /* silencioso */ }
+  }, [loadOwned, addToast]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onLibUpdate = () => {
+      // Debounce: uma playlist dispara vários "concluídos" em sequência → 1 sync só.
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { syncNewArtistsIntoFeed(); }, 2000);
+    };
+    window.addEventListener(LIBRARY_UPDATED_EVENT, onLibUpdate);
+    // Downloads que ocorreram enquanto a aba Novidades nunca foi aberta nesta sessão:
+    // sincroniza uma vez ao montar (só se houve download — flag consumida).
+    if (consumeLibraryDirty()) onLibUpdate();
+    return () => { window.removeEventListener(LIBRARY_UPDATED_EVENT, onLibUpdate); if (timer) clearTimeout(timer); };
+  }, [syncNewArtistsIntoFeed]);
 
   const loadFeed = useCallback(async (refresh: boolean) => {
     setLoading(true);
@@ -741,29 +809,47 @@ export default function ArtistFeed() {
   }, [modalRelease]);
 
   // ---- Player nativo (prévia) ----
-  const playingVideoId = playerState.currentFile?.isPreview && playerState.isPlaying
-    ? (playerState.currentFile.name || '').replace('preview:', '')
-    : null;
+  // Memoizado para não mudar de identidade a cada tick de currentTime (o feed
+  // re-renderiza com a prévia tocando, mas estes só mudam ao trocar de faixa).
+  const playingVideoId = useMemo(() => (
+    playerState.currentFile?.isPreview && playerState.isPlaying
+      ? (playerState.currentFile.name || '').replace('preview:', '')
+      : null
+  ), [playerState.currentFile?.isPreview, playerState.currentFile?.name, playerState.isPlaying]);
 
-  const handleTogglePlay = useCallback((track: FeedTrack) => {
+  // Converte uma FeedTrack na FileInfo de prévia tocada pelo player (YouTube IFrame).
+  const toPreviewFile = useCallback((track: FeedTrack): any => ({
+    name: previewKey(track.videoId),
+    displayName: track.title,
+    path: '',
+    size: 0,
+    title: track.title,
+    artist: track.artist || '',
+    duration: track.duration,
+    thumbnail: ytThumb(track),
+    streamUrl: `/api/preview-stream?videoId=${encodeURIComponent(track.videoId)}`,
+    isPreview: true,
+  }), []);
+
+  // `siblings`: as faixas vizinhas (tracklist do release) para alimentar a fila do
+  // player — sem ela, próxima/anterior e o auto-avanço não têm por onde navegar,
+  // pois a biblioteca não contém prévias. Ver navigationList em AudioPlayer.
+  const handleTogglePlay = useCallback((track: FeedTrack, siblings?: FeedTrack[]) => {
     const key = previewKey(track.videoId);
+    // Prévia toca no player minimizado (sem waveform): o áudio vem do YouTube IFrame.
+    setPlayerMinimized(true);
     if (playerState.currentFile?.name === key) {
       if (playerState.isPlaying) pause(); else resume();
       return;
     }
-    play({
-      name: key,
-      displayName: track.title,
-      path: '',
-      size: 0,
-      title: track.title,
-      artist: track.artist || '',
-      duration: track.duration,
-      thumbnail: ytThumb(track),
-      streamUrl: `/api/preview-stream?videoId=${encodeURIComponent(track.videoId)}`,
-      isPreview: true,
-    } as any, true);
-  }, [play, pause, resume, playerState.currentFile, playerState.isPlaying]);
+    // Monta a fila a partir do contexto (release). Dedup por videoId para não
+    // repetir faixas e manter os índices de próxima/anterior coerentes.
+    const context = siblings && siblings.length > 0 ? siblings : [track];
+    const seen = new Set<string>();
+    const list = context.filter((t) => (seen.has(t.videoId) ? false : (seen.add(t.videoId), true)));
+    const startIndex = Math.max(0, list.findIndex((t) => t.videoId === track.videoId));
+    playQueue(list.map(toPreviewFile), startIndex);
+  }, [playQueue, toPreviewFile, pause, resume, playerState.currentFile, playerState.isPlaying, setPlayerMinimized]);
 
   // ---- Downloads ----
   const queueTrack = useCallback((track: { url: string; title: string; artist?: string }) => {
@@ -791,14 +877,22 @@ export default function ArtistFeed() {
       const tr = r.tracks.length > 0 ? r.tracks : (r.playlistId ? releaseFull[r.playlistId]?.tracks || [] : []);
       return tr.filter((t) => !isOwned(t));
     });
-    let n = 0;
-    setQueued((prev) => {
-      const next = new Set(prev);
-      all.forEach((t) => { if (!next.has(t.videoId)) { queueTrack(t); next.add(t.videoId); n++; } });
-      return next;
+    // Dedup contra o que já está na fila e entre si. Os efeitos colaterais (queueTrack →
+    // addToQueue, que faz setState no DownloadProvider) ficam FORA do updater do setQueued:
+    // o React pode reavaliar o updater durante o render, e disparar setState de outro
+    // componente ali gera "Cannot update a component while rendering".
+    const seen = new Set<string>();
+    const toQueue = all.filter((t) => {
+      if (queued.has(t.videoId) || seen.has(t.videoId)) return false;
+      seen.add(t.videoId);
+      return true;
     });
-    addToast({ title: `📥 ${n} novidade(s) de ${group.artist} na fila` });
-  }, [releaseFull, isOwned, queueTrack, addToast]);
+    toQueue.forEach((t) => queueTrack(t));
+    if (toQueue.length > 0) {
+      setQueued((prev) => { const next = new Set(prev); toQueue.forEach((t) => next.add(t.videoId)); return next; });
+    }
+    addToast({ title: `📥 ${toQueue.length} novidade(s) de ${group.artist} na fila` });
+  }, [releaseFull, isOwned, queueTrack, addToast, queued]);
 
   // ---- Discografia (lazy via /api/artist-albums) ----
   // Carrega a discografia COMPLETA de um artista uma única vez (idempotente).
@@ -828,6 +922,20 @@ export default function ArtistFeed() {
     videoId: t.videoId,
     url: t.url || `https://music.youtube.com/watch?v=${t.videoId}`,
     thumbnail: albumThumb || `https://img.youtube.com/vi/${t.videoId}/hqdefault.jpg`,
+  });
+
+  // Converte um item da discografia (AlbumResult) no formato FeedRelease usado pelos
+  // cards. Fonte única usada tanto pela Coleção quanto pela Grade/Lista em foco.
+  const albumToRelease = (al: AlbumResult, fallbackArtist?: string): FeedRelease => ({
+    album: al.album,
+    artist: al.artist || fallbackArtist || '',
+    year: al.year,
+    type: al.type,
+    thumbnail: al.thumbnail,
+    playlistId: al.playlistId || extractPlaylistId(al.playlistUrl) || undefined,
+    playlistUrl: al.playlistUrl,
+    totalTracks: al.totalTracks,
+    tracks: (al.tracks || []).filter((t) => t.videoId).map((t) => toFeedTrack(t, al.thumbnail)),
   });
 
   // Expandir um álbum para listar suas faixas (todas, via playlistId do YT Music).
@@ -862,10 +970,13 @@ export default function ArtistFeed() {
   }, [handleDownloadAlbum]);
 
   // Carregar a tracklist COMPLETA de um release (lazy, cacheada por playlistId).
-  const loadReleaseFull = useCallback(async (r: FeedRelease) => {
+  // Retorna as faixas resolvidas para quem precisa agir logo após o carregamento (ex.: tocar).
+  const loadReleaseFull = useCallback(async (r: FeedRelease): Promise<FeedTrack[]> => {
     const pid = r.playlistId;
-    if (!pid || releaseFull[pid]) return;
-    setReleaseFull((p) => ({ ...p, [pid]: { loading: true, tracks: [] } }));
+    if (!pid) return [];
+    const cached = releaseFull[pid];
+    if (cached && !cached.loading) return cached.tracks;
+    setReleaseFull((p) => (p[pid] ? p : { ...p, [pid]: { loading: true, tracks: [] } }));
     try {
       const res = await fetch(`/api/search-albums?playlistId=${encodeURIComponent(pid)}`);
       const data = await res.json();
@@ -873,8 +984,10 @@ export default function ArtistFeed() {
         ? data.tracks.filter((t: any) => t.videoId).map((t: any) => toFeedTrack(t, r.thumbnail))
         : [];
       setReleaseFull((p) => ({ ...p, [pid]: { loading: false, tracks } }));
+      return tracks;
     } catch {
       setReleaseFull((p) => ({ ...p, [pid]: { loading: false, tracks: [] } }));
+      return [];
     }
   }, [releaseFull]);
 
@@ -890,22 +1003,70 @@ export default function ArtistFeed() {
     if (resolved.length === 0) { handleDownloadReleaseFull(r); return; }
     const missing = resolved.filter((t) => !isOwned(t));
     const list = missing.length > 0 ? missing : resolved;
-    let n = 0;
-    setQueued((prev) => {
-      const next = new Set(prev);
-      list.forEach((t) => { if (!next.has(t.videoId)) { queueTrack(t); next.add(t.videoId); n++; } });
-      return next;
+    // queueTrack (setState no DownloadProvider) fora do updater do setQueued — ver nota
+    // em handleDownloadArtist. Dedup contra a fila atual e entre si.
+    const seen = new Set<string>();
+    const toQueue = list.filter((t) => {
+      if (queued.has(t.videoId) || seen.has(t.videoId)) return false;
+      seen.add(t.videoId);
+      return true;
     });
-    addToast({ title: `📥 ${n} faixa(s) de "${r.album}" na fila` });
-  }, [resolvedTracks, handleDownloadReleaseFull, isOwned, queueTrack, addToast]);
+    toQueue.forEach((t) => queueTrack(t));
+    if (toQueue.length > 0) {
+      setQueued((prev) => { const next = new Set(prev); toQueue.forEach((t) => next.add(t.videoId)); return next; });
+    }
+    addToast({ title: `📥 ${toQueue.length} faixa(s) de "${r.album}" na fila` });
+  }, [resolvedTracks, handleDownloadReleaseFull, isOwned, queueTrack, addToast, queued]);
 
-  const playRelease = useCallback((r: FeedRelease) => {
-    const first = resolvedTracks(r)[0];
-    if (first) { handleTogglePlay(first); return; }
-    loadReleaseFull(r); // não resolvido ainda: carrega; o usuário toca ao expandir
+  const playRelease = useCallback(async (r: FeedRelease) => {
+    const resolved = resolvedTracks(r);
+    if (resolved.length > 0) { handleTogglePlay(resolved[0], resolved); return; }
+    // Ainda não resolvido (releases além do limite do servidor): carrega a tracklist
+    // pelo playlistId e toca a 1ª faixa assim que chegar.
+    const loaded = await loadReleaseFull(r);
+    if (loaded[0]) handleTogglePlay(loaded[0], loaded);
   }, [resolvedTracks, handleTogglePlay, loadReleaseFull]);
 
   const openReleaseModal = useCallback((r: FeedRelease) => { setModalRelease(r); loadReleaseFull(r); }, [loadReleaseFull]);
+
+  // ---- Atalho externo: focar um artista (e abrir um álbum) ----
+  // Disparado pelo clique no artista no player/biblioteca (ver utils/focusArtist).
+  // Foca o artista na Coleção e carrega sua discografia; o álbum pedido (se houver)
+  // é aberto no efeito abaixo assim que a discografia chega — funciona inclusive
+  // para artistas que não estão entre os monitorados (a discografia é buscada por nome).
+  const pendingAlbumRef = useRef<string | null>(null);
+  const applyArtistFocus = useCallback((detail: FocusArtistDetail | null) => {
+    const artist = (detail?.artist || '').trim();
+    if (!artist) return;
+    setSearch('');
+    setView('grouped');
+    setSelectedArtist(artist);
+    pendingAlbumRef.current = detail?.album || null;
+    loadAlbums(artist);
+  }, [loadAlbums]);
+
+  useEffect(() => {
+    // Consome um foco que tenha sido pedido ANTES desta aba montar (1ª abertura).
+    applyArtistFocus(consumePendingArtistFocus());
+    const onFocus = (e: Event) => applyArtistFocus((e as CustomEvent<FocusArtistDetail>).detail);
+    window.addEventListener(FOCUS_ARTIST_EVENT, onFocus);
+    return () => window.removeEventListener(FOCUS_ARTIST_EVENT, onFocus);
+  }, [applyArtistFocus]);
+
+  // Quando a discografia do artista focado chega, abre o álbum pedido (match por nome).
+  useEffect(() => {
+    const album = pendingAlbumRef.current;
+    if (!album || !selectedArtist) return;
+    const disco = albums[selectedArtist];
+    if (!disco || disco.loading) return;
+    pendingAlbumRef.current = null;
+    const norm = (s: string) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const want = norm(album);
+    const match = disco.items.find((al) => norm(al.album) === want)
+      || disco.items.find((al) => { const a = norm(al.album); return !!a && (a.includes(want) || want.includes(a)); });
+    if (match) openReleaseModal(albumToRelease(match, selectedArtist));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [albums, selectedArtist, openReleaseModal]);
 
   const toggleExpandRelease = useCallback((key: string) => {
     setExpandedReleases((prev) => {
@@ -924,13 +1085,6 @@ export default function ArtistFeed() {
     } catch { addToast({ title: '⚠️ Erro ao salvar artistas' }); } finally { setSavingArtists(false); }
   }, [addToast]);
 
-  const toggleArtist = useCallback((name: string) => {
-    persistArtists(artists.map((a) => (a.name === name ? { ...a, enabled: !a.enabled } : a)));
-  }, [artists, persistArtists]);
-  const removeArtist = useCallback((name: string) => {
-    persistArtists(artists.filter((a) => a.name !== name));
-  }, [artists, persistArtists]);
-
   const syncLibrary = useCallback(async () => {
     setSavingArtists(true);
     try {
@@ -942,6 +1096,15 @@ export default function ArtistFeed() {
       }
     } catch { addToast({ title: '⚠️ Erro ao sincronizar' }); } finally { setSavingArtists(false); }
   }, [addToast]);
+
+  // Remover um artista direto da listagem: some do feed na hora e deixa de ser
+  // monitorado (não retorna nas próximas atualizações). Reversível pelo modal "Artistas".
+  const handleRemoveArtist = useCallback((artist: string) => {
+    setGroups((prev) => prev.filter((g) => g.artist !== artist));
+    setSelectedArtist((cur) => (cur === artist ? null : cur));
+    persistArtists(artists.filter((a) => a.name.toLowerCase() !== artist.toLowerCase()));
+    addToast({ title: `🗑️ ${artist} removido dos monitorados` });
+  }, [artists, persistArtists, addToast]);
 
   // ---- Filtro + ordenação (derivado) ----
   // Mantém a discografia COMPLETA (todos os álbuns/singles) — fiel ao YouTube Music.
@@ -978,19 +1141,36 @@ export default function ArtistFeed() {
     return filteredGroups;
   }, [filteredGroups, selectedArtist]);
 
-  // Carrega automaticamente a discografia completa dos artistas exibidos na visão
-  // "Coleção" (sem botão). `loadAlbums` é idempotente, então só busca o que falta.
+  // Carrega automaticamente a discografia completa quando ela é necessária:
+  // na Coleção (todos os artistas exibidos) e na Grade/Lista quando um único
+  // artista está em foco. `loadAlbums` é idempotente, então só busca o que falta.
   useEffect(() => {
-    if (view !== 'grouped') return;
-    displayedGroups.forEach((g) => loadAlbums(g.artist));
-  }, [view, displayedGroups, loadAlbums]);
+    if (view === 'grouped') {
+      displayedGroups.forEach((g) => loadAlbums(g.artist));
+    } else if (selectedArtist && displayedGroups.length === 1) {
+      loadAlbums(displayedGroups[0].artist);
+    }
+  }, [view, displayedGroups, selectedArtist, loadAlbums]);
 
   // Lista achatada de releases (todos os artistas exibidos) para a Grade e a Lista.
   const allReleases = useMemo(() => {
-    const items = displayedGroups.flatMap((g) =>
-      g.releases.map((release) => ({ release, artist: g.artist, lastSeen: g.lastSeen }))
-    );
     const yr = (r: FeedRelease) => parseInt(r.year || '', 10) || 0;
+    const latestFirst = (a: FeedRelease, b: FeedRelease) => yr(b) - yr(a) || b.tracks.length - a.tracks.length;
+    // Em "Todos os lançamentos" (nenhum artista em foco) exibimos apenas o
+    // lançamento MAIS RECENTE de cada artista — evita repetir o mesmo artista
+    // dezenas de vezes. Ao focar um único artista, mostramos a discografia
+    // COMPLETA (mesma fonte da Coleção); enquanto ela carrega, caímos no feed.
+    const focused = !!(selectedArtist && displayedGroups.length === 1);
+    const items = displayedGroups.flatMap((g) => {
+      let releases: FeedRelease[];
+      if (focused) {
+        const disco = albums[g.artist]?.items || [];
+        releases = disco.length > 0 ? disco.map((al) => albumToRelease(al, g.artist)) : g.releases;
+      } else {
+        releases = g.releases.length > 1 ? [[...g.releases].sort(latestFirst)[0]] : g.releases;
+      }
+      return releases.map((release) => ({ release, artist: g.artist, lastSeen: g.lastSeen }));
+    });
     const sorters: Record<SortKey, (a: typeof items[number], b: typeof items[number]) => number> = {
       recent: (a, b) => yr(b.release) - yr(a.release) || b.release.tracks.length - a.release.tracks.length,
       count: (a, b) => b.release.tracks.length - a.release.tracks.length,
@@ -998,15 +1178,20 @@ export default function ArtistFeed() {
       duration: (a, b) => yr(b.release) - yr(a.release),
     };
     return [...items].sort(sorters[sortKey]);
-  }, [displayedGroups, sortKey]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayedGroups, sortKey, selectedArtist, albums]);
 
-  const totalReleases = filteredGroups.reduce((s, g) => s + g.releases.length, 0);
+  // Em "Todos os lançamentos" mostramos 1 release por artista, então o contador
+  // reflete o nº de artistas (= itens exibidos), não o total de lançamentos.
+  const artistCount = filteredGroups.length;
   const enabledCount = artists.filter((a) => a.enabled).length;
 
   // Faixa cuja prévia está sendo preparada (download/transcode no servidor).
-  const loadingVideoId = playerState.currentFile?.isPreview && playerState.isLoading
-    ? (playerState.currentFile.name || '').replace('preview:', '')
-    : null;
+  const loadingVideoId = useMemo(() => (
+    playerState.currentFile?.isPreview && playerState.isLoading
+      ? (playerState.currentFile.name || '').replace('preview:', '')
+      : null
+  ), [playerState.currentFile?.isPreview, playerState.currentFile?.name, playerState.isLoading]);
 
   const isPlaying = (videoId: string) => playingVideoId === videoId;
   const isQueued = (videoId: string) => queued.has(videoId);
@@ -1032,7 +1217,7 @@ export default function ArtistFeed() {
         <div className="absolute inset-0 flex">
           {covers.map((c, i) => (
             // eslint-disable-next-line @next/next/no-img-element
-            <img key={i} src={c} alt="" aria-hidden className="flex-1 h-full object-cover" />
+            <img key={i} src={c} alt="" aria-hidden loading="lazy" referrerPolicy="no-referrer" decoding="async" className="flex-1 h-full object-cover" />
           ))}
           {covers.length === 0 && <div className={`flex-1 bg-gradient-to-br ${grad}`} />}
         </div>
@@ -1042,9 +1227,9 @@ export default function ArtistFeed() {
         <div className="relative flex items-center gap-3 p-3">
           {/* Avatar */}
           <div className={`relative w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-lg bg-gradient-to-br ${grad} flex-shrink-0`}>
-            {covers[0] ? (
+            {(group.image || covers[0]) ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={covers[0]} alt={group.artist} className="absolute inset-0 w-full h-full rounded-full object-cover" />
+              <img src={group.image || covers[0]} alt={group.artist} loading="lazy" referrerPolicy="no-referrer" decoding="async" className="absolute inset-0 w-full h-full rounded-full object-cover" />
             ) : initialsOf(group.artist)}
             <span className="absolute inset-0 rounded-full ring-1 ring-white/20" />
           </div>
@@ -1100,30 +1285,21 @@ export default function ArtistFeed() {
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
             {items.map((al, i) => {
-              const r: FeedRelease = {
-                album: al.album,
-                artist: al.artist || group.artist,
-                year: al.year,
-                type: al.type,
-                thumbnail: al.thumbnail,
-                playlistId: al.playlistId || extractPlaylistId(al.playlistUrl) || undefined,
-                playlistUrl: al.playlistUrl,
-                totalTracks: al.totalTracks,
-                tracks: (al.tracks || []).filter((t) => t.videoId).map((t) => toFeedTrack(t, al.thumbnail)),
-              };
+              const r = albumToRelease(al, group.artist);
               return (
-                <ReleaseCard
-                  key={`${al.album}-${i}`}
-                  release={r}
-                  showArtist={false}
-                  isPlaying={releasePlaying(r)}
-                  allQueued={releaseAllQueued(r)}
-                  newCount={newCountOf(r)}
-                  onOpen={openReleaseModal}
-                  onPlay={playRelease}
-                  onDownload={handleDownloadReleaseNew}
-                  onPrefetch={prefetchPreview}
-                />
+                <div key={`${al.album}-${i}`} className="cv-auto-card">
+                  <ReleaseCard
+                    release={r}
+                    showArtist={false}
+                    isPlaying={releasePlaying(r)}
+                    allQueued={releaseAllQueued(r)}
+                    newCount={newCountOf(r)}
+                    onOpen={openReleaseModal}
+                    onPlay={playRelease}
+                    onDownload={handleDownloadReleaseNew}
+                    onPrefetch={prefetchPreview}
+                  />
+                </div>
               );
             })}
           </div>
@@ -1143,12 +1319,14 @@ export default function ArtistFeed() {
         ? <div className="flex items-center gap-2 text-xs text-zinc-400 py-3 px-1"><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Carregando faixas…</div>
         : <p className="text-xs text-zinc-500 py-2 px-1">Faixas indisponíveis para este lançamento.</p>;
     }
+    // Tocar uma faixa enfileira toda a tracklist do release (próxima/anterior no player).
+    const playFromList = (t: FeedTrack) => handleTogglePlay(t, list);
     return (
       <>
         {list.map((t, ti) => (
           dense
-            ? <FeedListRow key={t.videoId} track={t} index={ti} owned={isOwned(t)} isPlaying={isPlaying(t.videoId)} isQueued={isQueued(t.videoId)} isLoading={isLoadingTrack(t.videoId)} onTogglePlay={handleTogglePlay} onDownload={handleDownload} onPrefetch={prefetchPreview} />
-            : <TrackCard key={t.videoId} track={t} grid={false} index={ti} owned={isOwned(t)} isPlaying={isPlaying(t.videoId)} isQueued={isQueued(t.videoId)} isLoading={isLoadingTrack(t.videoId)} onTogglePlay={handleTogglePlay} onDownload={handleDownload} onPrefetch={prefetchPreview} />
+            ? <FeedListRow key={t.videoId} track={t} index={ti} owned={isOwned(t)} isPlaying={isPlaying(t.videoId)} isQueued={isQueued(t.videoId)} isLoading={isLoadingTrack(t.videoId)} onTogglePlay={playFromList} onDownload={handleDownload} onPrefetch={prefetchPreview} />
+            : <TrackCard key={t.videoId} track={t} grid={false} index={ti} owned={isOwned(t)} isPlaying={isPlaying(t.videoId)} isQueued={isQueued(t.videoId)} isLoading={isLoadingTrack(t.videoId)} onTogglePlay={playFromList} onDownload={handleDownload} onPrefetch={prefetchPreview} />
         ))}
       </>
     );
@@ -1171,7 +1349,7 @@ export default function ArtistFeed() {
           <div className="relative p-5 flex-shrink-0">
             <div className="absolute inset-0">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              {cover && <img src={cover} alt="" aria-hidden className="w-full h-full object-cover" />}
+              {cover && <img src={cover} alt="" aria-hidden loading="lazy" referrerPolicy="no-referrer" decoding="async" className="w-full h-full object-cover" />}
               <div className="absolute inset-0 bg-zinc-950/80 backdrop-blur-2xl" />
             </div>
             <button onClick={() => setModalRelease(null)} className="absolute top-3 right-3 z-10 w-9 h-9 rounded-full bg-black/40 hover:bg-white/90 hover:text-black text-white flex items-center justify-center transition" title="Fechar">
@@ -1180,7 +1358,7 @@ export default function ArtistFeed() {
             <div className="relative flex gap-4">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               {cover
-                ? <img src={cover} alt={r.album} className="w-28 h-28 rounded-2xl object-cover shadow-xl ring-1 ring-white/10 flex-shrink-0" />
+                ? <img src={cover} alt={r.album} loading="lazy" referrerPolicy="no-referrer" decoding="async" className="w-28 h-28 rounded-2xl object-cover shadow-xl ring-1 ring-white/10 flex-shrink-0" />
                 : <div className={`w-28 h-28 rounded-2xl bg-gradient-to-br ${gradientFor(r.artist)} flex-shrink-0`} />}
               <div className="min-w-0 flex flex-col justify-end">
                 <span className={`self-start px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wide border ${RELEASE_BADGE[kind]}`}>
@@ -1201,7 +1379,7 @@ export default function ArtistFeed() {
                   Baixar {newCount} nova{newCount !== 1 ? 's' : ''}
                 </button>
               )}
-              {r.playlistId && (
+              {(r.playlistId || r.playlistUrl || r.tracks.length > 0) && (
                 <button onClick={() => handleDownloadReleaseFull(r)} className={`h-10 px-4 rounded-xl text-sm font-semibold border transition ${newCount > 0 ? 'border-white/15 bg-white/10 text-white/90 hover:bg-white/20' : 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25'}`}>
                   Baixar álbum completo
                 </button>
@@ -1223,32 +1401,6 @@ export default function ArtistFeed() {
   };
 
   // ---- Carrossel de releases (Coleção) ----
-  const renderReleaseRow = (title: string, releases: FeedRelease[], showArtist = false) => (
-    <div className="mb-5">
-      <div className="flex items-center gap-2 mb-2.5 px-0.5">
-        <h4 className="text-sm font-bold text-white/90">{title}</h4>
-        <span className="text-xs text-zinc-500 tabular-nums">{releases.length}</span>
-      </div>
-      <div className="flex gap-4 overflow-x-auto custom-scroll pb-3 -mx-1 px-1 snap-x">
-        {releases.map((r, i) => (
-          <div key={releaseKey(r.artist, r, i)} className="w-44 sm:w-48 flex-shrink-0 snap-start">
-            <ReleaseCard
-              release={r}
-              showArtist={showArtist}
-              isPlaying={releasePlaying(r)}
-              allQueued={releaseAllQueued(r)}
-              newCount={newCountOf(r)}
-              onOpen={openReleaseModal}
-              onPlay={playRelease}
-              onDownload={handleDownloadReleaseNew}
-              onPrefetch={prefetchPreview}
-            />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-
   // ---- Bloco de release na Lista (cabeçalho + faixas expansíveis) ----
   const renderReleaseListBlock = (artist: string, release: FeedRelease, idx: number) => {
     const key = releaseKey(artist, release, idx);
@@ -1261,12 +1413,11 @@ export default function ArtistFeed() {
     const allQueued = releaseAllQueued(release);
     const expand = () => { toggleExpandRelease(key); if (!open && release.tracks.length === 0) loadReleaseFull(release); };
     return (
-      <div key={key} className={`rounded-2xl border overflow-hidden transition-colors ${playing ? 'border-emerald-500/40 bg-emerald-500/[0.04]' : 'border-white/10 bg-zinc-900/40'}`}>
+      <div key={key} className={`group/rel cv-auto-row rounded-2xl border overflow-hidden transition-colors ${playing ? 'border-emerald-500/40 bg-emerald-500/[0.04]' : 'border-white/10 bg-zinc-900/40'}`}>
         <div className="flex items-center gap-3 p-2.5">
           {/* Capa + play */}
           <button onClick={() => playRelease(release)} className="relative w-14 h-14 flex-shrink-0 rounded-xl overflow-hidden bg-zinc-800 group/cv" title="Ouvir prévia">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            {cover ? <img src={cover} alt={release.album} className="w-full h-full object-cover" /> : <div className={`w-full h-full bg-gradient-to-br ${gradientFor(artist)}`} />}
+            <ReleaseThumb src={cover} name={release.album} className="w-full h-full" />
             <span className={`absolute inset-0 flex items-center justify-center bg-black/45 transition-opacity ${playing ? 'opacity-100' : 'opacity-0 group-hover/cv:opacity-100'}`}>
               {playing ? <Equalizer /> : <svg className="w-6 h-6 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>}
             </span>
@@ -1306,6 +1457,14 @@ export default function ArtistFeed() {
             )}
             <span className="hidden md:inline">Baixar</span>
           </button>
+          <button
+            onClick={() => handleRemoveArtist(artist)}
+            title={`Parar de monitorar ${artist}`}
+            aria-label={`Remover ${artist}`}
+            className="flex-shrink-0 w-8 h-8 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 flex items-center justify-center transition opacity-0 group-hover/rel:opacity-100"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+          </button>
           <button onClick={expand} className="flex-shrink-0 w-8 h-8 rounded-lg text-zinc-400 hover:text-white hover:bg-white/10 flex items-center justify-center transition" title={open ? 'Recolher' : 'Expandir'}>
             <svg className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
           </button>
@@ -1318,6 +1477,54 @@ export default function ArtistFeed() {
       </div>
     );
   };
+
+  // Conteúdo das views Grade/Lista memoizado: evita reconstruir listas grandes a
+  // cada render. Como o feed re-renderiza ~4×/s enquanto a prévia toca, depender
+  // só dos dados reais (e não de currentTime) elimina esse trabalho por tick.
+  // Os callbacks abaixo são estáveis (useCallback); as funções de status derivam
+  // de playingVideoId/queued/ownedKeys/releaseFull, todos listados como deps.
+  const gridContent = useMemo(() => (
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+      {allReleases.map(({ release, artist }, i) => (
+        <div key={releaseKey(artist, release, i)} className="cv-auto-card">
+          <ReleaseCard
+            release={release}
+            showArtist
+            isPlaying={releasePlaying(release)}
+            allQueued={releaseAllQueued(release)}
+            newCount={newCountOf(release)}
+            onOpen={openReleaseModal}
+            onPlay={playRelease}
+            onDownload={handleDownloadReleaseNew}
+            onPrefetch={prefetchPreview}
+          />
+        </div>
+      ))}
+    </div>
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [allReleases, ownedKeys, queued, playingVideoId, releaseFull, openReleaseModal, playRelease, handleDownloadReleaseNew, prefetchPreview]);
+
+  const listContent = useMemo(() => (
+    <div className="space-y-3">
+      {allReleases.map(({ release, artist }, i) => renderReleaseListBlock(artist, release, i))}
+    </div>
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [allReleases, ownedKeys, queued, playingVideoId, loadingVideoId, releaseFull, expandedReleases]);
+
+  // Coleção (view padrão) — a mais pesada (cabeçalho + carrossel + discografia por
+  // artista). Memoizada pelos mesmos motivos: não recomputar a cada tick do player.
+  const groupedContent = useMemo(() => (
+    <div className="space-y-10">
+      {displayedGroups.map((group) => (
+        // Só a Discografia (completa) — a faixa "Lançamentos" duplicava o conteúdo.
+        <section key={group.artist}>
+          {renderArtistHeader(group)}
+          {renderAlbumsPanel(group)}
+        </section>
+      ))}
+    </div>
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [displayedGroups, albums, ownedKeys, queued, playingVideoId, releaseFull]);
 
   return (
     <div className="max-w-7xl mx-auto w-full py-4">
@@ -1381,37 +1588,15 @@ export default function ArtistFeed() {
         </div>
       </div>
 
-      {/* Painel gerenciar artistas */}
-      {manageOpen && (
-        <div className="mb-5 rounded-2xl border border-white/10 bg-zinc-900/60 p-4 animate-slide-down">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-white/90">Artistas monitorados</h3>
-            <button onClick={syncLibrary} disabled={savingArtists} className="h-9 px-3.5 rounded-lg text-xs font-semibold border border-blue-500/50 bg-blue-600/90 text-white hover:bg-blue-600 transition disabled:opacity-50 flex items-center gap-1.5">
-              {savingArtists && <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
-              Sincronizar com biblioteca
-            </button>
-          </div>
-          {artists.length === 0 ? (
-            <p className="text-xs text-zinc-400">Nenhum artista ainda. Clique em “Sincronizar com biblioteca”.</p>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-72 overflow-y-auto custom-scroll pr-1">
-              {artists.map((a) => (
-                <div key={a.name} className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition ${a.enabled ? 'bg-white/5 border-white/5' : 'bg-transparent border-white/5 opacity-50'}`}>
-                  <label className="flex items-center gap-2.5 min-w-0 cursor-pointer">
-                    <input type="checkbox" checked={a.enabled} onChange={() => toggleArtist(a.name)} className="accent-emerald-500 w-4 h-4" />
-                    <span className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white bg-gradient-to-br ${gradientFor(a.name)} flex-shrink-0`}>{initialsOf(a.name)}</span>
-                    <span className="text-sm text-white truncate" title={a.name}>{a.name}</span>
-                    <span className="text-[10px] text-zinc-500 flex-shrink-0">{a.trackCount}</span>
-                  </label>
-                  <button onClick={() => removeArtist(a.name)} className="text-zinc-500 hover:text-red-400 transition flex-shrink-0" title="Remover artista">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {/* Modal de gerenciamento de artistas */}
+      <ManageArtistsModal
+        open={manageOpen}
+        onClose={() => setManageOpen(false)}
+        artists={artists}
+        saving={savingArtists}
+        onPersist={persistArtists}
+        onSync={syncLibrary}
+      />
 
       {error && <div className="px-4 py-3 mb-4 rounded-xl bg-red-500/20 border border-red-500/50 text-sm text-red-300">⚠️ {error}</div>}
       {!error && message && groups.length === 0 && <div className="px-4 py-3 mb-4 rounded-xl bg-amber-500/15 border border-amber-500/40 text-sm text-amber-200">{message}</div>}
@@ -1452,29 +1637,43 @@ export default function ArtistFeed() {
                   <span className={`w-1 h-5 rounded-full ${!selectedArtist ? 'bg-emerald-400' : 'bg-transparent'}`} />
                   Todos os lançamentos
                 </span>
-                <span className="text-[11px] text-zinc-500 tabular-nums">{totalReleases}</span>
+                <span className="text-[11px] text-zinc-500 tabular-nums" title="Artistas monitorados (1 lançamento por artista)">{artistCount}</span>
               </button>
               {filteredGroups.map((g) => {
                 const active = selectedArtist === g.artist;
                 return (
-                  <button
+                  <div
                     key={g.artist}
-                    onClick={() => setSelectedArtist(active ? null : g.artist)}
-                    title={g.artist}
-                    className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg transition group/side ${
+                    className={`group/side w-full flex items-center gap-2.5 pl-2 pr-1 py-1.5 rounded-lg transition ${
                       active ? 'bg-white/10' : 'hover:bg-white/5'
                     }`}
                   >
-                    <span className={`w-1 h-7 rounded-full flex-shrink-0 ${active ? 'bg-emerald-400' : 'bg-transparent'}`} />
-                    <span className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white bg-gradient-to-br ${gradientFor(g.artist)} flex-shrink-0 overflow-hidden`}>
-                      {g.releases[0]?.thumbnail ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={g.releases[0].thumbnail} alt="" className="w-full h-full rounded-full object-cover" />
-                      ) : initialsOf(g.artist)}
-                    </span>
-                    <span className={`flex-1 min-w-0 text-left text-sm truncate ${active ? 'text-white font-semibold' : 'text-zinc-300 group-hover/side:text-white'}`}>{g.artist}</span>
-                    <span className={`text-[11px] tabular-nums flex-shrink-0 px-1.5 py-0.5 rounded-full ${active ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-500'}`}>{g.releases.length}</span>
-                  </button>
+                    <button
+                      onClick={() => setSelectedArtist(active ? null : g.artist)}
+                      title={g.artist}
+                      className="flex-1 min-w-0 flex items-center gap-2.5"
+                    >
+                      <span className={`w-1 h-7 rounded-full flex-shrink-0 ${active ? 'bg-emerald-400' : 'bg-transparent'}`} />
+                      <span className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white bg-gradient-to-br ${gradientFor(g.artist)} flex-shrink-0 overflow-hidden`}>
+                        {(g.image || g.releases[0]?.thumbnail) ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={g.image || g.releases[0]?.thumbnail} alt="" loading="lazy" referrerPolicy="no-referrer" decoding="async" className="w-full h-full rounded-full object-cover" />
+                        ) : initialsOf(g.artist)}
+                      </span>
+                      <span className={`flex-1 min-w-0 text-left text-sm truncate ${active ? 'text-white font-semibold' : 'text-zinc-300 group-hover/side:text-white'}`}>{g.artist}</span>
+                    </button>
+                    {/* Contagem de lançamentos — dá lugar ao botão remover ao passar o mouse */}
+                    <span className={`text-[11px] tabular-nums flex-shrink-0 px-1.5 py-0.5 rounded-full group-hover/side:hidden ${active ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-500'}`}>{g.releases.length}</span>
+                    {/* Remover (parar de monitorar) direto da listagem */}
+                    <button
+                      onClick={() => handleRemoveArtist(g.artist)}
+                      title={`Parar de monitorar ${g.artist}`}
+                      aria-label={`Remover ${g.artist}`}
+                      className="hidden group-hover/side:flex flex-shrink-0 w-7 h-7 rounded-md items-center justify-center text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                    </button>
+                  </div>
                 );
               })}
             </div>
@@ -1488,7 +1687,7 @@ export default function ArtistFeed() {
                 onClick={() => setSelectedArtist(null)}
                 className={`flex-shrink-0 h-8 px-3 rounded-full text-xs font-semibold border transition ${!selectedArtist ? 'bg-emerald-500 text-black border-emerald-500' : 'border-white/15 bg-white/5 text-zinc-300'}`}
               >
-                Todas ({totalReleases})
+                Todas ({artistCount})
               </button>
               {filteredGroups.map((g) => {
                 const active = selectedArtist === g.artist;
@@ -1506,50 +1705,13 @@ export default function ArtistFeed() {
             </div>
 
             {/* GRADE: mosaico de releases (álbuns / EPs / singles) — estilo busca do YT Music */}
-            {view === 'grid' && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                {allReleases.map(({ release, artist }, i) => (
-                  <ReleaseCard
-                    key={releaseKey(artist, release, i)}
-                    release={release}
-                    showArtist
-                    isPlaying={releasePlaying(release)}
-                    allQueued={releaseAllQueued(release)}
-                    newCount={newCountOf(release)}
-                    onOpen={openReleaseModal}
-                    onPlay={playRelease}
-                    onDownload={handleDownloadReleaseNew}
-                    onPrefetch={prefetchPreview}
-                  />
-                ))}
-              </div>
-            )}
+            {view === 'grid' && gridContent}
 
             {/* COLEÇÃO: por artista, álbuns/EPs/singles JUNTOS ordenados por data de lançamento (mais recente primeiro) */}
-            {view === 'grouped' && (
-              <div className="space-y-10">
-                {displayedGroups.map((group) => {
-                  const yr = (r: FeedRelease) => parseInt(r.year || '', 10) || 0;
-                  const releases = [...group.releases].sort(
-                    (a, b) => yr(b) - yr(a) || b.tracks.length - a.tracks.length
-                  );
-                  return (
-                    <section key={group.artist}>
-                      {renderArtistHeader(group)}
-                      {releases.length > 0 && renderReleaseRow('Lançamentos', releases)}
-                      {renderAlbumsPanel(group)}
-                    </section>
-                  );
-                })}
-              </div>
-            )}
+            {view === 'grouped' && groupedContent}
 
             {/* LISTA: feed de releases agrupados (álbum/EP/single) com faixas expansíveis */}
-            {view === 'list' && (
-              <div className="space-y-3">
-                {allReleases.map(({ release, artist }, i) => renderReleaseListBlock(artist, release, i))}
-              </div>
-            )}
+            {view === 'list' && listContent}
           </div>
         </div>
       )}

@@ -54,6 +54,10 @@ interface PlayerContextType {
   playerState: PlayerState;
   setPlayerState: (state: Partial<PlayerState> | ((prev: PlayerState) => Partial<PlayerState>)) => void;
   play: (file: FileInfo, resetTime?: boolean) => void;
+  /** Fila de reprodução (ex.: prévias de um álbum). O AudioPlayer avança por ela. */
+  queue: FileInfo[];
+  /** Define uma fila e começa a tocar a partir de `startIndex` (default 0). */
+  playQueue: (files: FileInfo[], startIndex?: number) => void;
   pause: () => void;
   resume: () => void;
   stop: () => void;
@@ -82,6 +86,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     volume: 1,
     isMuted: false
   });
+
+  // Fila de reprodução (prévias de álbum). Vazia quando se toca uma faixa avulsa.
+  const [queue, setQueue] = useState<FileInfo[]>([]);
 
   // Carregar estado do localStorage apenas no cliente após montagem
   useEffect(() => {
@@ -298,6 +305,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     });
   }, [updatePlayerState]);
 
+  // Define uma fila e começa a tocar a partir do índice informado.
+  // Single (1 faixa) vira uma fila de um item — sem auto-avanço.
+  const playQueue = useCallback((files: FileInfo[], startIndex: number = 0) => {
+    if (files.length === 0) return;
+    const idx = Math.max(0, Math.min(startIndex, files.length - 1));
+    setQueue(files);
+    play(files[idx], true);
+  }, [play]);
+
   const pause = useCallback(() => {
     updatePlayerState({ isPlaying: false });
   }, [updatePlayerState]);
@@ -333,13 +349,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     playerState,
     setPlayerState: updatePlayerState,
     play,
+    queue,
+    playQueue,
     pause,
     resume,
     stop,
     seek,
     setVolume,
     setIsMuted
-  }), [playerState, updatePlayerState, play, pause, resume, stop, seek, setVolume, setIsMuted]);
+  }), [playerState, updatePlayerState, play, queue, playQueue, pause, resume, stop, seek, setVolume, setIsMuted]);
 
   return (
     <PlayerContext.Provider value={contextValue}>

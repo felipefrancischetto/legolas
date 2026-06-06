@@ -3,6 +3,7 @@ import { existsSync, readdirSync } from 'fs';
 import { join, isAbsolute, dirname } from 'path';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
+import { getYtDlpBin, getYtDlpGlobalFlags } from '@/lib/utils/ytDlpBin';
 
 const execAsync = promisify(exec);
 
@@ -601,34 +602,37 @@ export async function getCookiesFlag(): Promise<string> {
 export async function extractCookiesFromBrowser(): Promise<boolean> {
   const cookiesPath = join(process.cwd(), 'cookies.txt');
   const testUrl = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
-  
+  const [ytDlpBin, globalFlags] = await Promise.all([getYtDlpBin(), getYtDlpGlobalFlags()]);
+  let chromeLocked = false;
+
   // Lista de browsers para tentar (em ordem de prioridade)
   const browsers = ['chrome', 'edge', 'firefox', 'brave', 'opera'];
-  
+
   for (const browser of browsers) {
     try {
       console.log(`🍪 Tentando extrair cookies do ${browser}...`);
-      
+
       // Extrair cookies e salvar em arquivo temporário primeiro
       const tempCookiesPath = join(process.cwd(), `cookies_${browser}_temp.txt`);
-      
+
       // Usar yt-dlp para extrair cookies do browser
       // Não vamos falhar se o comando der erro, vamos verificar se o arquivo foi criado
       try {
-        // Usar caminho absoluto para garantir que funciona em Linux
         const absoluteTempPath = join(process.cwd(), `cookies_${browser}_temp.txt`);
         await execAsync(
-          `yt-dlp --cookies-from-browser ${browser} --cookies "${absoluteTempPath}" --skip-download "${testUrl}"`,
-          { 
+          `${ytDlpBin} ${globalFlags}--cookies-from-browser ${browser} --cookies "${absoluteTempPath}" --skip-download "${testUrl}"`,
+          {
             maxBuffer: 1024 * 1024 * 10,
             timeout: 30000,
-            cwd: process.cwd() // Garantir que estamos no diretório correto
+            cwd: process.cwd(),
           }
         );
       } catch (execError) {
-        // Ignorar erros de execução, vamos verificar se o arquivo foi criado mesmo assim
         const errorMsg = execError instanceof Error ? execError.message : String(execError);
-        if (!errorMsg.includes('could not find') && !errorMsg.includes('not found')) {
+        if (errorMsg.toLowerCase().includes('could not copy') && errorMsg.toLowerCase().includes('cookie')) {
+          chromeLocked = true;
+          console.log(`   ⚠️ ${browser}: banco de cookies bloqueado (feche o navegador e tente novamente)`);
+        } else if (!errorMsg.includes('could not find') && !errorMsg.includes('not found')) {
           console.log(`   ⚠️ Erro ao executar yt-dlp para ${browser}: ${errorMsg.substring(0, 150)}`);
         }
       }
@@ -665,7 +669,14 @@ export async function extractCookiesFromBrowser(): Promise<boolean> {
     }
   }
   
-  console.log('❌ Não foi possível extrair cookies de nenhum browser');
+  if (chromeLocked) {
+    console.log('❌ Não foi possível extrair cookies: navegador aberto bloqueia o acesso ao banco de cookies.');
+    console.log('💡 Feche o Chrome (ou Edge) completamente e execute: npm run setup:cookies');
+    console.log('💡 Alternativa: instale a extensão "Get cookies.txt LOCALLY", exporte do YouTube e salve como cookies.txt na raiz do projeto.');
+  } else {
+    console.log('❌ Não foi possível extrair cookies de nenhum browser');
+    console.log('💡 Faça login no YouTube no Chrome e execute: npm run setup:cookies');
+  }
   return false;
 }
 

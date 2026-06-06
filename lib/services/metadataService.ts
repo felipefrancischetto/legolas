@@ -45,13 +45,13 @@ class BeatportProviderV2 implements MetadataProvider {
   }
 
   async search(title: string, artist: string, showBeatportPage: boolean = false): Promise<Partial<EnhancedMetadata> | null> {
-    const timeoutMs = 15000;
+    const timeoutMs = 30000;
     console.log(`⏰ [Beatport] Iniciando busca com timeout de ${timeoutMs/1000}s`);
-    
+
     return Promise.race([
       this.performBeatportSearch(title, artist, showBeatportPage),
-      new Promise<null>((_, reject) => 
-        setTimeout(() => reject(new Error('Beatport timeout após 15s')), timeoutMs)
+      new Promise<null>((_, reject) =>
+        setTimeout(() => reject(new Error('Beatport timeout após 30s')), timeoutMs)
       )
     ]);
   }
@@ -64,25 +64,24 @@ class BeatportProviderV2 implements MetadataProvider {
       console.log(`📦 [Beatport] Puppeteer importado com sucesso`);
       
       console.log(`🔧 [Beatport] Configurando opções do browser...`);
-      const browserOptions = { 
+      // IMPORTANTE: Beatport é uma SPA renderizada no cliente. Os flags antigos
+      // `--disable-javascript` e `--disable-images` impediam a página de montar os
+      // resultados de busca e a tracklist, então o scraper nunca achava a faixa e o
+      // download caía em "não normalizado". Mantemos o JS (e imagens) habilitados,
+      // espelhando o individualMetadataService (caminho do botão "Normalizar" que funciona).
+      const browserOptions = {
         headless: !showBeatportPage, // Browser visível apenas se showBeatportPage for true
-        timeout: 10000,
-        protocolTimeout: 15000,
+        timeout: 15000,
+        protocolTimeout: 20000,
         args: [
-          '--no-sandbox', 
+          '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-blink-features=AutomationControlled',
           '--disable-web-security',
           '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
           '--disable-gpu',
-          '--window-size=1920,1080',
-          '--disable-extensions',
-          '--disable-plugins',
-          '--disable-images',
-          '--disable-javascript',
-          '--memory-pressure-off',
-          '--max_old_space_size=4096'
+          '--window-size=1920,1080'
         ]
       };
       console.log(`⚙️ [Beatport] Opções do browser:`, browserOptions);
@@ -109,9 +108,16 @@ class BeatportProviderV2 implements MetadataProvider {
       
       // Buscar na página de search
       const searchUrl = `https://www.beatport.com/search?q=${encodeURIComponent(`${artist} ${cleanedTitle}`)}`;
-      await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
+      // networkidle2 + waitForSelector: aguarda a SPA do Beatport montar os resultados
+      // antes de raspar. Com 'domcontentloaded' a página ainda não tinha as faixas.
+      await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 20000 });
+      try {
+        await page.waitForSelector('a[href*="/track/"]', { timeout: 8000 });
+      } catch {
+        console.log(`⚠️ [Beatport] Lista de tracks não apareceu a tempo na busca`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 800));
+
       // Aceitar cookies se necessário
       try {
         await page.click('button:has-text("Accept"), button:has-text("Aceitar"), button[id*="accept"]');
@@ -206,12 +212,17 @@ class BeatportProviderV2 implements MetadataProvider {
       
       // Ir para a página da música
       console.log(`🌐 [Beatport] Navegando para URL: ${trackUrl}`);
-      await page.goto(trackUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      await page.goto(trackUrl, { waitUntil: 'networkidle2', timeout: 20000 });
       console.log(`✅ [Beatport] Página carregada com sucesso`);
-      
-      // Aguardar um tempo menor para garantir que o conteúdo dinâmico seja carregado
+
+      // Aguardar o bloco de metadados (BPM/Key/Genre/Label) renderizar antes de extrair.
       console.log(`⏳ [Beatport] Aguardando carregamento do conteúdo dinâmico...`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      try {
+        await page.waitForSelector('[class*="MetaWrapper"], [class*="MetaItem"]', { timeout: 8000 });
+      } catch {
+        console.log(`⚠️ [Beatport] Bloco de metadados não apareceu a tempo`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 1500));
       console.log(`✅ [Beatport] Tempo de espera concluído`);
       
       // Extrair metadados usando seletores específicos do Beatport

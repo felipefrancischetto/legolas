@@ -16,8 +16,8 @@ export async function GET(request: NextRequest) {
   if (!artist) return NextResponse.json({ error: 'artist é obrigatório' }, { status: 400 });
 
   try {
-    const albums = await fetchArtistReleases(artist);
-    return NextResponse.json({ success: true, albums });
+    const { releases, image } = await fetchArtistReleases(artist);
+    return NextResponse.json({ success: true, albums: releases, image });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Erro desconhecido';
     console.error('❌ [artist-albums]:', message);

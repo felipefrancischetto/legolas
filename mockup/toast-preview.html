@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Toast redesign · preview</title>
+<title>Toast redesign v2 · preview</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
@@ -15,17 +15,23 @@
   .stack{display:flex;flex-direction:column;gap:10px;width:372px;}
   .tabular{font-variant-numeric:tabular-nums;}
   @keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
-  @keyframes spin{to{transform:rotate(360deg)}}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-  .spin{animation:spin .9s linear infinite;}
+  @keyframes eq{0%{height:3px}100%{height:14px}}
   .pulse{animation:pulse 1.6s ease-in-out infinite;}
+  .sh{position:absolute;inset:0;opacity:.5;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);animation:shimmer 1.8s infinite;}
+
+  /* avatar com anel */
+  .pic{position:relative;width:48px;height:48px;flex-shrink:0;}
+  .ring{position:absolute;inset:0;transform:rotate(-90deg);}
+  .core{position:absolute;inset:5px;border-radius:50%;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+  .eq{display:flex;align-items:flex-end;gap:1.5px;height:18px;}
+  .eq i{width:2.5px;height:8px;background:rgb(16,185,129);transform-origin:bottom;animation:eq .5s ease-in-out infinite alternate;}
+  .eq i:nth-child(2){animation-delay:.1s}.eq i:nth-child(3){animation-delay:.2s}.eq i:nth-child(4){animation-delay:.3s}
 
   .card{position:relative;overflow:hidden;border-radius:16px;backdrop-filter:blur(18px);
     background:linear-gradient(160deg, rgba(16,185,129,.07) 0%, rgba(0,0,0,.55) 45%, rgba(15,23,42,.78) 100%);}
-  .toprail{position:absolute;top:0;left:0;height:3px;}
   .pad{padding:14px;}
   .head{display:flex;align-items:flex-start;gap:12px;}
-  .pic{position:relative;width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   .title{color:#fff;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .sub{font-size:11px;color:#a1a1aa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}
   .x{color:#a1a1aa;font-size:13px;line-height:1;border:none;cursor:pointer;width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.06);}
@@ -34,7 +40,6 @@
   .step{font-size:11px;color:#a1a1aa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}
   .bar{flex:1;height:8px;border-radius:99px;overflow:hidden;background:rgba(255,255,255,.08);position:relative;}
   .fill{height:100%;border-radius:99px;position:relative;overflow:hidden;}
-  .sh{position:absolute;inset:0;opacity:.5;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);animation:shimmer 1.8s infinite;}
   .pct{font-size:14px;font-weight:800;min-width:38px;text-align:right;}
   .seg{height:4px;flex:1;border-radius:99px;}
   .chips{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-top:10px;font-size:11px;color:#a1a1aa;}
@@ -47,23 +52,19 @@
 <body>
 <div class="stack">
 
-  <!-- ===== Card 1: download individual (FLAC) ===== -->
+  <!-- Card 1: individual FLAC (30%) -->
   <div class="card" style="border:1px solid rgba(16,185,129,.32);box-shadow:0 16px 44px rgba(0,0,0,.5), 0 0 32px rgba(16,185,129,.10);">
-    <div class="toprail" style="width:30%;background:linear-gradient(90deg,rgba(16,185,129,.5),rgb(16,185,129));box-shadow:0 0 12px rgba(16,185,129,.7);"></div>
     <div class="pad">
       <div class="head">
-        <div class="pic" style="background:radial-gradient(circle at 35% 30%, rgba(16,185,129,.22), rgba(16,185,129,.06));border:1px solid rgba(16,185,129,.3);">
-          <svg class="spin" width="20" height="20" viewBox="0 0 24 24" fill="none" style="color:rgb(16,185,129)"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-opacity=".2" stroke-width="2.5"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        <div class="pic">
+          <svg class="ring" width="48" height="48" viewBox="0 0 48 48"><circle cx="24" cy="24" r="21" fill="none" stroke="rgba(255,255,255,.10)" stroke-width="3"/><circle cx="24" cy="24" r="21" fill="none" stroke="rgb(16,185,129)" stroke-width="3" stroke-linecap="round" stroke-dasharray="131.95" stroke-dashoffset="92.36" style="filter:drop-shadow(0 0 4px rgba(16,185,129,.6))"/></svg>
+          <div class="core" style="background:radial-gradient(circle at 35% 30%, rgba(16,185,129,.20), rgba(0,0,0,.4));"><div class="eq"><i></i><i></i><i></i><i></i></div></div>
         </div>
         <div style="flex:1;min-width:0;">
-          <div style="display:flex;align-items:center;gap:8px;">
-            <div class="title" style="flex:1;">Twilight Zone</div>
-            <button class="x">✕</button>
-          </div>
+          <div style="display:flex;align-items:center;gap:8px;"><div class="title" style="flex:1;">Twilight Zone</div><button class="x">✕</button></div>
           <div class="sub">Damian Lazarus — Heart of Sky</div>
         </div>
       </div>
-
       <div style="margin-top:12px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
           <span class="pill" style="color:rgb(16,185,129);background:rgba(16,185,129,.13);border:1px solid rgba(16,185,129,.25);"><span class="pdot pulse" style="background:rgb(16,185,129)"></span>Baixando</span>
@@ -80,7 +81,6 @@
           <span class="chip" style="color:#a7f3d0;background:rgba(16,185,129,.10);border:1px solid rgba(16,185,129,.22);font-size:10px;">✓ Beatport</span>
         </div>
       </div>
-
       <div class="actions">
         <button class="btn" style="flex:1;background:rgba(255,255,255,.08);color:rgba(255,255,255,.9);border:1px solid rgba(255,255,255,.12);">☰ Abrir fila</button>
         <button class="btn" style="padding:0 12px;background:rgba(239,68,68,.15);color:rgba(252,165,165,.95);border:1px solid rgba(239,68,68,.3);">⛔ Cancelar</button>
@@ -88,23 +88,19 @@
     </div>
   </div>
 
-  <!-- ===== Card 2: playlist ===== -->
+  <!-- Card 2: playlist (42%) -->
   <div class="card" style="border:1px solid rgba(16,185,129,.32);box-shadow:0 16px 44px rgba(0,0,0,.5), 0 0 32px rgba(16,185,129,.10);">
-    <div class="toprail" style="width:42%;background:linear-gradient(90deg,rgba(16,185,129,.5),rgb(16,185,129));box-shadow:0 0 12px rgba(16,185,129,.7);"></div>
     <div class="pad">
       <div class="head">
-        <div class="pic" style="background:radial-gradient(circle at 35% 30%, rgba(16,185,129,.22), rgba(16,185,129,.06));border:1px solid rgba(16,185,129,.3);">
-          <svg class="spin" width="20" height="20" viewBox="0 0 24 24" fill="none" style="color:rgb(16,185,129)"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-opacity=".2" stroke-width="2.5"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        <div class="pic">
+          <svg class="ring" width="48" height="48" viewBox="0 0 48 48"><circle cx="24" cy="24" r="21" fill="none" stroke="rgba(255,255,255,.10)" stroke-width="3"/><circle cx="24" cy="24" r="21" fill="none" stroke="rgb(16,185,129)" stroke-width="3" stroke-linecap="round" stroke-dasharray="131.95" stroke-dashoffset="76.53" style="filter:drop-shadow(0 0 4px rgba(16,185,129,.6))"/></svg>
+          <div class="core" style="background:radial-gradient(circle at 35% 30%, rgba(16,185,129,.20), rgba(0,0,0,.4));"><div class="eq"><i></i><i></i><i></i><i></i></div></div>
         </div>
         <div style="flex:1;min-width:0;">
-          <div style="display:flex;align-items:center;gap:8px;">
-            <div class="title" style="flex:1;">Global Underground: Adapt #6</div>
-            <button class="x">✕</button>
-          </div>
+          <div style="display:flex;align-items:center;gap:8px;"><div class="title" style="flex:1;">Global Underground: Adapt #6</div><button class="x">✕</button></div>
           <div class="sub">Various Artists — 19 faixas</div>
         </div>
       </div>
-
       <div style="margin-top:12px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
           <span class="pill" style="color:rgb(16,185,129);background:rgba(16,185,129,.13);border:1px solid rgba(16,185,129,.25);"><span class="pdot pulse" style="background:rgb(16,185,129)"></span>Metadados</span>
@@ -114,7 +110,6 @@
           <div class="bar"><div class="fill" style="width:42%;background:linear-gradient(90deg,rgba(16,185,129,.85),rgb(16,185,129));"><div class="sh"></div></div></div>
           <span class="pct tabular" style="color:rgb(16,185,129)">42%</span>
         </div>
-        <!-- segments -->
         <div style="display:flex;gap:4px;margin-top:8px;">
           <div class="seg" style="background:rgb(16,185,129)"></div><div class="seg" style="background:rgb(16,185,129)"></div><div class="seg" style="background:rgb(16,185,129)"></div><div class="seg" style="background:rgb(16,185,129)"></div><div class="seg" style="background:rgb(16,185,129)"></div><div class="seg" style="background:rgb(16,185,129)"></div><div class="seg" style="background:rgb(16,185,129)"></div>
           <div class="seg" style="background:rgba(16,185,129,.55)"></div>
@@ -128,7 +123,6 @@
           <span class="chip" style="color:rgb(16,185,129);background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.25);">FLAC</span>
         </div>
       </div>
-
       <div class="actions">
         <button class="btn" style="flex:1;background:rgba(255,255,255,.08);color:rgba(255,255,255,.9);border:1px solid rgba(255,255,255,.12);">☰ Abrir fila</button>
         <button class="btn" style="padding:0 12px;background:rgba(239,68,68,.15);color:rgba(252,165,165,.95);border:1px solid rgba(239,68,68,.3);">⛔ Cancelar</button>
@@ -136,18 +130,16 @@
     </div>
   </div>
 
-  <!-- ===== Card 3: erro ===== -->
+  <!-- Card 3: erro -->
   <div class="card" style="border:1px solid rgba(239,68,68,.32);box-shadow:0 16px 44px rgba(0,0,0,.5), 0 0 32px rgba(239,68,68,.10);">
     <div class="pad">
       <div class="head">
-        <div class="pic" style="background:radial-gradient(circle at 35% 30%, rgba(239,68,68,.22), rgba(239,68,68,.06));border:1px solid rgba(239,68,68,.3);">
-          <span style="color:rgb(239,68,68);font-size:18px;font-weight:700;">✕</span>
+        <div class="pic">
+          <svg class="ring" width="48" height="48" viewBox="0 0 48 48"><circle cx="24" cy="24" r="21" fill="none" stroke="rgba(255,255,255,.10)" stroke-width="3"/><circle cx="24" cy="24" r="21" fill="none" stroke="rgb(239,68,68)" stroke-width="3" stroke-linecap="round" stroke-dasharray="131.95" stroke-dashoffset="0" style="filter:drop-shadow(0 0 4px rgba(239,68,68,.6))"/></svg>
+          <div class="core" style="background:radial-gradient(circle at 35% 30%, rgba(239,68,68,.20), rgba(0,0,0,.4));"><span style="color:rgb(239,68,68);font-size:16px;font-weight:700;">✕</span></div>
         </div>
         <div style="flex:1;min-width:0;">
-          <div style="display:flex;align-items:center;gap:8px;">
-            <div class="title" style="flex:1;">Strobe (Deadmau5)</div>
-            <button class="x">✕</button>
-          </div>
+          <div style="display:flex;align-items:center;gap:8px;"><div class="title" style="flex:1;">Strobe (Deadmau5)</div><button class="x">✕</button></div>
           <div class="sub">youtube.com</div>
         </div>
       </div>
@@ -159,7 +151,7 @@
     </div>
   </div>
 
-  <!-- ===== Resumo ===== -->
+  <!-- Resumo -->
   <div class="card" style="border:1px solid rgba(16,185,129,.28);box-shadow:0 16px 44px rgba(0,0,0,.5);">
     <div style="padding:12px;display:flex;align-items:center;gap:10px;">
       <span style="color:rgb(16,185,129);font-size:16px;">⬇</span>
@@ -169,7 +161,7 @@
         <span style="color:rgba(252,165,165,.95)"> · ✕1</span>
       </div>
       <button class="btn" style="height:28px;padding:0 12px;background:rgba(16,185,129,.2);color:#fff;border:1px solid rgba(16,185,129,.35);">Ver tudo</button>
-      <button class="x" style="width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.06);color:#a1a1aa;">✕</button>
+      <button class="x" style="width:28px;height:28px;border-radius:8px;">✕</button>
     </div>
   </div>
 

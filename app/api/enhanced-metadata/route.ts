@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
     const hasUsefulData = metadata.bpm || metadata.key || metadata.genre || metadata.label || metadata.year;
     console.log(`   ✅ Dados úteis encontrados: ${hasUsefulData ? 'SIM' : 'NÃO'}`);
     
-    if (useBeatport && metadata.sources?.includes('Beatport')) {
+    if (useBeatport && metadata.sources?.some((s: string) => s.includes('Beatport'))) {
       console.log('🎉 [Enhanced-Metadata API] BEATPORT SUCESSO! Dados obtidos do Beatport!');
     } else if (useBeatport) {
       console.log('⚠️  [Enhanced-Metadata API] Beatport habilitado mas não retornou dados');

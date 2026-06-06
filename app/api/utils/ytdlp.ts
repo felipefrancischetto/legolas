@@ -8,7 +8,7 @@ import {
   type YtDlpTarget,
 } from '@/lib/utils/youtubeUrl';
 import { getCookiesFlag } from './common';
-import { getYtDlpBin } from '@/lib/utils/ytDlpBin';
+import { getYtDlpBin, getYtDlpGlobalFlags } from '@/lib/utils/ytDlpBin';
 
 const execAsync = promisify(exec);
 
@@ -24,25 +24,26 @@ function shellQuote(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
-function buildDumpJsonCommands(bin: string, target: YtDlpTarget, cookiesFlag: string): string[] {
+function buildDumpJsonCommands(bin: string, globalFlags: string, target: YtDlpTarget, cookiesFlag: string): string[] {
+  const prefix = `${bin} ${globalFlags}`;
   if (target.type === 'url') {
     const url = shellQuote(target.url);
     // Default (sem forçar player_client) primeiro: é a estratégia que funciona com o
     // YouTube atual; os clientes forçados ficam só como fallback.
     return [
-      `${bin} --dump-json ${cookiesFlag}${url}`,
-      `${bin} --dump-json ${cookiesFlag}--extractor-args "youtube:player_client=tv" ${url}`,
-      `${bin} --dump-json ${cookiesFlag}--extractor-args "youtube:player_client=ios" ${url}`,
-      `${bin} --dump-json ${cookiesFlag}--extractor-args "youtube:player_client=android" ${url}`,
+      `${prefix}--dump-json ${cookiesFlag}${url}`,
+      `${prefix}--dump-json ${cookiesFlag}--extractor-args "youtube:player_client=tv" ${url}`,
+      `${prefix}--dump-json ${cookiesFlag}--extractor-args "youtube:player_client=ios" ${url}`,
+      `${prefix}--dump-json ${cookiesFlag}--extractor-args "youtube:player_client=android" ${url}`,
     ];
   }
 
   const query = shellQuote(target.query);
   return [
-    `${bin} --dump-json ${cookiesFlag}--default-search ${shellQuote(`ytsearch1:${target.query}`)} --no-playlist`,
-    `${bin} --dump-json ${cookiesFlag}--default-search ${shellQuote(`ytsearch1:${target.query}`)} --no-playlist --extractor-args "youtube:player_client=ios"`,
-    `${bin} --dump-json ${cookiesFlag}--default-search ${shellQuote(`ytsearch1:${target.query}`)} --no-playlist --extractor-args "youtube:player_client=android"`,
-    `${bin} --dump-json ${cookiesFlag}--default-search "ytsearch" ${query}`,
+    `${prefix}--dump-json ${cookiesFlag}--default-search ${shellQuote(`ytsearch1:${target.query}`)} --no-playlist`,
+    `${prefix}--dump-json ${cookiesFlag}--default-search ${shellQuote(`ytsearch1:${target.query}`)} --no-playlist --extractor-args "youtube:player_client=ios"`,
+    `${prefix}--dump-json ${cookiesFlag}--default-search ${shellQuote(`ytsearch1:${target.query}`)} --no-playlist --extractor-args "youtube:player_client=android"`,
+    `${prefix}--dump-json ${cookiesFlag}--default-search "ytsearch" ${query}`,
   ];
 }
 
@@ -74,8 +75,8 @@ export async function runYtDlpDumpJson(
 ): Promise<Record<string, unknown>> {
   const target = resolveYtDlpTarget(input);
   const cookiesFlag = options.cookiesFlag ?? (await getCookiesFlag());
-  const bin = await getYtDlpBin();
-  const commands = buildDumpJsonCommands(bin, target, cookiesFlag);
+  const [bin, globalFlags] = await Promise.all([getYtDlpBin(), getYtDlpGlobalFlags()]);
+  const commands = buildDumpJsonCommands(bin, globalFlags, target, cookiesFlag);
   const timeout = options.timeoutMs ?? 20000;
   let lastError: unknown;
 

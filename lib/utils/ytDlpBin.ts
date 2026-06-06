@@ -27,6 +27,8 @@ const CANDIDATES: string[] = [
 
 let resolved: string | null = null;
 let resolving: Promise<string> | null = null;
+let globalFlagsResolved: string | null = null;
+let globalFlagsResolving: Promise<string> | null = null;
 
 /** Converte "2026.03.17" → [2026, 3, 17] para comparação numérica. Ignora sufixos. */
 function parseVersion(out: string): number[] {
@@ -75,8 +77,40 @@ export async function getYtDlpBin(): Promise<string> {
   return resolving;
 }
 
+/**
+ * Flags globais recomendadas para todas as invocações do yt-dlp.
+ * A partir de 2026 o YouTube exige runtime JS para resolver assinaturas; Node já
+ * está instalado na maioria dos ambientes de dev, então usamos `--js-runtimes node`.
+ */
+export async function getYtDlpGlobalFlags(): Promise<string> {
+  if (globalFlagsResolved !== null) return globalFlagsResolved;
+  if (globalFlagsResolving) return globalFlagsResolving;
+
+  globalFlagsResolving = (async () => {
+    try {
+      await execAsync('node --version', { timeout: 5000 });
+      globalFlagsResolved = '--js-runtimes node --remote-components ejs:github ';
+      logger.info('🛠️ [yt-dlp] Runtime JS: node + ejs:github (habilitado).');
+    } catch {
+      globalFlagsResolved = '';
+      logger.warn('⚠️ [yt-dlp] Node não encontrado — downloads podem falhar sem runtime JS.');
+    }
+    return globalFlagsResolved;
+  })();
+
+  return globalFlagsResolving;
+}
+
+/** Prefixo completo: binário + flags globais (ex.: "py -m yt_dlp --js-runtimes node "). */
+export async function getYtDlpPrefix(): Promise<string> {
+  const [bin, flags] = await Promise.all([getYtDlpBin(), getYtDlpGlobalFlags()]);
+  return `${bin} ${flags}`;
+}
+
 /** Reseta o cache (ex.: após instalar/atualizar o yt-dlp em runtime). */
 export function resetYtDlpBinCache(): void {
   resolved = null;
   resolving = null;
+  globalFlagsResolved = null;
+  globalFlagsResolving = null;
 }

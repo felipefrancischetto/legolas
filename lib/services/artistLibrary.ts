@@ -57,6 +57,8 @@ export interface FeedRelease {
 
 export interface FeedGroup {
   artist: string;
+  /** Foto do artista (header da página no YT Music). Fallback: capa do release. */
+  image?: string;
   /**
    * Recência do artista (ISO). Derivado do ano do lançamento mais recente quando
    * disponível; caso contrário, do lastSeen na biblioteca. Ordena "Mais recente".

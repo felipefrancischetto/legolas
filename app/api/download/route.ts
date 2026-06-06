@@ -12,10 +12,12 @@ import {
   getDownloadUserFacingError,
   getCookiesFlag,
   runFfmpegCopyWithMetadata,
+  extractArtistTitle,
   type FfmpegMetadataEntry,
 } from '@/app/api/utils/common';
 import { buildYtDlpDownloadInput, runYtDlpDumpJson } from '@/app/api/utils/ytdlp';
 import { downloadTrack } from '@/lib/services/downloadEngine';
+import { metadataAggregator } from '@/lib/services/metadataService';
 
 const execAsync = promisify(exec);
 
@@ -290,90 +292,66 @@ export async function GET(request: NextRequest) {
     console.log(`   🎧 Beatport: ${useBeatport}`);
     
     try {
-      // Usar o novo serviço de metadados melhorado
-      const host = request.headers.get('host');
-      const protocol = host?.startsWith('localhost') || host?.startsWith('127.0.0.1') ? 'http' : 'https';
-      const metadataRes = await fetch(`${protocol}://${host}/api/enhanced-metadata`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          title: videoInfo.title, 
-          artist: videoInfo.uploader,
-          useBeatport: useBeatport,
-          showBeatportPage: showBeatportPage,
-          skipMetadata: skipMetadata
-        })
+      // Chamar o agregador de metadados DIRETAMENTE (sem fetch interno).
+      // O fluxo antigo fazia fetch('https://${host}/api/enhanced-metadata'), mas quando o
+      // download é disparado via POST a requisição GET sintética não carrega o header `host`,
+      // então `host` ficava null e o fetch falhava silenciosamente — por isso o download nunca
+      // vinha normalizado pelo Beatport, só o botão "Normalizar" (que chama o agregador direto).
+      const cleaned = extractArtistTitle(String(videoInfo.title || ''), String(videoInfo.uploader || ''));
+      console.log(`   ✨ Busca otimizada: Title="${cleaned.title}", Artist="${cleaned.artist}", Beatport=${useBeatport}`);
+
+      metadata = await metadataAggregator.searchMetadata(cleaned.title, cleaned.artist, {
+        useBeatport,
+        showBeatportPage,
       });
-      
-      if (metadataRes.ok) {
-        const metadataResponse = await metadataRes.json();
-        metadata = metadataResponse.metadata;
-        console.log(`\n📊 [Download] Metadados recebidos:`);
-        console.log(`   ✅ Sucesso: ${metadataResponse.success}`);
-        console.log(`   📍 Fontes: ${metadata.sources?.join(', ') || 'Nenhuma'}`);
-        console.log(`   🎯 Modo Beatport: ${metadataResponse.beatportMode}`);
-        console.log(`   📈 Dados encontrados:`);
-        console.log(`      • BPM: ${metadata.bpm || 'N/A'}`);
-        console.log(`      • Key: ${metadata.key || 'N/A'}`);
-        console.log(`      • Genre: ${metadata.genre || 'N/A'}`);
-        console.log(`      • Label: ${metadata.label || 'N/A'}`);
-        console.log(`      • Year: ${metadata.year || 'N/A'}`);
-        console.log(`      • Published Date: ${metadata.publishedDate || 'N/A'}`);
-        console.log(`      • Album: ${metadata.album || 'N/A'}`);
-        
-        // Evento: Metadados encontrados
-        if (downloadId) {
-          const beatportUsed = useBeatport && metadata.sources?.includes('Beatport');
-          sendProgressEvent(downloadId, {
-            type: 'metadata',
-            step: 'Metadados encontrados com sucesso!',
-            progress: 70,
-            substep: beatportUsed ? 'Dados do Beatport obtidos' : 'Dados da base geral obtidos',
-            detail: `BPM: ${metadata.bpm || 'N/A'} | Key: ${metadata.key || 'N/A'} | Genre: ${metadata.genre || 'N/A'}`,
-            metadata: {
-              bpm: metadata.bpm,
-              key: metadata.key,
-              genre: metadata.genre,
-              label: metadata.label,
-              sources: metadata.sources
-            }
-          });
-        }
-        
-        if (useBeatport && metadata.sources?.includes('Beatport')) {
-          console.log('🎉 [Download] DADOS DO BEATPORT UTILIZADOS! ✨');
-        } else if (useBeatport) {
-          console.log('⚠️  [Download] Beatport habilitado mas não retornou dados');
-        }
-      } else {
-        console.error('❌ [Download] Erro na resposta do serviço de metadados:', metadataRes.status);
-        
-        // Evento: Erro na busca de metadados
-        if (downloadId) {
-          sendProgressEvent(downloadId, {
-            type: 'metadata',
-            step: 'Erro na busca de metadados',
-            progress: 65,
-            substep: 'Tentando fonte alternativa...',
-            detail: `Status: ${metadataRes.status}`
-          });
-        }
+
+      console.log(`\n📊 [Download] Metadados recebidos:`);
+      console.log(`   📍 Fontes: ${metadata.sources?.join(', ') || 'Nenhuma'}`);
+      console.log(`   📈 Dados encontrados:`);
+      console.log(`      • BPM: ${metadata.bpm || 'N/A'}`);
+      console.log(`      • Key: ${metadata.key || 'N/A'}`);
+      console.log(`      • Genre: ${metadata.genre || 'N/A'}`);
+      console.log(`      • Label: ${metadata.label || 'N/A'}`);
+      console.log(`      • Year: ${metadata.year || 'N/A'}`);
+      console.log(`      • Published Date: ${metadata.publishedDate || 'N/A'}`);
+      console.log(`      • Album: ${metadata.album || 'N/A'}`);
+
+      // Evento: Metadados encontrados
+      if (downloadId) {
+        const beatportUsed = useBeatport && metadata.sources?.some((s: string) => s.includes('Beatport'));
+        sendProgressEvent(downloadId, {
+          type: 'metadata',
+          step: 'Metadados encontrados com sucesso!',
+          progress: 70,
+          substep: beatportUsed ? 'Dados do Beatport obtidos' : 'Dados da base geral obtidos',
+          detail: `BPM: ${metadata.bpm || 'N/A'} | Key: ${metadata.key || 'N/A'} | Genre: ${metadata.genre || 'N/A'}`,
+          metadata: {
+            bpm: metadata.bpm,
+            key: metadata.key,
+            genre: metadata.genre,
+            label: metadata.label,
+            sources: metadata.sources
+          }
+        });
+      }
+
+      if (useBeatport && metadata.sources?.some((s: string) => s.includes('Beatport'))) {
+        console.log('🎉 [Download] DADOS DO BEATPORT UTILIZADOS! ✨');
+      } else if (useBeatport) {
+        console.log('⚠️  [Download] Beatport habilitado mas não retornou dados');
       }
     } catch (err) {
-      console.error('❌ [Download] Erro ao buscar metadados melhorados:', err);
-      // Fallback para MusicBrainz se o serviço melhorado falhar
-      try {
-        const host = request.headers.get('host');
-        const protocol = host?.startsWith('localhost') || host?.startsWith('127.0.0.1') ? 'http' : 'https';
-        const mbRes = await fetch(`${protocol}://${host}/api/musicbrainz-metadata`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: videoInfo.title, artist: videoInfo.uploader })
+      console.error('❌ [Download] Erro ao buscar metadados:', err);
+
+      // Evento: Erro na busca de metadados
+      if (downloadId) {
+        sendProgressEvent(downloadId, {
+          type: 'metadata',
+          step: 'Erro na busca de metadados',
+          progress: 65,
+          substep: 'Continuando sem enriquecimento...',
+          detail: err instanceof Error ? err.message : 'Erro desconhecido'
         });
-        metadata = await mbRes.json();
-        console.log('🔄 [Download] Fallback MusicBrainz usado:', metadata);
-      } catch (fallbackErr) {
-        console.error('❌ [Download] Erro também no fallback MusicBrainz:', fallbackErr);
       }
     }
 
@@ -400,8 +378,8 @@ export async function GET(request: NextRequest) {
       if (metadata && exists) {
         // Preparar metadados
         const tags = {
-          title: metadata.title || videoInfo.title,
-          artist: metadata.artist || videoInfo.uploader || videoInfo.artist,  // Múltiplas fontes para artista
+          title: metadata.title || String(videoInfo.title || ''),
+          artist: metadata.artist || String(videoInfo.uploader || videoInfo.artist || ''),  // Múltiplas fontes para artista
           album: metadata.album || '',
           year: metadata.year?.toString() || '',
           genre: metadata.genre || '',
@@ -549,7 +527,7 @@ export async function GET(request: NextRequest) {
             const hasBeatportData = fileTags.bpm || fileTags.BPM || fileTags.initialkey || fileTags.INITIALKEY || fileTags.label || fileTags.LABEL;
             // Verificar se realmente veio do Beatport (verificando sources no comment)
             const comment = fileTags.comment || fileTags.COMMENT || '';
-            const fromBeatport = useBeatport && metadata?.sources?.includes('Beatport') && comment.includes('Sources:') && comment.includes('Beatport');
+            const fromBeatport = useBeatport && metadata?.sources?.some((s: string) => s.includes('Beatport')) && comment.includes('Sources:') && comment.includes('Beatport');
             console.log(`      🎯 Dados Beatport salvos: ${hasBeatportData ? '✅ SIM' : '❌ NÃO'}`);
             console.log(`      🎯 Normalizado pelo Beatport: ${fromBeatport ? '✅ SIM' : '❌ NÃO'}`);
             
@@ -649,7 +627,7 @@ export async function GET(request: NextRequest) {
         artist: videoInfo.uploader,
         duration: videoInfo.duration,
         format: format,
-        hasBeatportData: useBeatport && metadata?.sources?.includes('Beatport'),
+        hasBeatportData: useBeatport && metadata?.sources?.some((s: string) => s.includes('Beatport')),
         finalMetadata: metadata
       };
 

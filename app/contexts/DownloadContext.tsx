@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useCallback, useMemo, ReactNode, useEffect, useRef } from 'react';
 import { safeSetItem, safeGetItem, safeRemoveItem, limitArraySize } from '../utils/localStorage';
+import { notifyLibraryUpdated } from '../utils/libraryEvents';
 
 interface DownloadStep {
   type: 'info' | 'warning' | 'error' | 'progress';
@@ -965,6 +966,10 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       
       // Atualizar lista de arquivos sem mostrar loading (atualização incremental)
       window.dispatchEvent(new CustomEvent('refresh-files', { detail: { skipLoading: true } }));
+      // Sinaliza que a biblioteca mudou → o radar de Novidades sincroniza os
+      // artistas novos que entraram (ver ArtistFeed). Cobre também o caso de a aba
+      // ainda não ter sido aberta (flag consumida ao montar).
+      notifyLibraryUpdated();
       
       // Fechar SSE se aberto
       try { 

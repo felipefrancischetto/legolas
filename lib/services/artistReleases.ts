@@ -14,7 +14,7 @@
  * /api/artist-feed (radar de lançamentos recentes).
  */
 
-import { normalizeName } from '@/lib/services/artistLibrary';
+import { normalizeName, splitArtists } from '@/lib/services/artistLibrary';
 
 const YT_KEY = 'AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX94';
 const CLIENT_VERSION = '1.20240101.01.00';
@@ -32,6 +32,12 @@ export interface ArtistRelease {
   browseId?: string;
   playlistId?: string;
   playlistUrl?: string;
+}
+
+export interface ArtistReleasesResult {
+  releases: ArtistRelease[];
+  /** Foto do artista (header da página no YT Music), na maior resolução disponível. */
+  image?: string;
 }
 
 function findAll(obj: any, key: string, out: any[] = []): any[] {
@@ -130,6 +136,22 @@ function parseTwoRowItem(item: any, name: string, defaultType?: string): ArtistR
   };
 }
 
+/**
+ * Foto do artista no header da página (avatar redondo grande), extraída do
+ * `musicImmersiveHeaderRenderer` (ou `musicVisualHeaderRenderer`). Pega a maior
+ * resolução disponível. É a MESMA resposta `browse` já usada para os releases —
+ * nenhuma requisição extra.
+ */
+function extractArtistImage(data: any): string | undefined {
+  const header =
+    findAll(data, 'musicImmersiveHeaderRenderer')[0] ||
+    findAll(data, 'musicVisualHeaderRenderer')[0];
+  const thumbs =
+    header?.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails ||
+    header?.foregroundThumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails;
+  return Array.isArray(thumbs) && thumbs.length ? thumbs[thumbs.length - 1].url : undefined;
+}
+
 /** Título de uma prateleira de carrossel (ex.: "Álbuns", "Singles e EPs"). */
 const carouselTitle = (shelf: any): string =>
   shelf?.header?.musicCarouselShelfBasicHeaderRenderer?.title?.runs?.[0]?.text || '';
@@ -172,8 +194,9 @@ async function fetchShelfAll(
  * compilações e "Fãs também curtem") e segue o "Mostrar tudo" de cada uma para
  * trazer a discografia COMPLETA — não apenas os primeiros cards do carrossel.
  */
-async function fetchReleasesFromArtistPage(browseId: string, name: string): Promise<ArtistRelease[]> {
+async function fetchReleasesFromArtistPage(browseId: string, name: string): Promise<ArtistReleasesResult> {
   const data = await ytMusic('browse', { browseId });
+  const image = extractArtistImage(data);
   const collected: ArtistRelease[] = [];
 
   for (const shelf of findAll(data, 'musicCarouselShelfRenderer')) {
@@ -206,7 +229,7 @@ async function fetchReleasesFromArtistPage(browseId: string, name: string): Prom
 
   // Mais recentes primeiro (estável: preserva a ordem dos carrosséis no empate de ano).
   releases.sort((a, b) => yearOf(b) - yearOf(a));
-  return releases;
+  return { releases, image };
 }
 
 /**
@@ -237,6 +260,12 @@ async function fetchReleasesViaSearch(name: string): Promise<ArtistRelease[]> {
     if (!/^(album|álbum|ep|single)$/i.test(type)) continue;
 
     const subArtist = parts[1] || name;
+    // A busca textual ("Hertz") retorna álbuns de QUALQUER artista/álbum que
+    // contenha o termo (ex.: "Max Killa Hertz" de Bass Mekanik, "Sintonia
+    // Hertz" de Pulsar Hertz). Só aceitamos releases cujo crédito de artista
+    // bata EXATAMENTE com o nome pedido — mesma regra do /api/artist-feed.
+    const creditMatches = splitArtists(subArtist).some((n) => normalizeName(n) === artistKey);
+    if (!creditMatches) continue;
     const year = parts.find((p: string) => /^\d{4}$/.test(p));
 
     const dedupe = (browseId || playId || album).toString();
@@ -258,9 +287,8 @@ async function fetchReleasesViaSearch(name: string): Promise<ArtistRelease[]> {
     });
   }
 
+  // Já filtrado por artista exato acima: basta ordenar do mais novo p/ o antigo.
   releases.sort((a, b) => {
-    const own = Number(b.artist.toLowerCase().includes(artistKey)) - Number(a.artist.toLowerCase().includes(artistKey));
-    if (own !== 0) return own;
     const yearDiff = yearOf(b) - yearOf(a);
     if (yearDiff !== 0) return yearDiff;
     return a.album.localeCompare(b.album);
@@ -274,21 +302,21 @@ async function fetchReleasesViaSearch(name: string): Promise<ArtistRelease[]> {
  * (mais recentes primeiro). Resolve via página do artista (`browse`) e só usa
  * a busca textual como último recurso.
  */
-export async function fetchArtistReleases(artist: string): Promise<ArtistRelease[]> {
+export async function fetchArtistReleases(artist: string): Promise<ArtistReleasesResult> {
   const name = (artist || '').trim();
-  if (!name) return [];
+  if (!name) return { releases: [] };
 
   try {
     const browseId = await resolveArtistBrowseId(name);
     if (browseId) {
-      const releases = await fetchReleasesFromArtistPage(browseId, name);
-      if (releases.length > 0) return releases;
+      const result = await fetchReleasesFromArtistPage(browseId, name);
+      if (result.releases.length > 0) return result;
     }
   } catch (err) {
     console.warn(`⚠️ [artistReleases] Página do artista falhou para "${name}", usando busca:`, err);
   }
 
-  return fetchReleasesViaSearch(name);
+  return { releases: await fetchReleasesViaSearch(name) };
 }
 
 export { yearOf as releaseYear };

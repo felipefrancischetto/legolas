@@ -1661,16 +1661,29 @@ export class PlaylistDownloadService {
     }
     finalTitle = removeDuplicateSuffix(finalTitle);
 
-    // Extrair versão se existir
+    // Regex para identificar a versão/mix de uma faixa entre parênteses.
+    const VERSION_RE = /\(([^)]*?(?:mix|edit|remix|version|dub|bootleg|rework|instrumental|vocal|extended|radio|club|original|vip)[^)]*)\)/i;
+
+    // Extrair versão se existir.
+    // **CORREÇÃO: O Beatport costuma retornar o título SEM a versão/mix (ex.: "Zig Zag"),
+    // enquanto o título original do YouTube preserva "(Original Mix)", "(... Version)" etc.
+    // Sem recuperar a versão, duas faixas distintas do mesmo álbum (ex.: "Zig Zag (Original Mix)"
+    // e "Zig Zag (Version)") colidem no mesmo nome de arquivo e a segunda era descartada.**
     let version = '';
-    const versionMatch = finalTitle.match(/\((.*?)\)/);
-    if (versionMatch) {
-      version = versionMatch[1];
+    const finalVersionMatch = finalTitle.match(VERSION_RE);
+    if (finalVersionMatch) {
+      version = finalVersionMatch[1];
+    } else {
+      // Beatport não trouxe a versão: recuperar do título original do YouTube.
+      const originalVersionMatch = (normTitle || title).match(VERSION_RE);
+      if (originalVersionMatch) {
+        version = originalVersionMatch[1];
+      }
     }
 
     // Montar nome do arquivo sem duplicidade de versão
     let fileBase = `${finalArtist} - ${finalTitle}`;
-    if (version && !finalTitle.endsWith(`(${version})`)) {
+    if (version && !finalTitle.toLowerCase().includes(`(${version.toLowerCase()})`)) {
       fileBase += ` (${version})`;
     }
     if (metadata?.label) {
@@ -1679,19 +1692,30 @@ export class PlaylistDownloadService {
         fileBase += ` [${deduplicatedLabel}]`;
       }
     }
-    const sanitizedNewFilename = sanitizeTitle(fileBase);
+    let sanitizedNewFilename = sanitizeTitle(fileBase);
 
     // Renomear o arquivo com o novo nome formatado
     const fileDir = filePath.substring(0, filePath.lastIndexOf('/'));
     const fileExt = filePath.split('.').pop();
-    const newFilePath = `${fileDir}/${sanitizedNewFilename}.${fileExt}`;
-    
-    // Verificar se o arquivo de destino já existe (pode ser versão diferente)
+    let newFilePath = `${fileDir}/${sanitizedNewFilename}.${fileExt}`;
+
+    // **CORREÇÃO: Se o nome de destino já existe e NÃO é o arquivo atual, trata-se de
+    // outra versão/faixa que resolveu para o mesmo nome. Em vez de abandonar a faixa
+    // (deixando-a com nome temporário e SEM metadados, fazendo-a "sumir" do álbum),
+    // desambiguar o nome para preservar as duas faixas.**
     if (existsSync(newFilePath) && newFilePath !== filePath) {
-      logger.warn(`   ⚠️ Arquivo com nome similar já existe: ${sanitizedNewFilename}.${fileExt}`);
-      logger.warn(`   ⚠️ Mantendo arquivo original para evitar sobrescrita de versão diferente`);
-      // Não renomear se já existe - pode ser uma versão diferente
-      return { success: true, fromBeatport };
+      logger.warn(`   ⚠️ Nome de destino já existe (outra versão/faixa): ${sanitizedNewFilename}.${fileExt}`);
+      let n = 2;
+      let candidate = sanitizeTitle(`${fileBase} (${n})`);
+      let candidatePath = `${fileDir}/${candidate}.${fileExt}`;
+      while (existsSync(candidatePath) && candidatePath !== filePath) {
+        n++;
+        candidate = sanitizeTitle(`${fileBase} (${n})`);
+        candidatePath = `${fileDir}/${candidate}.${fileExt}`;
+      }
+      sanitizedNewFilename = candidate;
+      newFilePath = candidatePath;
+      logger.info(`   ✅ Desambiguando para preservar a versão distinta: ${sanitizedNewFilename}.${fileExt}`);
     }
     
     try {

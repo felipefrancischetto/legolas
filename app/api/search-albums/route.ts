@@ -40,24 +40,28 @@ async function fetchAllPlaylistTracks(playlistUrl: string, cookiesFlag: string):
     
     let bestResult: string[] = [];
     let maxTracksFound = 0;
-    
-    // Tentar cada método até encontrar um que funcione
-    // Não parar prematuramente - tentar todos os métodos para garantir que pegamos o máximo de faixas
+
+    // Tentar cada método até encontrar um que funcione.
+    // Os métodos estão ordenados do mais confiável para o menos (Android > iOS > Web > …)
+    // e `--flat-playlist` devolve a playlist INTEIRA numa única chamada — não há paginação
+    // a recuperar com os métodos seguintes. Portanto paramos no PRIMEIRO método que devolver
+    // faixas: rodar todos os 7 em sequência (cada um com timeout de até 45s) só adicionava
+    // latência enorme antes de tocar/baixar, sem ganhar faixas.
     for (let i = 0; i < extractionMethods.length; i++) {
       try {
         const { stdout } = await execAsync(
           extractionMethods[i],
           { maxBuffer: 1024 * 1024 * 20, timeout: 45000 } // Aumentar timeout para playlists maiores
         );
-        
+
         const lines = stdout.trim().split('\n').filter(line => line.trim());
         if (lines.length > maxTracksFound) {
           maxTracksFound = lines.length;
           bestResult = lines;
-          console.log(`✅ [fetchAllPlaylistTracks] Método ${i + 1} encontrou ${lines.length} faixas`);
-          
-          // Continuar tentando outros métodos para garantir que pegamos o máximo possível
-          // Não parar prematuramente - pode haver métodos que retornam mais faixas
+        }
+        if (lines.length > 0) {
+          console.log(`✅ [fetchAllPlaylistTracks] Método ${i + 1} encontrou ${lines.length} faixas — usando este resultado`);
+          break; // Resultado bom o suficiente: não rodar os métodos restantes.
         }
       } catch (err) {
         console.warn(`⚠️ [fetchAllPlaylistTracks] Método ${i + 1} falhou:`, err);

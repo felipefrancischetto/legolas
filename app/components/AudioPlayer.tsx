@@ -14,6 +14,55 @@ import MusicStudyModal from './MusicStudyModal';
 import LoadingSpinner from './LoadingSpinner';
 import { SkeletonAudioPlayer } from './SkeletonComponents';
 import { logger } from '../utils/logger';
+import { focusArtistInFeed } from '../utils/focusArtist';
+
+// ---------------------------------------------------------------------------
+// YouTube IFrame API — player de PRÉVIA (faixas ainda não baixadas).
+// Em vez de baixar+transcodificar o áudio no servidor (/api/preview-stream, que
+// deixava o play lento pra começar), tocamos o áudio direto da CDN do YouTube
+// num <iframe> oculto. O play começa em ~1s. A waveform não é usada nas prévias
+// (o player fica minimizado na aba Novidades).
+let ytApiPromise: Promise<any> | null = null;
+// Quando a API do YouTube não carrega (offline, bloqueada por rede/adblock, região),
+// marcamos como indisponível para cair direto na prévia via /api/preview-stream sem
+// esperar o timeout de novo a cada faixa.
+let ytApiBlocked = false;
+function loadYouTubeIframeApi(): Promise<any> {
+  if (typeof window === 'undefined') return Promise.reject(new Error('SSR'));
+  if (ytApiBlocked) return Promise.reject(new Error('YouTube IFrame API indisponível'));
+  const w = window as any;
+  if (w.YT && w.YT.Player) return Promise.resolve(w.YT);
+  if (ytApiPromise) return ytApiPromise;
+  ytApiPromise = new Promise((resolve, reject) => {
+    let settled = false;
+    const succeed = (yt: any) => { if (!settled) { settled = true; resolve(yt); } };
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      // Permite nova tentativa de carregamento numa próxima sessão, mas durante esta
+      // sessão caímos direto no fallback nativo.
+      ytApiBlocked = true;
+      ytApiPromise = null;
+      reject(err);
+    };
+    const prev = w.onYouTubeIframeAPIReady;
+    w.onYouTubeIframeAPIReady = () => {
+      try { prev?.(); } catch { /* ignore */ }
+      succeed(w.YT);
+    };
+    if (!document.querySelector('script[data-yt-iframe-api]')) {
+      const tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      tag.setAttribute('data-yt-iframe-api', '1');
+      tag.onerror = () => fail(new Error('Falha ao carregar a YouTube IFrame API'));
+      document.head.appendChild(tag);
+    }
+    // Sem onload/onerror confiável para o callback global: usa um timeout como rede de
+    // segurança para nunca deixar o play "preso" carregando para sempre.
+    setTimeout(() => fail(new Error('Timeout ao carregar a YouTube IFrame API')), 7000);
+  });
+  return ytApiPromise;
+}
 
 // Componente memoizado para thumbnail que evita re-renders desnecessários
 const ThumbnailImage = memo(({ 
@@ -85,20 +134,47 @@ export default function AudioPlayer() {
   const isHandlingEndedRef = useRef(false); // Flag para evitar múltiplas chamadas de handleEnded
   const isPlayingRef = useRef(false); // Ref para isPlaying para evitar dependências
   const currentTimeRef = useRef(0); // Ref para currentTime para evitar dependências
+  const currentFileNameRef = useRef<string | null>(null); // Ref para o nome do arquivo atual (auto-avanço estável)
   const lastPlayerMinimizedRef = useRef<boolean | null>(null); // Ref para rastrear mudanças de playerMinimized
 
-  const { playerState, setPlayerState, pause, resume, setVolume, setIsMuted, play } = usePlayer();
+  // Player de PRÉVIA (YouTube IFrame, sem vídeo) — ativo quando currentFile é uma prévia.
+  const ytPlayerRef = useRef<any>(null);
+  const ytReadyRef = useRef(false);
+  const ytPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const ytHostElRef = useRef<HTMLElement | null>(null);
+  const ytLoadedVideoRef = useRef<string | null>(null);
+  const pendingPreviewVideoRef = useRef<string | null>(null);
+  // Espelha `ytPreview` para os callbacks do YouTube (criados uma vez, no mount). Quando a
+  // prévia caiu para o <audio> nativo, o player do YT é parado (stopVideo) e pode disparar
+  // PAUSED/ENDED residuais — sem esta guarda, esses eventos zeravam o isPlaying (e até
+  // chamavam o auto-avanço) por cima da faixa nativa que está tocando.
+  const ytActiveRef = useRef(false);
+
+  const { playerState, setPlayerState, pause, resume, setVolume, setIsMuted, play, queue } = usePlayer();
   const { setPlayerOpen, playerMinimized, setPlayerMinimized } = useUI();
   const { files } = useFile();
-  
+
   const filesRef = useRef(files); // Ref para files
   const playRef = useRef(play); // Ref para função play
-  
+  const queueRef = useRef(queue); // Ref para a fila de prévias (álbum)
+
+  // Lista ativa de navegação: a fila de prévias quando a faixa atual pertence a ela
+  // (ex.: tocando um álbum), senão a biblioteca. Mantém next/prev/auto-avanço unificados.
+  const navigationList = useCallback((name?: string) => {
+    const q = queueRef.current;
+    if (name && q.length > 0 && q.some(f => f.name === name)) return q;
+    return filesRef.current;
+  }, []);
+
   // Atualizar refs quando valores mudam
   useEffect(() => {
     filesRef.current = files;
   }, [files]);
-  
+
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
+
   useEffect(() => {
     playRef.current = play;
   }, [play]);
@@ -113,6 +189,36 @@ export default function AudioPlayer() {
   const isLoading = playerState.isLoading;
   const isReady = playerState.isReady;
   const error = playerState.error;
+
+  // Prévia (faixa não baixada): tocar via YouTube IFrame em vez do <audio>/preview-stream.
+  const isPreview = !!(currentFile && ((currentFile as any).isPreview || (currentFile as any).streamUrl));
+  // Fallback: quando o YouTube IFrame não inicia (API bloqueada/offline, onReady nunca
+  // dispara, autoplay barrado), tocamos a prévia pelo <audio> nativo via /api/preview-stream
+  // (caminho comprovado).
+  const [previewNative, setPreviewNative] = useState(false);
+  // Uma vez que o YouTube prova que NÃO consegue tocar nesta sessão (embed bloqueado,
+  // autoplay barrado, iframe que carrega mas nunca avança), paramos de brigar com ele: a
+  // troca de faixa não volta a tentar o YT. Sem isto, cada nova faixa reativava o YT (que
+  // de novo não toca) e o toggle YT⇄nativo destruía o <audio> antes de ele carregar — a
+  // PRÓXIMA faixa do álbum ficava presa em 0:00 (auto-play "não funciona"). Se o YT tocar
+  // de fato, este flag nunca liga e seguimos no caminho rápido do YouTube em cada faixa.
+  const ytUnplayableRef = useRef(false);
+  // Nova faixa: tenta o YouTube primeiro (caminho rápido, ~1s) — a menos que a API esteja
+  // indisponível (offline/adblock) ou que o YT já tenha se provado inválido nesta sessão.
+  useEffect(() => { setPreviewNative(ytApiBlocked || ytUnplayableRef.current); }, [currentFile?.name]);
+  // Cai para o <audio> nativo (/api/preview-stream, caminho comprovado) e marca o YT como
+  // inválido para o resto da sessão, evitando o thrash descrito acima.
+  const fallBackToNativePreview = useCallback(() => { ytUnplayableRef.current = true; setPreviewNative(true); }, []);
+  // Prévia tocando pelo YouTube IFrame (modo padrão, enquanto não caiu no fallback).
+  const ytPreview = isPreview && !previewNative;
+  useEffect(() => { ytActiveRef.current = ytPreview; }, [ytPreview]);
+  const previewVideoId = useMemo(() => {
+    if (!isPreview || !currentFile) return null;
+    const n = currentFile.name || '';
+    if (n.startsWith('preview:')) return n.slice('preview:'.length);
+    const m = ((currentFile as any).streamUrl || '').match(/[?&]videoId=([^&]+)/);
+    return m ? decodeURIComponent(m[1]) : null;
+  }, [isPreview, currentFile?.name]);
 
   // Memoizar URL do thumbnail para evitar requisições repetidas
   const thumbnailUrl = useMemo(() => {
@@ -197,6 +303,35 @@ export default function AudioPlayer() {
     currentTimeRef.current = currentTime;
   }, [currentTime]);
 
+  useEffect(() => {
+    currentFileNameRef.current = currentFile?.name ?? null;
+  }, [currentFile?.name]);
+
+  // Auto-avanço unificado: usado pelo fim da faixa nativa (<audio>) E pelo fim da prévia
+  // (YouTube IFrame). Usa a mesma lista de navegação (fila do álbum quando aplicável, senão
+  // a biblioteca) e o MESMO caminho de play do botão "próxima". Marca isNavigatingRef para
+  // que o tempo da próxima faixa seja resetado a 0 — sem isso, o canplay do <audio> podia
+  // restaurar um tempo antigo e a faixa carregava mas não tocava (autoplay "preso").
+  // Retorna true se avançou.
+  const advanceToNext = useCallback(() => {
+    const currentName = currentFileNameRef.current;
+    if (!currentName) return false;
+    const list = navigationList(currentName);
+    const idx = list.findIndex(f => f.name === currentName);
+    if (idx >= 0 && idx < list.length - 1) {
+      const nextFile = list[idx + 1];
+      logger.debug('⏭️ Auto-avanço para:', nextFile.displayName);
+      isNavigatingRef.current = true;
+      if (navigationTimeoutRef.current) clearTimeout(navigationTimeoutRef.current);
+      navigationTimeoutRef.current = setTimeout(() => { isNavigatingRef.current = false; }, 1500);
+      playRef.current(nextFile, true);
+      return true;
+    }
+    return false;
+  }, [navigationList]);
+  const advanceToNextRef = useRef(advanceToNext);
+  useEffect(() => { advanceToNextRef.current = advanceToNext; }, [advanceToNext]);
+
   // Funções de navegação otimizadas
   const handleNext = useCallback(() => {
     if (!currentFile || isNavigatingRef.current) {
@@ -207,9 +342,10 @@ export default function AudioPlayer() {
       return; // Prevenir múltiplos cliques
     }
     
-    const currentIndex = files.findIndex(f => f.name === currentFile.name);
-    if (currentIndex >= 0 && currentIndex < files.length - 1) {
-      const nextFile = files[currentIndex + 1];
+    const list = navigationList(currentFile.name);
+    const currentIndex = list.findIndex(f => f.name === currentFile.name);
+    if (currentIndex >= 0 && currentIndex < list.length - 1) {
+      const nextFile = list[currentIndex + 1];
       logger.debug('▶️ Próxima música:', nextFile.displayName);
       
       // Marcar como navegação para resetar tempo
@@ -240,7 +376,7 @@ export default function AudioPlayer() {
     } else {
       logger.debug('ℹ️ Não há próxima música disponível');
     }
-  }, [currentFile, files, play]);
+  }, [currentFile, play, navigationList]);
 
   const handlePrev = useCallback(() => {
     if (!currentFile || isNavigatingRef.current) {
@@ -251,9 +387,10 @@ export default function AudioPlayer() {
       return; // Prevenir múltiplos cliques
     }
     
-    const currentIndex = files.findIndex(f => f.name === currentFile.name);
+    const list = navigationList(currentFile.name);
+    const currentIndex = list.findIndex(f => f.name === currentFile.name);
     if (currentIndex > 0) {
-      const prevFile = files[currentIndex - 1];
+      const prevFile = list[currentIndex - 1];
       logger.debug('◀️ Música anterior:', prevFile.displayName);
       
       // Marcar como navegação para resetar tempo
@@ -284,7 +421,7 @@ export default function AudioPlayer() {
     } else {
       logger.debug('ℹ️ Não há música anterior disponível');
     }
-  }, [currentFile, files, play]);
+  }, [currentFile, play, navigationList]);
 
   // Cleanup de timeouts ao desmontar
   useEffect(() => {
@@ -308,6 +445,110 @@ export default function AudioPlayer() {
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  // Polling do progresso da prévia (YouTube IFrame). Estável — usado pelo onReady e pelo
+  // efeito de prévia. Só roda enquanto há uma prévia ativa (o efeito limpa ao sair).
+  const startYtPolling = useCallback(() => {
+    if (ytPollRef.current) clearInterval(ytPollRef.current);
+    ytPollRef.current = setInterval(() => {
+      const p = ytPlayerRef.current;
+      if (!p || !ytReadyRef.current) return;
+      if (isSeekingRef.current || isDraggingRef.current) return;
+      try {
+        const t = p.getCurrentTime?.() || 0;
+        setPlayerState(prev => (Math.abs(prev.currentTime - t) < 0.2 ? prev : { ...prev, currentTime: t }));
+      } catch { /* ignore */ }
+    }, 250);
+  }, [setPlayerState]);
+
+  // Cria UMA vez o player de PRÉVIA do YouTube e o deixa PRONTO (ocioso, sem vídeo).
+  // Pré-criar no mount é o que faz o play começar já no 1º clique: o <iframe> existe e
+  // está "ready" antes do clique, então loadVideoById/playVideo conseguem autoplay (a
+  // página já teve interação do usuário). Se o player só nascesse no clique, o onReady
+  // dispararia FORA do gesto e o navegador barraria o autoplay — exigindo o 2º clique.
+  const ensureYtPlayer = useCallback((YT: any) => {
+    if (!YT || ytPlayerRef.current) return;
+    const getDur = () => { try { return ytPlayerRef.current?.getDuration?.() || 0; } catch { return 0; } };
+
+    // Host fora do React: sobrevive aos early-returns de skeleton/erro do render.
+    let host = ytHostElRef.current;
+    if (!host || !host.isConnected) {
+      const wrap = document.createElement('div');
+      wrap.setAttribute('data-yt-preview', '1');
+      wrap.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
+      const inner = document.createElement('div');
+      wrap.appendChild(inner);
+      document.body.appendChild(wrap);
+      host = inner;
+      ytHostElRef.current = inner;
+    }
+
+    const onReady = () => {
+      ytReadyRef.current = true;
+      const p = ytPlayerRef.current;
+      try { p.setVolume((localIsMutedRef.current ? 0 : localVolumeRef.current) * 100); } catch { /* ignore */ }
+      const want = pendingPreviewVideoRef.current;
+      // Player pré-criado e ocioso (sem prévia pendente): não mexe no estado nem inicia
+      // o polling — pode haver uma faixa nativa da biblioteca tocando.
+      if (!want) return;
+      if (want !== ytLoadedVideoRef.current) {
+        ytLoadedVideoRef.current = want;
+        try { isPlayingRef.current ? p.loadVideoById(want) : p.cueVideoById(want); } catch { /* ignore */ }
+      } else if (isPlayingRef.current) {
+        try { p.playVideo(); } catch { /* ignore */ }
+      }
+      setPlayerState(prev => ({ ...prev, isReady: true, isLoading: false, duration: getDur() || prev.duration }));
+      startYtPolling();
+    };
+
+    const onStateChange = (e: any) => {
+      // Ignora eventos do YT quando ele NÃO é a fonte ativa (caiu para o <audio> nativo):
+      // o stopVideo do fallback dispara estados residuais que não devem mexer no playback.
+      if (!ytActiveRef.current) return;
+      const S = YT.PlayerState;
+      if (e.data === S.PLAYING) {
+        setPlayerState(prev => ({ ...prev, isPlaying: true, isReady: true, isLoading: false, duration: getDur() || prev.duration }));
+      } else if (e.data === S.PAUSED) {
+        setPlayerState(prev => (prev.isPlaying ? { ...prev, isPlaying: false } : prev));
+      } else if (e.data === S.ENDED) {
+        setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0 }));
+        // Auto-avançar a prévia para a próxima faixa da fila (mesmo caminho do <audio> nativo).
+        if (!isHandlingEndedRef.current) {
+          isHandlingEndedRef.current = true;
+          setTimeout(() => {
+            advanceToNextRef.current();
+            isHandlingEndedRef.current = false;
+          }, 300);
+        }
+      }
+    };
+
+    // YouTube recusou a faixa (indisponível/embed bloqueado): cair para o áudio nativo.
+    const onError = () => { fallBackToNativePreview(); };
+
+    try {
+      ytPlayerRef.current = new YT.Player(host, {
+        // Sem videoId/autoplay aqui: o player nasce ocioso e pronto. O vídeo entra via
+        // loadVideoById no clique (autoplay confiável depois da interação do usuário).
+        playerVars: { controls: 0, disablekb: 1, fs: 0, modestbranding: 1, playsinline: 1, rel: 0 },
+        events: { onReady, onStateChange, onError },
+      });
+    } catch {
+      fallBackToNativePreview();
+    }
+  }, [setPlayerState, fallBackToNativePreview, startYtPolling]);
+
+  // Pré-aquecer a API do YouTube E pré-criar o player já no mount, para que o play da
+  // prévia comece no 1º clique (o player já está pronto antes da interação).
+  useEffect(() => {
+    if (!isClient) return;
+    loadYouTubeIframeApi().then((YT) => ensureYtPlayer(YT)).catch(() => { /* offline / bloqueado */ });
+    return () => {
+      if (ytPollRef.current) { clearInterval(ytPollRef.current); ytPollRef.current = null; }
+      if (ytPlayerRef.current) { try { ytPlayerRef.current.destroy(); } catch { /* ignore */ } ytPlayerRef.current = null; }
+      ytReadyRef.current = false;
+    };
+  }, [isClient, ensureYtPlayer]);
 
   // Extrair cor dominante quando arquivo muda (respeitando configuração)
   useEffect(() => {
@@ -339,6 +580,20 @@ export default function AudioPlayer() {
       // Limpar referências quando não há arquivo
       if (audioRef.current) {
         audioRef.current.pause();
+        audioRef.current.src = '';
+        audioRef.current = null;
+      }
+      lastInitializedFile.current = null;
+      isInitializing.current = false;
+      return;
+    }
+
+    // Prévia via YouTube IFrame (efeito dedicado): encerrar qualquer <audio> nativo e não
+    // inicializar /api/preview-stream. No fallback (previewNative) seguimos adiante e o
+    // <audio> nativo toca a prévia normalmente pelo streamUrl.
+    if (ytPreview) {
+      if (audioRef.current) {
+        try { audioRef.current.pause(); } catch { /* ignore */ }
         audioRef.current.src = '';
         audioRef.current = null;
       }
@@ -522,31 +777,13 @@ export default function AudioPlayer() {
       
       // Pausar e resetar estado
       setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0 }));
-      
-      // Usar setTimeout para evitar problemas de closure e usar refs para valores atualizados
+
+      // Avançar pela MESMA lógica do botão "próxima" (fila do álbum quando houver, senão a
+      // biblioteca), garantindo o auto-play da faixa seguinte.
       setTimeout(() => {
-        // Verificar se há próxima música antes de avançar usando refs
-        const currentFileName = currentFile?.name;
-        if (!currentFileName) {
-          isHandlingEndedRef.current = false;
-          return;
-        }
-        
-        const currentFiles = filesRef.current;
-        const playFunction = playRef.current;
-        
-        const currentIndex = currentFiles.findIndex(f => f.name === currentFileName);
-        const hasNext = currentIndex >= 0 && currentIndex < currentFiles.length - 1;
-        
-        if (hasNext) {
-          const nextFile = currentFiles[currentIndex + 1];
-          // Chamar play usando ref para evitar dependências
-          playFunction(nextFile, true);
-        } else {
-          // Não há próxima música, apenas resetar flag
+        if (!advanceToNextRef.current()) {
           logger.debug('ℹ️ Não há próxima música, parando reprodução');
         }
-        
         isHandlingEndedRef.current = false;
       }, 300);
     };
@@ -675,12 +912,20 @@ export default function AudioPlayer() {
         // Não resetar lastInitializedFile aqui - será atualizado quando novo arquivo for carregado
       }
     };
-  }, [currentFile?.name]); // Apenas arquivo atual - volume é controlado separadamente
+  }, [currentFile?.name, isPreview, ytPreview]); // Apenas arquivo atual - volume é controlado separadamente
 
   // Controlar reprodução/pausa
   useEffect(() => {
+    // Prévia via YouTube: controlar o player do YouTube em vez do <audio>.
+    if (ytPreview) {
+      const p = ytPlayerRef.current;
+      if (!p || !ytReadyRef.current) return;
+      try { if (isPlayingRef.current) p.playVideo(); else p.pauseVideo(); } catch { /* ignore */ }
+      return;
+    }
+
     if (!audioRef.current || !isReady) return;
-    
+
     // Usar ref para evitar dependências desnecessárias
     const shouldPlay = isPlayingRef.current;
     
@@ -705,11 +950,18 @@ export default function AudioPlayer() {
       logger.debug('⏸️ Pausando reprodução');
       audioRef.current.pause();
     }
-  }, [isPlaying, isReady, setPlayerState]); // Manter dependências para sincronizar com refs
+  }, [isPlaying, isReady, setPlayerState, ytPreview]); // Manter dependências para sincronizar com refs
 
   // Controlar volume do áudio usando estado local (não depende do contexto)
   // Este é o único lugar onde o volume do áudio é atualizado
   useEffect(() => {
+    if (ytPreview) {
+      const p = ytPlayerRef.current;
+      if (p && ytReadyRef.current) {
+        try { p.setVolume((localIsMuted ? 0 : localVolume) * 100); } catch { /* ignore */ }
+      }
+      return;
+    }
     if (audioRef.current) {
       const newVolume = localIsMuted ? 0 : localVolume;
       // Só atualizar se realmente mudou para evitar operações desnecessárias
@@ -717,7 +969,74 @@ export default function AudioPlayer() {
         audioRef.current.volume = newVolume;
       }
     }
-  }, [localVolume, localIsMuted]);
+  }, [localVolume, localIsMuted, ytPreview]);
+
+  // ---- Player de PRÉVIA (YouTube IFrame, sem vídeo) ----
+  // Toca o áudio das prévias direto do YouTube (play em ~1s), alimentando o mesmo
+  // playerState (currentTime/duration/isReady/isPlaying) que a UI já consome.
+  useEffect(() => {
+    if (!isClient) return;
+
+    // Não é prévia por YT (ou caiu no fallback nativo): parar o player do YT.
+    if (!ytPreview || !previewVideoId) {
+      if (ytPollRef.current) { clearInterval(ytPollRef.current); ytPollRef.current = null; }
+      if (ytPlayerRef.current && ytReadyRef.current) {
+        try { ytPlayerRef.current.stopVideo?.(); } catch { /* ignore */ }
+      }
+      ytLoadedVideoRef.current = null;
+      return;
+    }
+
+    let cancelled = false;
+    pendingPreviewVideoRef.current = previewVideoId;
+
+    loadYouTubeIframeApi().then((YT) => {
+      if (cancelled || !YT) return;
+      // Garante que o player existe (normalmente já foi criado no mount).
+      ensureYtPlayer(YT);
+      const p = ytPlayerRef.current;
+      if (p && ytReadyRef.current) {
+        const isNewVideo = ytLoadedVideoRef.current !== previewVideoId;
+        if (isNewVideo) {
+          ytLoadedVideoRef.current = previewVideoId;
+          try { isPlayingRef.current ? p.loadVideoById(previewVideoId) : p.cueVideoById(previewVideoId); } catch { /* ignore */ }
+        } else if (isPlayingRef.current) {
+          try { p.playVideo(); } catch { /* ignore */ }
+        }
+        try { p.setVolume((localIsMutedRef.current ? 0 : localVolumeRef.current) * 100); } catch { /* ignore */ }
+        setPlayerState(prev => ({ ...prev, isReady: true, isLoading: false, ...(isNewVideo ? { currentTime: 0, duration: 0 } : {}) }));
+        startYtPolling();
+      }
+      // else: player ainda em criação; onReady carregará pendingPreviewVideoRef.
+    }).catch(() => {
+      // API do YouTube indisponível (offline/bloqueada/timeout): usar o fallback nativo.
+      if (!cancelled) fallBackToNativePreview();
+    });
+
+    return () => { cancelled = true; };
+  }, [ytPreview, previewVideoId, isClient, setPlayerState, fallBackToNativePreview, ensureYtPlayer, startYtPolling]);
+
+  // Watchdog: se a prévia por YouTube não começar a tocar em poucos segundos (onReady
+  // nunca dispara, autoplay barrado, etc.), cai para o <audio> nativo (/api/preview-stream),
+  // que é o caminho comprovado — evita o play "preso" carregando para sempre.
+  useEffect(() => {
+    if (!ytPreview || !previewVideoId || !isLoading) return;
+    const t = setTimeout(() => fallBackToNativePreview(), 2000);
+    return () => clearTimeout(t);
+  }, [ytPreview, previewVideoId, isLoading, fallBackToNativePreview]);
+
+  // Watchdog de PROGRESSO: ao trocar de faixa, o efeito acima reativa o YouTube (tenta YT
+  // primeiro em cada faixa). Mas o YT pode reportar "ready"/"playing" SEM realmente avançar
+  // (autoplay barrado na navegação, embed que carrega o iframe mas nunca toca) — aí isLoading
+  // zera e o watchdog acima não dispara, deixando a PRÓXIMA faixa presa em 0:00. Se o tempo
+  // não passar de ~0 em poucos segundos com a prévia "tocando", caímos para o <audio> nativo.
+  useEffect(() => {
+    if (!ytPreview || !previewVideoId) return;
+    const t = setTimeout(() => {
+      if (currentTimeRef.current < 0.5) fallBackToNativePreview();
+    }, 3500);
+    return () => clearTimeout(t);
+  }, [ytPreview, previewVideoId, fallBackToNativePreview]);
 
   // Sincronizar WaveSurfer com progresso do áudio nativo (melhorado)
   useEffect(() => {
@@ -749,6 +1068,18 @@ export default function AudioPlayer() {
     // Inicializar WaveSurfer otimizado
   useEffect(() => {
     if (!currentFile || !isClient) return;
+
+    // Prévia: sem waveform — o áudio vem de um iframe cross-origin do YouTube, que o
+    // WebAudio não consegue decodificar. (E carregar a waveform reabriria o caminho lento.)
+    if (isPreview) {
+      if (wavesurferRef.current) {
+        try { wavesurferRef.current.destroy(); } catch { /* ignore */ }
+        wavesurferRef.current = null;
+        setIsWaveReady(false);
+        lastInitializedFile.current = null;
+      }
+      return;
+    }
 
     // Não inicializar WaveSurfer se o player estiver minimizado (desktop)
     if (!isMobile && playerMinimized) {
@@ -1040,7 +1371,7 @@ export default function AudioPlayer() {
         wavesurferRef.current = null;
       }
     };
-  }, [currentFile?.name, isMobile, isClient, playerMinimized]); // Adicionado playerMinimized para reinicializar quando maximizar
+  }, [currentFile?.name, isMobile, isClient, playerMinimized, isPreview]); // Adicionado playerMinimized para reinicializar quando maximizar
 
   // Timeout de fallback para evitar loading infinito da wave
   useEffect(() => {
@@ -1250,13 +1581,28 @@ export default function AudioPlayer() {
   }, [localIsMuted, setIsMuted]);
 
   const seekToPosition = useCallback((clientX: number, element: HTMLElement) => {
-    logger.debug('🎯 seekToPosition called', { 
-      hasAudioRef: !!audioRef.current, 
-      duration, 
-      isReady, 
-      audioReadyState: audioRef.current?.readyState 
+    // Prévia via YouTube: buscar no player do YouTube (no fallback nativo segue o <audio>).
+    if (ytPreview) {
+      const p = ytPlayerRef.current;
+      if (!p || !ytReadyRef.current || duration === 0) return;
+      const rect = element.getBoundingClientRect();
+      const percentage = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const newTime = percentage * duration;
+      if (isNaN(newTime)) return;
+      isSeekingRef.current = true;
+      try { p.seekTo(newTime, true); } catch { /* ignore */ }
+      setPlayerState(prev => ({ ...prev, currentTime: newTime }));
+      setTimeout(() => { isSeekingRef.current = false; }, 150);
+      return;
+    }
+
+    logger.debug('🎯 seekToPosition called', {
+      hasAudioRef: !!audioRef.current,
+      duration,
+      isReady,
+      audioReadyState: audioRef.current?.readyState
     });
-    
+
     if (!audioRef.current || duration === 0) {
       logger.warn('⚠️ seekToPosition: No audio ref or duration is 0');
       return;
@@ -1309,7 +1655,7 @@ export default function AudioPlayer() {
       isSeekingRef.current = false;
     }, 100);
     
-  }, [duration, setPlayerState, isWaveReady, isReady]);
+  }, [duration, setPlayerState, isWaveReady, isReady, ytPreview]);
 
   const handleProgressClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -1373,6 +1719,13 @@ export default function AudioPlayer() {
   const handleMusicStudyClick = useCallback(() => {
     setShowMusicStudyModal(true);
   }, []);
+
+  // Clique no nome do artista → aba Novidades focada no artista, abrindo o álbum atual.
+  const handleArtistClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    focusArtistInFeed(currentFile?.artist, (currentFile as any)?.album);
+  }, [currentFile]);
 
   const handleAddToPlaylist = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -1516,17 +1869,26 @@ export default function AudioPlayer() {
                   {currentFile.title || currentFile.displayName}
                 </div>
                 <div className="text-xs truncate font-medium mt-0.5 flex items-center gap-2" style={{ color: themeColors.primary }}>
-                  {currentFile.artist || '-'}
+                  {currentFile.artist ? (
+                    <button
+                      type="button"
+                      onClick={handleArtistClick}
+                      className="truncate text-left hover:underline transition-opacity hover:opacity-80 cursor-pointer"
+                      title={`Ver ${currentFile.artist} em Novidades`}
+                    >
+                      {currentFile.artist}
+                    </button>
+                  ) : '-'}
                 </div>
               </div>
               
               {/* Controles */}
               <div className="flex items-center gap-2 flex-shrink-0">
-                <button 
-                  onClick={handleNext} 
-                  className="text-white player-button hover:scale-110 transition-transform duration-200" 
+                <button
+                  onClick={handlePrev}
+                  className="text-white player-button hover:scale-110 transition-transform duration-200"
                   style={{ color: themeColors.primaryLight }}
-                  title="Próxima música"
+                  title="Música anterior"
                 >
                   <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
@@ -1547,11 +1909,11 @@ export default function AudioPlayer() {
                     </svg>
                   )}
                 </button>
-                <button 
-                  onClick={handlePrev} 
+                <button
+                  onClick={handleNext}
                   className="text-white player-button hover:scale-110 transition-transform duration-200"
                   style={{ color: themeColors.primaryLight }}
-                  title="Música anterior"
+                  title="Próxima música"
                 >
                   <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
@@ -1773,15 +2135,20 @@ export default function AudioPlayer() {
                   }}
                 >
                   {/* Progress Thumb */}
-                  <div  
+                  <div
                     className="absolute right-0 top-1/2 transform translate-x-1/2 -translate-y-1/2 w-3 h-3 rounded-full shadow-lg transition-all duration-100 border border-white/30 pointer-events-none"
-                    style={{ 
+                    style={{
                       backgroundColor: themeColors.primary,
                       opacity: duration > 0 ? 1 : 0,
                       boxShadow: `0 1px 4px rgba(0,0,0,0.4), 0 0 0 1px ${themeColors.primary}60`
                     }}
                   />
                 </div>
+              </div>
+              {/* Tempo da música */}
+              <div className="flex justify-between items-center mt-1 text-zinc-300 text-[11px] font-medium tabular-nums">
+                <span>{formatTime(currentTime)}</span>
+                <span>{formatTime(duration)}</span>
               </div>
             </div>
           </div>
@@ -1916,7 +2283,16 @@ export default function AudioPlayer() {
                 {currentFile.title || currentFile.displayName}
               </div>
               <div className="text-base truncate font-medium mt-0.5 flex items-center gap-2" style={{ color: themeColors.primary }}>
-                {currentFile.artist || '-'}
+                {currentFile.artist ? (
+                  <button
+                    type="button"
+                    onClick={handleArtistClick}
+                    className="truncate text-left hover:underline transition-opacity hover:opacity-80 cursor-pointer"
+                    title={`Ver ${currentFile.artist} em Novidades`}
+                  >
+                    {currentFile.artist}
+                  </button>
+                ) : '-'}
               </div>
               <div className="flex items-center gap-3 mt-1">
                 {currentFile.bpm && (
@@ -1953,9 +2329,9 @@ export default function AudioPlayer() {
 
             {/* Controles de reprodução */}
             <div className="flex items-center gap-3 flex-shrink-0">
-              <button 
-                onClick={handleNext} 
-                className="text-white player-button hover:scale-110 transition-transform duration-200" 
+              <button
+                onClick={handlePrev}
+                className="text-white player-button hover:scale-110 transition-transform duration-200"
                 style={{ color: themeColors.primaryLight }}
               >
                 <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
@@ -1979,8 +2355,8 @@ export default function AudioPlayer() {
                 )}
               </button>
 
-              <button 
-                onClick={handlePrev} 
+              <button
+                onClick={handleNext}
                 className="text-white player-button hover:scale-110 transition-transform duration-200"
                 style={{ color: themeColors.primaryLight }}
               >
@@ -2122,7 +2498,16 @@ export default function AudioPlayer() {
                 {currentFile.title || currentFile.displayName}
               </div>
               <div className="text-sm truncate font-medium mt-0.5 flex items-center gap-2" style={{ color: themeColors.primary }}>
-                {currentFile.artist || '-'}
+                {currentFile.artist ? (
+                  <button
+                    type="button"
+                    onClick={handleArtistClick}
+                    className="truncate text-left hover:underline transition-opacity hover:opacity-80 cursor-pointer"
+                    title={`Ver ${currentFile.artist} em Novidades`}
+                  >
+                    {currentFile.artist}
+                  </button>
+                ) : '-'}
               </div>
               <div className="flex items-center gap-2 mt-1">
                 {currentFile.bpm && (
@@ -2252,8 +2637,8 @@ export default function AudioPlayer() {
           <div className="flex items-center justify-between">
             {/* Controles de reprodução */}
             <div className="flex items-center gap-2">
-              <button 
-                onClick={handleNext} 
+              <button
+                onClick={handlePrev}
                 className="text-white player-button hover:scale-110 transition-transform duration-200"
                 style={{ color: themeColors.primaryLight }}
               >
@@ -2278,8 +2663,8 @@ export default function AudioPlayer() {
                 )}
               </button>
 
-              <button 
-                onClick={handlePrev} 
+              <button
+                onClick={handleNext}
                 className="text-white player-button hover:scale-110 transition-transform duration-200"
                 style={{ color: themeColors.primaryLight }}
               >

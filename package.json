@@ -17,6 +17,7 @@
     "monitor:downloads": "node scripts/monitor-downloads.js",
     "lint": "next lint",
     "check-env": "node scripts/check-environment.js",
+    "setup:cookies": "node scripts/fix-youtube-cookies.js",
     "electron": "electron .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:build": "npm run build && electron-builder",

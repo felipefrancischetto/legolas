@@ -6,7 +6,7 @@ import { join } from 'path';
 import { logger } from '../utils/logger';
 import { sendProgressEvent } from '../utils/progressEventService';
 import { ensureValidCookies } from '@/app/api/utils/common';
-import { getYtDlpBin } from '../utils/ytDlpBin';
+import { getYtDlpBin, getYtDlpGlobalFlags } from '../utils/ytDlpBin';
 
 const execAsync = promisify(exec);
 
@@ -152,7 +152,7 @@ async function renewCookiesOnce(downloadId?: string): Promise<boolean> {
       sendProgressEvent(downloadId, {
         type: 'warning',
         step: 'YouTube está bloqueando os downloads',
-        detail: 'Não foi possível renovar cookies automaticamente. Faça login no YouTube no seu navegador (Chrome) e tente novamente, ou gere cookies.txt manualmente.',
+        detail: 'Não foi possível renovar cookies automaticamente. Feche o Chrome, faça login no YouTube e execute "npm run setup:cookies", ou exporte cookies.txt manualmente.',
       });
     }
     return ok;
@@ -264,14 +264,14 @@ export async function downloadTrack(source: DownloadSource, options: DownloadOpt
   const escapedOutputPath = outputPath.replace(/"/g, '\\"');
 
   const useAria2c = await detectAria2c();
-  const ytDlpBin = await getYtDlpBin();
+  const [ytDlpBin, globalFlags] = await Promise.all([getYtDlpBin(), getYtDlpGlobalFlags()]);
   const fragments = fragmentsFor(trackConcurrency);
   const accelFlag = useAria2c
     ? `--downloader aria2c --downloader-args "aria2c:-x${fragments} -s${fragments} -k1M" `
     : `--concurrent-fragments ${fragments} `;
 
   const buildCommand = (client: YtClient, flag: string) =>
-    `${ytDlpBin} -x --audio-format ${format} --audio-quality ${quality} ` +
+    `${ytDlpBin} ${globalFlags}-x --audio-format ${format} --audio-quality ${quality} ` +
     `${flag}` +
     `${accelFlag}` +
     `--embed-thumbnail --convert-thumbnails jpg ` +

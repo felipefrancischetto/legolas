@@ -5,10 +5,13 @@ import { safeSetItem, safeGetItem } from '../utils/localStorage';
 
 export interface Settings {
   disableDynamicColors: boolean;
+  /** Normaliza automaticamente (Beatport) as faixas detectadas fora do padrão ao listar a biblioteca. */
+  autoNormalize: boolean;
 }
 
 const defaultSettings: Settings = {
-  disableDynamicColors: true
+  disableDynamicColors: true,
+  autoNormalize: true
 };
 
 export function useSettings() {

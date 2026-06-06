@@ -7,8 +7,10 @@ import {
   fetchLibraryFiles,
   deriveArtistsFromFiles,
   mergeArtists,
+  normalizeName,
   type ArtistsFile,
   type CuratedArtist,
+  type FeedCacheFile,
 } from '@/lib/services/artistLibrary';
 
 export const runtime = 'nodejs';
@@ -33,6 +35,27 @@ async function readArtistsFile(path: string): Promise<ArtistsFile | null> {
 
 async function writeArtistsFile(path: string, data: ArtistsFile): Promise<void> {
   await writeFile(path, JSON.stringify(data, null, 2), 'utf-8');
+}
+
+/**
+ * Poda o cache do feed (artist-feed-cache.json) para conter apenas artistas
+ * habilitados. Sem isso, remover/pausar um artista só reflete após o próximo
+ * refresh do feed (TTL de 12h) — ele "voltaria" ao recarregar a página.
+ */
+async function pruneFeedCacheToEnabled(downloadsFolder: string, artists: CuratedArtist[]): Promise<void> {
+  const cachePath = join(downloadsFolder, 'artist-feed-cache.json');
+  if (!existsSync(cachePath)) return;
+  try {
+    const cache = JSON.parse(await readFile(cachePath, 'utf-8')) as FeedCacheFile;
+    if (!cache || !Array.isArray(cache.groups)) return;
+    const enabled = new Set(artists.filter((a) => a.enabled !== false).map((a) => normalizeName(a.name)));
+    const groups = cache.groups.filter((g) => enabled.has(normalizeName(g.artist)));
+    if (groups.length !== cache.groups.length) {
+      await writeFile(cachePath, JSON.stringify({ ...cache, groups }, null, 2), 'utf-8');
+    }
+  } catch (err) {
+    console.warn('⚠️ [artists] Falha ao podar artist-feed-cache.json:', err);
+  }
 }
 
 /**
@@ -77,10 +100,17 @@ export async function POST(request: NextRequest) {
       const existing = (await readArtistsFile(path))?.artists ?? [];
       const files = await fetchLibraryFiles(request);
       const derived = deriveArtistsFromFiles(files);
+      // Artistas que ENTRARAM agora (presentes na biblioteca, ausentes da lista
+      // anterior) — usado para atualizar o feed só do que é novo, sem re-buscar tudo.
+      const existingKeys = new Set(existing.map((a) => normalizeName(a.name)));
+      const added = Array.from(derived.entries())
+        .filter(([key]) => !existingKeys.has(key))
+        .map(([, info]) => info.name);
       const artists = mergeArtists(derived, existing, nowIso);
       const data: ArtistsFile = { updatedAt: nowIso, artists };
       await writeArtistsFile(path, data);
-      return NextResponse.json(data);
+      await pruneFeedCacheToEnabled(await getDownloadsPath(), artists);
+      return NextResponse.json({ ...data, added });
     }
 
     if (action === 'update') {
@@ -97,6 +127,7 @@ export async function POST(request: NextRequest) {
         }));
       const data: ArtistsFile = { updatedAt: nowIso, artists };
       await writeArtistsFile(path, data);
+      await pruneFeedCacheToEnabled(await getDownloadsPath(), artists);
       return NextResponse.json(data);
     }
 

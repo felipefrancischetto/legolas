@@ -16,6 +16,7 @@ import ReactDOM from 'react-dom';
 import LoadingSpinner from './LoadingSpinner';
 import { SkeletonMusicList } from './SkeletonComponents';
 import { safeGetItem, safeSetItem } from '../utils/localStorage';
+import { focusArtistInFeed } from '../utils/focusArtist';
 import StarButton from './StarButton';
 import MidiExportModal from './MidiExportModal';
 import MidiPackExportModal from './MidiPackExportModal';
@@ -548,7 +549,16 @@ const DynamicFileItem = memo(({
                   {file.title || file.displayName}
                 </h3>
                 <p className="text-zinc-400 text-sm leading-tight truncate mb-1.5" style={{ color: `rgb(${itemColor.rgb})` }}>
-                  {file.artist || 'Artista desconhecido'}
+                  {file.artist ? (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); focusArtistInFeed(file.artist, file.album); }}
+                      className="hover:underline cursor-pointer"
+                      title={`Ver ${file.artist} em Novidades`}
+                    >
+                      {file.artist}
+                    </button>
+                  ) : 'Artista desconhecido'}
                 </p>
 
                 {/* Metadados principais - Texto simples */}
@@ -1676,7 +1686,7 @@ export default function FileList() {
               if (result.metadata.album) updatedFile.album = result.metadata.album;
               if (result.metadata.catalogNumber) updatedFile.catalogNumber = result.metadata.catalogNumber;
               // Marcar como formato Beatport se veio do Beatport
-              if (result.metadata.sources?.includes('Beatport')) {
+              if (result.metadata.sources?.some((s: string) => s.includes('Beatport'))) {
                 updatedFile.isBeatportFormat = true;
               }
               return updatedFile;
@@ -1711,6 +1721,118 @@ export default function FileList() {
     await fetchFiles(true);
     setIsUpdatingAll(false);
   }
+
+  // ===== Normalização automática (Beatport) de faixas fora do padrão =====
+  // Faixas já tentadas automaticamente — persistidas para não reabrir o browser
+  // repetidamente para faixas que simplesmente não existem no Beatport.
+  const autoNormalizeAttempted = useRef<Set<string>>(new Set());
+  const isAutoNormalizingRef = useRef(false);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('autoNormalizeAttempted');
+      if (saved) {
+        const arr = JSON.parse(saved);
+        if (Array.isArray(arr)) autoNormalizeAttempted.current = new Set(arr);
+      }
+    } catch {}
+  }, []);
+
+  const persistAutoNormalizeAttempted = useCallback(() => {
+    try {
+      // Limitar para não estourar o localStorage em bibliotecas grandes.
+      localStorage.setItem(
+        'autoNormalizeAttempted',
+        JSON.stringify([...autoNormalizeAttempted.current].slice(-2000))
+      );
+    } catch {}
+  }, []);
+
+  // Critério único de "fora do padrão Beatport": falta Label, BPM ou Genre,
+  // ou não há confirmação de que a faixa veio do Beatport.
+  const isOutOfBeatportStandard = useCallback((f: FileInfo) => {
+    return !f.label || !f.bpm || !f.genre || f.isBeatportFormat !== true;
+  }, []);
+
+  // Normaliza um único arquivo via operação 'enhance' (mesmo fluxo do botão manual).
+  const enhanceSingleFile = useCallback(async (fileName: string) => {
+    try {
+      setMetadataStatus(prev => ({ ...prev, [fileName]: 'loading' }));
+      const response = await fetch('/api/metadata/unified', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'enhance', fileName, useBeatport: true }),
+      });
+      const result = await response.json().catch(() => null);
+
+      // "No useful metadata found to enhance" não é erro: a faixa não está no Beatport.
+      if (!response.ok) {
+        setMetadataStatus(prev => ({ ...prev, [fileName]: 'completed' }));
+        return;
+      }
+
+      if (result?.metadata) {
+        setFiles(prevFiles => prevFiles.map(f => {
+          if (f.name !== fileName) return f;
+          const updated = { ...f };
+          if (result.metadata.bpm) updated.bpm = result.metadata.bpm;
+          if (result.metadata.key) updated.key = result.metadata.key;
+          if (result.metadata.genre) updated.genre = result.metadata.genre;
+          if (result.metadata.label) updated.label = result.metadata.label;
+          if (result.metadata.year) (updated as any).ano = result.metadata.year;
+          if (result.metadata.album) updated.album = result.metadata.album;
+          if (result.metadata.sources?.some((s: string) => s.includes('Beatport'))) {
+            updated.isBeatportFormat = true;
+          }
+          return updated;
+        }));
+      }
+      setMetadataStatus(prev => ({ ...prev, [fileName]: 'completed' }));
+    } catch {
+      setMetadataStatus(prev => ({ ...prev, [fileName]: 'error' }));
+    }
+  }, [setFiles, setMetadataStatus]);
+
+  // Varre a biblioteca e normaliza automaticamente as faixas fora do padrão.
+  // Cada faixa é tentada uma única vez (persistido); o controle de concorrência
+  // evita abrir muitos browsers do Beatport ao mesmo tempo.
+  useEffect(() => {
+    if (!settings?.autoNormalize) return;
+    if (loading || isUpdatingAll || isAutoNormalizingRef.current) return;
+    if (!files || files.length === 0) return;
+
+    const pending = files.filter(f =>
+      f?.name &&
+      isOutOfBeatportStandard(f) &&
+      !autoNormalizeAttempted.current.has(f.name) &&
+      metadataStatus[f.name] !== 'loading'
+    );
+    if (pending.length === 0) return;
+
+    isAutoNormalizingRef.current = true;
+    pending.forEach(f => autoNormalizeAttempted.current.add(f.name));
+    persistAutoNormalizeAttempted();
+    console.log(`🤖 [AutoNormalize] ${pending.length} faixa(s) fora do padrão — normalizando automaticamente...`);
+
+    (async () => {
+      const CONCURRENT_LIMIT = 3;
+      try {
+        for (let i = 0; i < pending.length; i += CONCURRENT_LIMIT) {
+          const chunk = pending.slice(i, i + CONCURRENT_LIMIT);
+          await Promise.allSettled(chunk.map(f => enhanceSingleFile(f.name)));
+        }
+      } finally {
+        isAutoNormalizingRef.current = false;
+        // Recarregar silenciosamente para refletir as tags gravadas no disco.
+        if (!isCurrentlyFetching.current) {
+          isCurrentlyFetching.current = true;
+          Promise.resolve(fetchFiles(true, true)).finally(() => {
+            isCurrentlyFetching.current = false;
+          });
+        }
+      }
+    })();
+  }, [files, loading, isUpdatingAll, settings, metadataStatus, isOutOfBeatportStandard, enhanceSingleFile, persistAutoNormalizeAttempted, fetchFiles]);
 
   async function organizeNonNormalizedFiles() {
     setIsUpdatingAll(true);
@@ -2554,7 +2676,16 @@ export default function FileList() {
                         {file.title || file.displayName}
                       </div>
                       <div className="text-emerald-400 text-xs truncate font-medium leading-tight">
-                        {file.artist || 'Artista desconhecido'}
+                        {file.artist ? (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); focusArtistInFeed(file.artist, file.album); }}
+                            className="hover:underline cursor-pointer truncate text-left"
+                            title={`Ver ${file.artist} em Novidades`}
+                          >
+                            {file.artist}
+                          </button>
+                        ) : 'Artista desconhecido'}
                       </div>
                     </div>
 
@@ -3454,25 +3585,17 @@ function MobileActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, o
           </button>
           {onDownloadAlbum && (
             <button
-              className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors rounded-md mx-1 ${
-                file.album 
-                  ? 'hover:bg-purple-500/10 text-purple-300' 
-                  : 'hover:bg-purple-500/10 text-purple-300/60 cursor-not-allowed'
-              }`}
+              className="w-full text-left px-3 py-2 text-xs font-medium transition-colors rounded-md mx-1 hover:bg-purple-500/10 text-purple-300"
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                if (file.album) {
-                  onDownloadAlbum(file);
-                } else {
-                  // Tentar buscar usando artista e título
-                  onDownloadAlbum(file);
-                }
+                // Funciona mesmo sem álbum: o handler busca o álbum por artista/título.
+                onDownloadAlbum(file);
                 setOpen(false);
               }}
-              title={file.album ? `Baixar álbum "${file.album}"` : 'Este arquivo não tem informação de álbum'}
+              title={file.album ? `Baixar álbum "${file.album}"` : 'Buscar e baixar o álbum por artista/título'}
             >
-              📀 Baixar Álbum{file.album ? '' : ' (sem álbum)'}
+              📀 Baixar Álbum{file.album ? '' : ' (buscar)'}
             </button>
           )}
           <button
@@ -3743,25 +3866,17 @@ function ActionMenu({ file, onUpdate, onEdit, onRemove, onDownloadAlbum, onRemov
       </button>
       {onDownloadAlbum && (
         <button
-          className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors rounded-md mx-1 ${
-            file.album 
-              ? 'hover:bg-purple-500/10 text-purple-300' 
-              : 'hover:bg-purple-500/10 text-purple-300/60 cursor-not-allowed'
-          }`}
+          className="w-full text-left px-3 py-2 text-xs font-medium transition-colors rounded-md mx-1 hover:bg-purple-500/10 text-purple-300"
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (file.album) {
-              onDownloadAlbum(file);
-            } else {
-              // Tentar buscar usando artista e título
-              onDownloadAlbum(file);
-            }
+            // Funciona mesmo sem álbum: o handler busca o álbum por artista/título.
+            onDownloadAlbum(file);
             setOpen(false);
           }}
-          title={file.album ? `Baixar álbum "${file.album}"` : 'Este arquivo não tem informação de álbum'}
+          title={file.album ? `Baixar álbum "${file.album}"` : 'Buscar e baixar o álbum por artista/título'}
         >
-          📀 Baixar Álbum{file.album ? '' : ' (sem álbum)'}
+          📀 Baixar Álbum{file.album ? '' : ' (buscar)'}
         </button>
       )}
       <button

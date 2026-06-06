@@ -41,7 +41,7 @@ interface FileContextType {
   currentFile: FileInfo | null;
   setCurrentFile: (file: FileInfo | null) => void;
   metadataStatus: { [fileName: string]: 'idle' | 'loading' | 'success' | 'error' | string };
-  setMetadataStatus: (status: { [fileName: string]: string }) => void;
+  setMetadataStatus: (status: { [fileName: string]: string } | ((prev: { [fileName: string]: string }) => { [fileName: string]: string })) => void;
   isUpdatingAll: boolean;
   setIsUpdatingAll: (updating: boolean) => void;
   updateProgress: { current: number; total: number };

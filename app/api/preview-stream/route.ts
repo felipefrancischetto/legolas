@@ -90,13 +90,19 @@ async function ensurePreviewFile(videoId: string): Promise<string> {
         // Por ser PRÉVIA, priorizamos um stream de áudio menor (abr<=128) e MP3
         // mais leve (qualidade 7): menos bytes para baixar/transcodificar/transmitir,
         // logo o play e a waveform aparecem bem mais rápido.
+        // Prévia: baixamos só os primeiros ~90s da faixa (--download-sections, via
+        // ffmpeg) em vez do arquivo inteiro. Bem menos bytes para baixar/transcodificar/
+        // transmitir → o play do fallback aparece muito mais rápido e não fica "travado"
+        // baixando a faixa toda. Timeout por client reduzido para 45s para que um client
+        // que trava não segure a requisição por 2 minutos.
         const command =
           `yt-dlp -x --audio-format mp3 --audio-quality 7 ` +
           `-f "bestaudio[abr<=128]/bestaudio/best" ` +
+          `--download-sections "*0-90" --force-keyframes-at-cuts ` +
           `--extractor-args "youtube:player_client=${client}" ` +
           `--no-playlist --no-part --force-overwrites ` +
           `${cookiesFlag}-o "${outTemplate}" "${watchUrl}"`;
-        await execAsync(command, { maxBuffer: 1024 * 1024 * 10, timeout: 120000 });
+        await execAsync(command, { maxBuffer: 1024 * 1024 * 10, timeout: 45000 });
         const file = await findCachedFile(cacheDir, videoId);
         if (file && statSync(file).size > 0) return file;
       } catch (err) {
